@@ -1188,6 +1188,16 @@ def pipeHave :=
     value
 ```
 
+When a `by` proof is the right operand of `<|`, the introducer remains attached
+to the operator and its body starts one level below the surrounding expression
+base:
+
+```lean
+theorem pipedProof : True :=
+  id <| by
+    exact True.intro
+```
+
 A `have` that contains a protected proof body keeps a separate operand boundary
 so the proof and its following body continue to move as one layout island.
 When the final proof argument of `have`, `suffices`, or another tactic contains

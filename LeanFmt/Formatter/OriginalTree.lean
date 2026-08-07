@@ -825,15 +825,34 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     if proof && originalLeadingHasLineStructure then
       request.lastToken?.bind
         fun token =>
-          if tokenStartsCurrentLine request.currentLine token then
+          if !request.currentLine.endsWith token.lexeme then
+            none
+          else if tokenStartsCurrentLine request.currentLine token then
             some (request.currentLine.length - token.lexeme.length + indentationSpaces)
-          else if sourceColumn <= request.sourceLayoutBaseColumn then
-            none
-          else if request.sourceMap.columnAt token.span.start
-                  == request.currentLine.length - token.lexeme.length then
-            none
           else
-            bodyColumnAfterOpeningDelimiter? request.currentLine token
+            let outputTokenColumn := request.currentLine.length - token.lexeme.length
+            let delimiterColumn? :=
+              bodyColumnAfterOpeningDelimiter? request.currentLine token
+            match delimiterColumn? with
+            | some delimiterColumn =>
+                if sourceColumn <= request.sourceLayoutBaseColumn
+                    || request.sourceMap.columnAt token.span.start
+                        == outputTokenColumn then
+                  none
+                else
+                  some delimiterColumn
+            | none =>
+                if request.sourceMap.columnAt token.span.start == outputTokenColumn then
+                  none
+                else
+                  match targetColumn? with
+                  | some targetColumn =>
+                      if request.outputLayoutBaseColumn <= targetColumn then
+                        none
+                      else
+                        some (request.outputLayoutBaseColumn + indentationSpaces)
+                  | none =>
+                      some (request.outputLayoutBaseColumn + indentationSpaces)
     else
       none
   let targetColumn? :=

@@ -3039,7 +3039,7 @@ def assertMovedProofBodiesKeepRelativeIndentation (env : Lean.Environment) : IO 
   let outdentedExpected :=
     "theorem originalProofIslandOutdentsFromNestedValue : True :=\n"
     ++ "  id <| by\n"
-    ++ "  exact True.intro\n"
+    ++ "    exact True.intro\n"
   let outdentedResult ←
     Formatter.formatSourceWithEnvDetailed env outdentedSource
       "outdented-proof-layout-island.lean"

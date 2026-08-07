@@ -883,12 +883,13 @@ pre-existing long line would make it longer. Equation arms therefore remain alig
 under their declaration instead of escaping Lean's layout block. When a parent moves a
 protected layout to a new line column, that structural target applies to the complete
 island, including every later equation arm and protected proof line in the block.
-A proof body whose introducer was moved onto a line by itself starts one indentation
-level below that introducer. This structural floor applies only when no code precedes the
-introducer on its output line; inline proof islands retain their source-relative layout.
-For an inline proof-bearing application, the continuation floor is one level below the
-surrounding logical output indentation. Delimiter and `where` proof-layout islands instead
-retain their established first-token anchor so their fields do not drift with a moved header.
+A proof body whose introducer starts its output line retains the introducer-relative
+indentation, while an inline body that moves horizontally without an opening delimiter
+starts at least one indentation level below its surrounding output layout base. A deeper
+source indentation remains intact. An inline body immediately after an opening delimiter
+retains its delimiter-owned source layout. Delimiter and `where` proof-layout islands
+likewise retain their established first-token anchor so their fields do not drift with a
+moved header.
 An application whose argument is a proof-bearing `fun` is protected as one layout
 island. The syntax tree owns the lambda shell but not the proof body's internal
 layout, so moving the application and the proof independently can detach the proof

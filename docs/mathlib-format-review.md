@@ -4,7 +4,79 @@ This document records the visual review of a complete Mathlib formatting run so
 the remaining layout work can be addressed without repeating the corpus review.
 It is a point-in-time work list, not part of the normative formatting style.
 
-## Current status: 2026-08-06
+## Current status: 2026-08-07
+
+### Non-delimited inline proof-body checkpoint
+
+This checkpoint fixes a general protected-layout consistency bug without adding
+a line-break rule, syntax regrouping, renderer syntax check, exception, or rule
+API. When an inline proof introducer moves horizontally and has no opening
+delimiter, its protected body now starts at least one indentation level below
+the surrounding output layout base. An existing structural target at that base
+or deeper remains authoritative. Proofs whose introducer starts an output line,
+and bodies owned by parentheses, constructors, or other opening delimiters,
+retain their established anchors.
+
+Focused coverage changes the previously accepted outdented `<| by` shape to:
+
+```lean
+theorem pipedProof : True :=
+  id <| by
+    exact True.intro
+```
+
+It also checks code preservation, fallback, and idempotency. The complete local
+release gate passed: `lake build`, `lake test`, `make lint`, fixture regeneration
+and dry checking, self-formatting, preservation, actionable-overflow,
+missing-rule, fallback, idempotency, and `git diff --check` were all clean. No
+fixture output changed.
+
+Fresh GraphQL and quantum validation used the automatic worker count and no
+`--jobs` option. Both projects passed every formatter batch, preservation and
+idempotency checks, and their final builds. GraphQL's build, three formatter
+batches, and final build took 76, 20/10/6, and 59 seconds. Its six-file output
+is byte-for-byte identical to the preceding accepted checkpoint. Quantum's
+cache, build, formatter, and final build took 23, 36, 12, and 1 seconds and
+produced no diff. These timings are faster than the preceding baselines and
+show no performance-regression signal.
+
+The definitive Mathlib run used pristine exact `v4.32.0` commit
+`81a5d257c8e410db227a6665ed08f64fea08e997`, the populated Lake cache, width
+100, only the 8,264 tracked Lean files under `Mathlib`, and no `--jobs`
+override. It intentionally skipped the pre-format build because the input is a
+released commit. All 83 formatter batches passed code preservation,
+actionable-overflow, missing-rule, fallback, and idempotency checks. The full
+post-format build then passed all 8,654 jobs in 2,385 seconds; total validation
+took 4,982 seconds. Batch timings had isolated outliers comparable to prior
+runs, immediately returned to their usual range, and showed no increasing
+trend.
+
+The resulting Mathlib tree changes 7,552 files by 333,956 insertions and
+293,423 deletions, has SHA-256 diff digest
+`faa38aefdab046c4820a62775c6898a70a4c97e8f5833bcf2de4b427031aa9a6`, and
+passes `git diff --check`. Formatting identical pristine inputs with the
+released and current binaries isolates one true checkpoint delta: the three
+tactic lines below `<| by` in
+`Mathlib/AlgebraicGeometry/ProjectiveSpectrum/Basic.lean` move from the
+surrounding expression base to one level below it. The 262-file delta from the
+rejected broad implementation is gone.
+
+Three independent reviews found no logical formatting error. One reviewed the
+exact Mathlib delta, one audited all 1,503 tracked `<| by` line endings and a
+96-case broad sample, and one verified that the five previously sensitive
+parenthesized, constructor, application, and delimiter representatives are
+byte-for-byte unchanged. The complete build emitted only accepted Mathlib
+long-line and long-file warnings.
+
+The next promising checkpoint is the separate standalone `<|` ownership
+family, represented by `Mathlib/Topology/Sheaves/CommRingCat.lean:311`. Start
+with focused expectations for a comment-forced operand and a protected
+multiline operand, then determine whether the existing low-priority operator
+boundary can establish one shared operand base. A clean implementation should
+reuse existing application ownership and original-tree planning; it should not
+add token checks to the renderer, a specialized line-break rule, or a new rule
+API. Stop for review if the operator cannot own that base without opening an
+arbitrary protected island.
 
 ### Attached structure-field body checkpoint
 
