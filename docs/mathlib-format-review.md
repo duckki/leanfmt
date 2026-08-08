@@ -4,9 +4,211 @@ This document records the visual review of a complete Mathlib formatting run so
 the remaining layout work can be addressed without repeating the corpus review.
 It is a point-in-time work list, not part of the normative formatting style.
 
-## Current status: 2026-08-07
+## Remaining issues and TODO
 
-### Non-delimited inline proof-body checkpoint
+Mathlib paths are evidence and regression inputs, never conditions in formatter
+code. The open items below are governing layout problems. Long indivisible lines
+and formatter-created too-many-lines warnings are not findings when the
+surrounding shape and starting indentation are correct.
+
+### Next release checkpoint
+
+Complete low-priority `<|` right-operand ownership. The existing
+`.lowPriorityInfixRhs` syntax node already groups the operator with its right
+operand, but the line-break rule still distinguishes `by`, `do`, `calc`, `let`,
+and `have` through token and raw-syntax checks. Make the grouped node establish
+one local operand base instead:
+
+1. Keep `<|` with the operand's first line whenever that line fits.
+2. When an unremovable source break separates the operand, indent it once from
+   the grouped operator base.
+3. Keep `let`, `have`, and `haveI` start-aligned consistently.
+4. Rebase protected proofs, records, quotations, and comment-forced operands
+   from the same operand base.
+5. Remove redundant syntax-specific `<|` handling instead of adding another
+   rule, renderer syntax check, exception, or rule API.
+
+Start with `Mathlib/Topology/Sheaves/CommRingCat.lean:311` and cover inline and
+broken operators, line-breaking comments, proofs, `calc`, bindings,
+constructors, structures, quotations, and nested contexts. Mathlib currently
+has 50 lines containing only a standalone `<|`, which is a meaningful but
+reviewable visible surface. Stop if the change affects unrelated
+parenthesized, constructor, or delimiter layout.
+
+### Remaining issue queue
+
+| Family | Representative evidence | Intended owner | Risk | Order |
+| --- | --- | --- | --- | --- |
+| A standalone `<\|` does not establish the base of a protected or comment-forced operand | `Mathlib/Topology/Sheaves/CommRingCat.lean:311`; `Mathlib/CategoryTheory/Pseudoelements.lean:310` | Existing `.lowPriorityInfixRhs` grouping, line-break rules, and original-tree planning | High | Next checkpoint |
+| A moved `fun`, quotation, or parenthesized protected body without a usable parent boundary retains a stale column | `Mathlib/Analysis/BoxIntegral/Partition/Split.lean:155`; `Mathlib/AlgebraicGeometry/Gluing.lean:644`; `Mathlib/Data/Nat/Bitwise.lean:260`; `Mathlib/RingTheory/WittVector/Basic.lean:85`; `Mathlib/Tactic/MinImports.lean:170` | Syntax grouping and original-tree planning | High | After `<\|` ownership |
+| Peer application, declaration-field, or `calc` continuations disagree on their shared base | `Mathlib/Geometry/Manifold/MFDeriv/SpecificFunctions.lean:277`; `Mathlib/Algebra/Order/Monoid/Defs.lean:28`; `Mathlib/Analysis/InnerProductSpace/Projection/Basic.lean:362` | Syntax grouping, line-break rules, and renderer continuation bases | High | Separate checkpoint |
+| A protected branch or source-preserved elimination body remains aligned with its header | `Mathlib/Algebra/BigOperators/Fin.lean:632`; `Mathlib/Data/ENat/Lattice.lean:139`; `Mathlib/Analysis/Meromorphic/Order.lean:198` | Tactic ownership and protected-body rebasing | High | Separate checkpoint |
+| A source-preserved line-comment continuation can detach from its first physical line | `Mathlib/Algebra/ContinuedFractions/Computation/Basic.lean:193` | Original-tree source slices and generic comment-boundary handling | Medium | Separate checkpoint |
+| A proof-bearing structure-valued `where` can retain a stale leading boundary | `Mathlib/CategoryTheory/Abelian/Injective/Resolution.lean:327` | Original-tree classification and layout planning | Medium | Separate checkpoint |
+| Mathlib `lemma` equation arms in a `mutual` block can use the wrong command base | `Mathlib/AlgebraicGeometry/Morphisms/ChevalleyComplexity.lean:624` | Syntax grouping and original-tree ownership | High | Separate checkpoint |
+| Inline record and attribute children can inherit the opener's source column | `Mathlib/Lean/Meta/RefinedDiscrTree/Basic.lean:169`; `Mathlib/Algebra/Group/Submonoid/Membership.lean:553` | Syntax grouping and continuation-base planning | High | Separate checkpoint |
+
+### Release TODO
+
+1. Implement the low-priority right-operand checkpoint as one governing
+   invariant, with focused preservation and idempotency coverage.
+2. Validate in widening rings: the complete local gate, GraphQL, quantum, then
+   exact Mathlib `v4.32.0` at width 100.
+3. Compare the exact Mathlib output with commit `202ec07`, review every true
+   checkpoint delta, and use independent reviewers after the build passes.
+4. Commit only after the complete validation is clean, update this document,
+   and freeze formatter behavior for a release-candidate audit.
+5. Do not combine another family from the queue with the `<|` checkpoint. A
+   later issue should block release only when it is a correctness problem or a
+   broad visual regression, not merely known imperfect output.
+
+### Accepted output
+
+- Adjacent anonymous-constructor delimiters can accumulate one indentation
+  level per syntax delimiter. `Mathlib/Algebra/AlgebraicCard.lean:66` remains
+  intentionally deferred.
+- A preserved source break after `<|` can retain two spaces before the next
+  token, as in `Mathlib/Lean/Expr/Basic.lean:301`. This is intentional unless
+  the spacing policy changes.
+- Long unbreakable lines are accepted when they begin at the correct logical
+  indentation. Formatter-created long-file warnings are accepted when the
+  formatting shape is sound.
+
+## Validation/checkpoint standards
+
+### Change design
+
+- Generalize a syntax or layout invariant. Never add Mathlib paths, declaration
+  names, or isolated token sequences as formatter exceptions.
+- Keep syntax regrouping, line-break decisions, horizontal spacing, and source
+  emission in their owning modules. The renderer manages layout state and
+  executes plans without identifying Lean syntax kinds.
+- Reuse existing syntax groups and rule APIs. A new rule API is a high-risk
+  design change and requires separate review before implementation.
+- Keep one governing invariant per commit. A larger checkpoint may contain
+  multiple commits only when each is independently testable and the final
+  corpus delta remains attributable.
+- Add focused formatting, code-preservation, fallback, and idempotency coverage
+  before accepting generated fixture or external-project churn.
+
+### Local gate
+
+Every checkpoint must pass:
+
+```sh
+lake build
+lake test
+make lint
+lake exe fmt-test --update-fixture Tests/Fixtures/*/*.leanfmt
+lake exe fmt --check-exception --check-idempotent -r LeanFmt
+lake build
+lake test
+lake exe fmt-test --update-fixture --check Tests/Fixtures/*/*.leanfmt
+lake exe fmt --check --check-exception --check-idempotent -r LeanFmt
+git diff --check
+```
+
+Review fixture and self-format changes immediately. A generated change is not
+accepted merely because regeneration produced it.
+
+### External validation
+
+- Use the formatter's automatic worker count. Do not pass `--jobs`.
+- Validate GraphQL from `$HOME/work/apollo/graphql-lean` and quantum from
+  `$HOME/work/lean-libs/quantum-computing-lean`. Check exceptions,
+  preservation, idempotency, formatting changes, phase timings, both builds,
+  and any performance trend.
+- Validate only the `Mathlib` directory at width 100 against exact Mathlib
+  `v4.32.0` commit `81a5d257c8e410db227a6665ed08f64fea08e997` and use the
+  Lake cache. Skip the pre-format build because the input is a released commit;
+  always run the complete post-format build.
+- Run all 83 Mathlib formatter batches unless resuming persisted state produced
+  by the same formatter binary and pristine input. Every batch must pass code
+  preservation, actionable-overflow, missing-rule, fallback, and idempotency
+  checks.
+- Compare formatting identical pristine inputs with the preceding committed and
+  candidate binaries. Review the isolated checkpoint delta rather than a reused
+  checkout's accumulated history.
+- After a clean Mathlib build, use independent reviewers to look for wrong or
+  missing line breaks and incorrect indentation. Accept long indivisible lines
+  at the correct base and formatter-created too-many-lines warnings when the
+  surrounding shape is correct.
+
+### Checkpoint acceptance
+
+A checkpoint is complete only when the local gate and requested external rings
+pass, the exact formatting delta is understood, no exception or build failure
+remains, and timings show no material regression. Record commands, commits,
+phase timings, diff statistics, representative review, accepted warnings, and
+the next bounded step here before committing.
+
+## Checkpoint history
+
+Entries are ordered newest first. They record what changed and the validation
+evidence available at that checkpoint; open work is maintained only in the
+queue above.
+
+### 2026-08-07: Single-boundary infix ownership checkpoint
+
+This checkpoint makes infix break ownership consistent. Ordinary and indexed
+infix families own only the boundary before the complete operator; `<|` remains
+the sole infix family whose existing `.lowPriorityInfixRhs` group owns a second
+discretionary boundary after the operator. The change removes the specialized
+Asymptotics relation rule and the generic bar-separated-RHS exception. The
+general `.indexedInfix` rule now uses balanced layout, lifts the indentation of
+an internally reflowed right operand, and never separates the indexed
+operator's closing delimiter from the operator.
+
+Focused coverage checks the boundary ownership of `<|`, every known generated
+and named indexed-infix syntax kind, source-break flattening after an indexed
+operator, multiline lambda and application right operands, `matches`
+alternatives, code preservation, fallback, and idempotency. The dedicated
+proposition fixture records the source-level indexed relation and `matches`
+shapes. The architecture and style documents now state the same one-boundary
+invariant and identify `<|` as the only exception.
+
+The complete local release gate passed: `lake build`, `lake test`, `make lint`,
+fixture regeneration and dry checking, self-formatting, preservation,
+actionable-overflow, missing-rule, fallback, idempotency, and
+`git diff --check` were all clean. Only the dedicated infix fixture changed.
+
+Fresh GraphQL and quantum validation used the automatic worker count and no
+`--jobs` option. GraphQL's initial build, three formatter batches, and final
+build took 92, 23/11/7, and 67 seconds. Every diagnostic passed, and its six-file
+218-insertion, 215-deletion output is byte-for-byte identical to the preceding
+accepted checkpoint. Quantum's cache, initial build, formatter, and final build
+took 16, 40, 14, and 1 seconds; every diagnostic passed and the formatter
+produced no diff. The small timing variation is consistent with prior runs and
+shows no performance-regression signal.
+
+The definitive Mathlib run used pristine exact `v4.32.0` commit
+`81a5d257c8e410db227a6665ed08f64fea08e997`, the populated Lake cache, width
+100, only the 8,264 tracked Lean files under `Mathlib`, and no `--jobs`
+override. It intentionally skipped the pre-format build because the input is a
+released commit. All 83 formatter batches passed code preservation,
+actionable-overflow, missing-rule, fallback, and idempotency checks. The full
+post-format build passed all 8,654 jobs in 3,960 seconds; total validation took
+6,851 seconds. This is faster than the preceding candidate's 4,046-second build
+and 7,163-second total, while batch timings showed no increasing trend.
+
+The resulting Mathlib tree changes 7,552 files by 333,961 insertions and
+293,416 deletions, has SHA-256 diff digest
+`97ab344110218e6d219041058e1081ce3651cabe3f1864a039ee580d9dd167b7`, and
+passes `git diff --check`. Formatting identical pristine inputs with commit
+`202ec07` and the candidate isolates 32 files, 73 hunks, 147 additions, and 144
+deletions. Every hunk is an indexed-infix leading-operator realignment, an
+attached and internally reflowed right operand, or the removal of the
+bar-separated `matches` exception.
+
+Three independent reviews covered every isolated hunk and found no logical
+line-break or indentation error. They specifically rechecked the previously
+flagged reflow cases, nested indexed arrows, multiline lambdas, and the
+`matches` bar alignment. Some attached right operands retain deep hanging
+indentation or exceed 100 columns, but each begins at the correct logical base
+and preserves coherent internal alignment. The complete build emitted only
+accepted Mathlib long-line and long-file warnings.
+
+### 2026-08-07: Non-delimited inline proof-body checkpoint
 
 This checkpoint fixes a general protected-layout consistency bug without adding
 a line-break rule, syntax regrouping, renderer syntax check, exception, or rule
@@ -67,16 +269,6 @@ exact Mathlib delta, one audited all 1,503 tracked `<| by` line endings and a
 parenthesized, constructor, application, and delimiter representatives are
 byte-for-byte unchanged. The complete build emitted only accepted Mathlib
 long-line and long-file warnings.
-
-The next promising checkpoint is the separate standalone `<|` ownership
-family, represented by `Mathlib/Topology/Sheaves/CommRingCat.lean:311`. Start
-with focused expectations for a comment-forced operand and a protected
-multiline operand, then determine whether the existing low-priority operator
-boundary can establish one shared operand base. A clean implementation should
-reuse existing application ownership and original-tree planning; it should not
-add token checks to the renderer, a specialized line-break rule, or a new rule
-API. Stop for review if the operator cannot own that base without opening an
-arbitrary protected island.
 
 ### Attached structure-field body checkpoint
 
@@ -140,14 +332,9 @@ correct structural base. The full build emitted only accepted Mathlib
 long-line and long-file warnings.
 
 The initially considered `<| by`, `(by`, and structure-field `:= by` examples
-do not share one clean implementation boundary. This checkpoint intentionally
-handles only structure fields. The next promising checkpoint is one
-application-boundary ownership form, starting with focused expectations for a
-moved `<| by` argument. Existing coverage currently accepts an outdented proof
-body there, so its governing style and ownership invariant must be settled
-before implementation. Stop for review if correcting it requires changing
-general protected-proof emission; do not combine it with parenthesized proofs
-or the remaining nested-alternative family.
+did not share one clean implementation boundary. This checkpoint intentionally
+handled only structure fields; the later non-delimited proof-body checkpoint
+handled the moved `<| by` case independently.
 
 ### Trailing proof-argument ownership checkpoint
 
@@ -220,22 +407,10 @@ representatives such as `Logic/Relation.lean` and
 accepted Mathlib long-line and long-file warnings; no warning identified a new
 logical indentation error from this checkpoint.
 
-The remaining proof-layout reports are not regressions from this fix. They
-cluster around a broader direct-argument family: proof arguments after `<|`,
-inside parentheses, after `fun ... =>`, and named structure or declaration
-fields where `:= by` can still detach. A smaller set of nested alternative
-bodies also remains hidden by other protected term owners, including
-`Analysis/InnerProductSpace/Reproducing.lean` and
-`Tactic/GRewrite/Elab.lean`.
-
-The next promising checkpoint is proof-argument attachment at one existing
-syntax boundary, starting with focused examples for `<| by`, `(by`, and a
-named `:= by` field. Before implementing it, verify that those forms expose one
-common complete direct argument without searching through arbitrary terms. A
-clean fix should reuse syntax regrouping and existing attachment/body layout;
-stop for review if it requires opening general proof islands or teaching the
-renderer or line-break rules about proof tokens. Do not combine the remaining
-nested-alternative family into that checkpoint.
+The review also separated broader protected-argument and nested-alternative
+ownership from this direct proof-argument fix. Later checkpoints resolved the
+structure-field and non-delimited `<| by` cases; surviving ownership families
+are maintained in the queue at the top of this document.
 
 ### Multiline-original overflow checkpoint
 
@@ -300,30 +475,10 @@ scan. They found no checkpoint-specific regression: direct alternative bodies
 now consistently use the required four-column offset, including newly overlong
 lines in `Algebra/BigOperators/Fin.lean` and
 `FieldTheory/AbelRuffini.lean`, and no structural suffix detached as a result of
-this renderer change. Every reported anomaly belongs to an already-known
-family:
-
-- nested or protected alternatives can still retain one-level body indentation,
-  with representatives in `Computability/AkraBazzi/GrowsPolynomially.lean`,
-  `Logic/Relation.lean`, `Tactic/GRewrite/Elab.lean`, and
-  `Analysis/InnerProductSpace/Reproducing.lean`;
-- standalone or continued line comments can fall to column zero or add a body
-  level, including `CategoryTheory/Limits/HasLimits.lean`,
-  `Geometry/RingedSpace/Stalks.lean`, and the tactic-linter examples;
-- trailing declaration `where`, comment-forced low-priority `<|`, peer
-  application staircases, and token-relative record or declaration
-  continuations retain the previously documented shapes.
-
-The next promising checkpoint is the first family only. Start with focused
-coverage for the direct parser-owned alternative bodies in
-`Logic/Relation.lean`, `Tactic/GRewrite/Elab.lean`, and
-`Computability/AkraBazzi/GrowsPolynomially.lean`, then determine why an outer
-protected proof owner hides their existing alternative-body boundary. A clean
-fix should generalize syntax ownership or regrouping and reuse the shared
-elimination rule; it should not add a line-break rule, renderer syntax check, or
-rule API. Stop for review if exposing that boundary would require opening an
-arbitrary original-layout proof island. Detached comments, `where`, `<|`, and
-stale continuation columns remain separate checkpoints.
+this renderer change. The review separated protected alternatives, line-comment
+continuations, trailing `where`, comment-forced `<|`, peer staircases, and
+token-relative continuations into independent ownership families. Any
+surviving items are maintained in the queue above.
 
 ### Tactic-sequence, identifier-clause, and renderer consistency checkpoint
 
@@ -389,18 +544,11 @@ the corpus still has actionable families beyond this checkpoint:
   `Tactic/TacticAnalysis.lean:120` and
   `RingTheory/PrincipalIdealDomain.lean:120`.
 
-Two targeted reviews after the final build found no remaining staircase,
+Two targeted reviews after the final build found no staircase,
 detached `with`, named-discriminant regression, or direct elimination-body
-error. Both independently reproduced only the protected/nested alternative-body
-family listed first above.
-
-The next promising checkpoint is the first family only: make a parser-owned
-`induction ... using` or nested elimination alternative expose the same direct
-body boundary as an ordinary elimination alternative. It should be implemented
-as the narrowest syntax ownership correction, with focused tests for both an
-ordinary sibling and a still-protected nested proof. Comment ownership,
-standalone `<|`, `where`, and peer-continuation bases should remain separate
-checkpoints because each changes a different governing invariant.
+error. Both independently isolated protected or nested alternative ownership
+as a separate family, which later tactic-ownership checkpoints addressed
+without mixing in comment, `<|`, `where`, or peer-continuation behavior.
 
 ### Ordinary induction and tactic-context checkpoint
 
@@ -521,7 +669,7 @@ build checked the current tree successfully, rebuilding or replaying 179 stale
 targets in 18 seconds. Batch times remained broadly stable, normally 30 to 60
 seconds, without worker failure or memory pressure.
 
-Independent review found one remaining owned-alternative family. A multiline
+Independent review then isolated one owned-alternative family. A multiline
 body parsed after `=>` can remain only one level below its alternative when its
 protected source layout is reached through the parser's `null` wrapper or a
 protected `induction` shell. The structural fix groups the pattern and `=>` as
@@ -608,11 +756,10 @@ changed named-discriminant, `using`, `with`, explicit-alternative, or
 default-alternative layouts. A broad review reproduced only the existing
 protected-body and standalone-comment families recorded below. A targeted
 review also found that source-preserved `cases` branch bodies can remain at the
-alternative's indentation; this predates the header change but remains an open
-ownership inconsistency. The next high-risk checkpoint should rebase that one
-direct body boundary without opening ordinary leaf proof islands. Keep the seven
-width shapes as separate generalized consistency fixes rather than adding
-`cases` exceptions.
+alternative's indentation; this predates the header change and was deliberately
+excluded from the structural-header checkpoint. That protected-body family is
+maintained in the queue above. The seven width shapes remained separate
+generalized consistency work rather than `cases` exceptions.
 
 ### Validation through `21b19ae`
 
@@ -825,8 +972,9 @@ pressure.
 The complete post-format build passed all 8,654 jobs in 3,362 seconds. The
 formatted tree changed 7,525 files, with 310,964 insertions and 270,916
 deletions; `git diff --check` passed. Eight independent domain reviews found no
-code-preservation issue, but confirmed that the corpus is not visually
-release-ready. The open general families are:
+code-preservation issue, but confirmed that the corpus was not yet visually
+release-ready at that checkpoint. The review identified these general
+families:
 
 - protected parenthesized `by` bodies can retain the shell column after the
   shell moves; 27 examples were found across the reviewed domains;
@@ -842,9 +990,9 @@ release-ready. The open general families are:
 - indexed delimiter groups can separate a closing `]` and then over-indent the
   following argument.
 
-These findings are evidence for the existing syntax-grouping, protected-layout,
-and continuation-base work. They should not be addressed with path-specific
-rules or new rule APIs.
+These findings seeded the later checkpoints in this history. Items that still
+apply are maintained in the queue above; none justify path-specific rules or a
+new rule API.
 
 ### Earlier validation and fixes
 
@@ -887,8 +1035,8 @@ preservation, missing-rule, actionable-overflow, fallback, and idempotency in
 with only the accepted Mathlib long-line and long-file lints. The
 source-comment, detached-`calc`, and moved structural-lambda representatives now
 have the intended shape when the comment is one multiline source slice. The
-split line-comment continuation, declaration-comment, and peer continuation
-representatives still reproduce their open families.
+split line-comment and peer-continuation observations were kept outside those
+fixes and are maintained in the queue above when still applicable.
 
 The same revision passed fresh complete validation of `graphql-lean` and
 `quantum-computing-lean` without a `--jobs` override. GraphQL's three formatter
@@ -898,14 +1046,14 @@ build took 2 seconds. The combined run took 231 seconds. Both formatted
 checkouts were byte-clean, and independent diff reviews found no formatting
 regression.
 
-The current revision resolves the boundary before a parenthesized multiline
+That revision resolved the boundary before a parenthesized multiline
 proof argument in the focused representative. The syntax tree already kept each
 `by` shell structural and protected only its proof body; the missing invariant
 was in flow rendering. A fitting multiline original-layout child no longer
 makes its complete flow segment count as flat, and an existing boundary before
-that child is taken. The full-corpus review above shows that this is only the
-shell-level part of the invariant: protected proof bodies can still retain the
-shell's column after the shell moves. This adds no rule API or syntax-specific
+that child is taken. The full-corpus review showed that this was only the
+shell-level part of the invariant: protected proof bodies could retain the
+shell's column after the shell moved. This added no rule API or syntax-specific
 renderer check.
 
 Fresh validation passed without a `--jobs` override. GraphQL's initial build
@@ -918,64 +1066,7 @@ combined run took 257 seconds. The width-100 Mathlib representative passed
 preservation and idempotency in 7 seconds, then its 1,331-job target graph
 replayed and built successfully in 5 seconds with only accepted lints.
 
-### Current families
-
-| Family | Representative evidence | Intended owner | Risk | Status |
-| --- | --- | --- | --- | --- |
-| A multiline syntax comment moved from inline to block layout rebases only its opening line | `Mathlib/Tactic/NormNum/Pow.lean:282` | Original-tree source-slice planning | Medium | Resolved by `8ca47da` |
-| A detached `calc` keeps its steps at their old source base | `Mathlib/Data/List/Perm/Basic.lean:219` | Syntax grouping and original-tree planning | High | Resolved by `9d6eada` |
-| A moved structural, multi-token child can recover an obsolete source column | `Mathlib/Analysis/SpecialFunctions/Integrability/LogMeromorphic.lean:186` | Renderer structural-floor invariant | Medium | Resolved by `e7ba1a3` |
-| Parenthesized multiline proof arguments remain attached to an application prefix | `Mathlib/Analysis/BoxIntegral/Partition/Split.lean:155`; `Mathlib/AlgebraicGeometry/Gluing.lean:644` | Generic flow fit and protected-child rebasing | High | Partially resolved: the shell breaks correctly, but protected bodies still retain the shell column |
-| A moved `fun`, tactic quotation, or protected body without a parent boundary does not follow its introducer | `Mathlib/Data/Nat/Bitwise.lean:260`; `Mathlib/RingTheory/WittVector/Basic.lean:85`; `Mathlib/Tactic/Linter/MinImports.lean:104`; `Mathlib/Tactic/MinImports.lean:170` | Syntax grouping and original-tree planning | High | Open |
-| A standalone `<\|` does not establish the base of its protected operand | `Mathlib/Topology/Sheaves/CommRingCat.lean:311` | Line-break rules and original-tree planning | High | Open |
-| Application siblings or declaration-field bodies inherit a preceding token column | `Mathlib/Geometry/Manifold/MFDeriv/SpecificFunctions.lean:277`; `Mathlib/Algebra/Order/Monoid/Defs.lean:28` | Syntax grouping and line-break rules | High | Open |
-| A line comment after a standalone declaration `:` consumes the pending result indentation | `Mathlib/Algebra/Module/Projective.lean:281` | Generic comment-boundary handling | Medium | Open |
-| A source-preserved line-comment continuation can detach from its first physical line | `Mathlib/Algebra/ContinuedFractions/Computation/Basic.lean:193` | Syntax grouping and original-tree source slices | Medium | Open |
-| `calc` rows can disagree on their shared continuation base | `Mathlib/Analysis/InnerProductSpace/Projection/Basic.lean:362` | Original-tree planning and renderer continuation bases | High | Open |
-| A branch body can remain aligned with its branch header | `Mathlib/Algebra/BigOperators/Fin.lean:632` | Syntax grouping and original-tree planning | High | Open |
-| A source-preserved `cases` body can remain aligned with its alternative | `Mathlib/Data/ENat/Lattice.lean:139`; `Mathlib/Analysis/Meromorphic/Order.lean:198` | Tactic alternative ownership and protected-body rebasing | High | Open; the structural header checkpoint does not open leaf proof islands |
-| Inline record and attribute children can inherit the opener's source column | `Mathlib/Lean/Meta/RefinedDiscrTree/Basic.lean:169`; `Mathlib/Algebra/Group/Submonoid/Membership.lean:553` | Syntax grouping and continuation-base planning | High | Open |
-| An indexed delimiter group can detach its closing bracket | `Mathlib/Geometry/Manifold/VectorBundle/Hom.lean:97` | Shape-based line-break dispatch | Medium | Resolved in the working tree after `61d472a` by a general delimiter-shape rule |
-| A prefixed array opener can stay attached to a multiline parenthesized item | `Mathlib/Tactic/CategoryTheory/Elementwise.lean:159` | Delimiter classification and collection breaks | Low | Resolved in the working tree after `61d472a` by applying opening-delimiter suffix semantics consistently |
-| A semantic trailing comment can detach from its command | `Mathlib/Condensed/EffectiveEpi.lean:11` | Comment attachment and command grouping | Medium | Resolved in the working tree after `61d472a` by preserving authored attachment |
-
-These are governing-layout failures, not requests for syntax-specific rule
-exceptions. Mathlib paths are regression inputs only. Long unbreakable lines and
-formatter-created too-many-lines warnings are not findings when the surrounding
-shape is correct.
-
-### Proposed clean next steps
-
-1. **Continue protected shells only where no parent boundary exists.** The
-   parenthesized `by` case needed no regrouping because its shell/body ownership
-   was already correct and application flow already exposed the required
-   boundary. For tactic quotation and remaining protected bodies, first verify
-   whether the shell is structural and whether an ordinary parent boundary is
-   available. Regroup only the narrowest body that requires preservation; do not
-   add token checks to the renderer or a new rule API. This remains high risk
-   because changing an island boundary can also change parent fit probes.
-2. **Normalize one peer continuation group in the syntax tree.** Start with the
-   application/declaration-field staircase representatives. Peers should expose
-   one continuation base to existing rules instead of inheriting the preceding
-   token's ending column. Keep this separate from protected-body work so a fit
-   regression has one owner.
-3. **Carry pending child indentation through line comments.** Treat a line
-   comment between a structural boundary and its child as trivia for that
-   boundary. Group source-preserved physical continuation lines with their
-   owning line comment before original-tree planning. The generic boundary state
-   should indent both a detached comment and the first following code line,
-   while an author-written `: -- comment` remains one line. This should not
-   identify declaration syntax or add a comment-specific line-break rule.
-4. **Repeat validation in widening rings.** For each commit, run the full local
-   gate and its width-100 Mathlib representatives. Then run fresh GraphQL and
-   quantum validation. After all three open invariants are accepted in review,
-   repeat the complete 83-batch Mathlib run and post-format build.
-
-Each remaining invariant affects shared layout ownership and should stay in its
-own commit with independent regression coverage. The renderer should continue
-to execute plans and manage output state without identifying Lean syntax kinds.
-
-## Follow-up validation: 2026-08-01
+### Follow-up validation: 2026-08-01
 
 The formatter was validated again at leanfmt commit `dc968e7` against the same
 Mathlib `v4.32.0` commit. The run used the Lake cache, selected only tracked
@@ -1007,65 +1098,21 @@ Post-fix verification at leanfmt commit `0722403` remained clean:
   passed preservation, missing-rule, overflow, fallback, and idempotency checks.
   These targeted runs intentionally skipped the already-completed full builds.
 
-### Follow-up rule families
+### Follow-up rule-family fixes
 
-The follow-up review found the families below. A fix should describe a general
-syntax or layout invariant and live in the layer that owns that invariant. A
-Mathlib path is evidence and regression input, never a condition in formatter
-code.
+The follow-up review produced three bounded consistency fixes. Explicitly named
+indexed infix notation is recognized from its delimiter shape, so its closing
+`]` does not detach. A multiline named argument owns the break before its value,
+while its closing `)` remains a tight suffix unless a comment forces a new line.
+Low-priority pipes align `let`, `have`, and `haveI` operands consistently and
+keep the first line of ordinary `by`, `do`, and `calc` operands attached.
 
-| Family | Intended owner | Risk | Status |
-| --- | --- | --- | --- |
-| Explicitly named indexed infix notation such as `->e[phi]` can detach its closing `]` | Syntax-tree grouping | Low | Resolved |
-| A multiline named argument can leave its closing `)` at the value body's indentation | Line-break rules | Low | Resolved |
-| A low-priority `<\|` can leave a `have` right operand at the pipe's base | Line-break rules | Low | Resolved |
-| Protected multiline `fun` operands retain stale indentation after their parent moves | Original-tree layout planning | High | Proposed below |
-| `calc` steps can inherit a moved expression's source column instead of the `calc` block base | Original-tree layout planning | High | Proposed below |
-| Proof-bearing structure-valued `where` clauses can retain a stale leading boundary | Original-tree classification and layout planning | Medium | Proposed below |
-| Mathlib `lemma` equation arms in `mutual` blocks can use the wrong command base | Syntax grouping and original-tree ownership | High | Proposed below |
-| Other multiline `<\|` operands can preserve a source column after the pipe moves | Original-tree layout planning | High | Proposed below |
+These fixes stayed in syntax grouping and line-break rules, used no
+project-specific conditions, and passed targeted Mathlib preservation and
+idempotency checks. The high-risk layout-base observations from this review are
+maintained in the remaining-issue queue at the top of this document.
 
-The first three are bounded consistency fixes. Indexed notation should be
-recognized from its parsed delimiter shape rather than a generated parser name.
-A named argument owns the break before its value, while its closing delimiter is
-a tight suffix of that value unless a comment forces a new line. A low-priority
-pipe owns the first line of ordinary `by`, `do`, and `calc` operands. Layout-sensitive
-binding operands such as `let` and `have` share the indented start-alignment rule.
-
-### Deferred layout-base proposals
-
-1. Give each protected original-layout island an explicit formatted anchor and
-   source anchor. Rebase every preserved line by the difference between those
-   anchors. This should cover stale multiline `fun`, `calc`, and residual pipe
-   operands without syntax checks in the renderer.
-2. Distinguish proof-bearing structure values from generic proof-layout islands
-   in original-tree classification. The structure value should preserve its
-   internal proof layout while allowing the declaration rule to format its
-   leading `where` boundary at the command base.
-3. Group Mathlib's extensible `lemma` equation declarations into the same
-   command-and-equation-arm shape used by core declarations before assigning a
-   protected layout. Mutual command indentation should then come from that
-   structural group, not from source columns.
-4. Treat low-priority infix attachment and protected-right-operand rebasing as
-   separate contracts. Line-break rules decide that `<|` owns the operand's
-   first line; original-tree planning decides how the remaining source-preserved
-   lines move with it.
-
-Representative high-risk examples remain:
-
-- `Mathlib/Algebra/Order/Monoid/Defs.lean:29` for multiline `fun`
-- `Mathlib/CategoryTheory/Sites/Presheaf.lean:113` for `calc`
-- `Mathlib/CategoryTheory/Abelian/Injective/Resolution.lean:327` for
-  proof-bearing `where`
-- `Mathlib/AlgebraicGeometry/Morphisms/ChevalleyComplexity.lean:624` for mutual
-  lemma equations
-- `Mathlib/CategoryTheory/Pseudoelements.lean:310` for a protected `<|` operand
-
-Long unbreakable lines and formatter-created too-many-lines warnings remain
-accepted when their surrounding formatting shape and logical indentation are
-correct.
-
-## Validation baseline
+### Initial validation baseline
 
 - Review date: 2026-07-30
 - leanfmt commit: `935dc60`
@@ -1084,9 +1131,9 @@ established by the formatting rules. They are not findings by themselves. The
 review below is limited to wrongly inserted line breaks, detached syntax, and
 incorrect indentation bases.
 
-## Reviewed findings
+### Initial reviewed findings
 
-### 1. Infix continuations form diagonal staircases
+#### 1. Infix continuations form diagonal staircases
 
 Status: resolved.
 
@@ -1117,7 +1164,7 @@ continuations inherit the conditional base, `leading_parser` arguments use
 application flow, and a generated notation break before trailing punctuation
 moves after that separator in the renderer.
 
-### 2. Enclosing breakpoints lose priority over nested expression breaks
+#### 2. Enclosing breakpoints lose priority over nested expression breaks
 
 Status: resolved.
 
@@ -1153,7 +1200,7 @@ Generated binder terms are now recognized from their binder shape, recursive
 command argument sequences share one continuation base, and notation header
 groups expose a flowing outer breakpoint before nested parser-category syntax.
 
-### 3. Moved subtrees retain stale source indentation
+#### 3. Moved subtrees retain stale source indentation
 
 Status: resolved.
 
@@ -1187,7 +1234,7 @@ Protected layouts are now rebased when their parent moves. Singleton `#[…]`
 wrappers propagate the enclosing expression base, and tail lifting no longer
 replaces a base that a nested structure instance explicitly inherits.
 
-### 4. Branches inherit the wrong owning base
+#### 4. Branches inherit the wrong owning base
 
 Status: resolved.
 
@@ -1211,7 +1258,7 @@ Ordinary, dependent, and `if let` conditionals now expose the same owning-base
 break structure. Their branch keywords return to that base and branch bodies
 receive one child level.
 
-### 5. Declaration colons detach around intervening comments
+#### 5. Declaration colons detach around intervening comments
 
 Status: resolved.
 
@@ -1236,7 +1283,7 @@ The declaration colon retains its ordinary breakpoint. Comment trivia owns its
 physical newline, and the renderer applies the result indentation to the token
 after it without requiring a comment-sensitive declaration rule.
 
-### 6. Custom declaration modifiers detach
+#### 6. Custom declaration modifiers detach
 
 Status: resolved.
 
@@ -1259,7 +1306,7 @@ whether the command is core syntax or an extension.
 Syntax regrouping now separates extension-owned modifier containers from their
 command and places both in the annotated-declaration flow.
 
-### 7. Structure-value `abbrev` declarations detach `where`
+#### 7. Structure-value `abbrev` declarations detach `where`
 
 Status: resolved.
 
@@ -1285,7 +1332,7 @@ Flattened declaration values now retain `whereStructInst` as the value child,
 so `where` remains attached while the structure fields own their following
 breaks.
 
-### 8. Let-fallback bars become orphan lines
+#### 8. Let-fallback bars become orphan lines
 
 Status: resolved.
 
@@ -1305,46 +1352,13 @@ The fallback clause and its continuation are distinct logical nodes. Renderer
 comment-boundary handling can force the structural continuation without making
 the bar an independent breakable piece.
 
-## Accepted and intentional output
-
-### 9. Adjacent constructor delimiters
-
-Status: accepted for now.
-
-Adjacent `⟨⟨ ... ⟩⟩` delimiters currently accumulate one indentation level per
-syntax delimiter even though they form one visual prefix. Representative:
-`Mathlib/Algebra/AlgebraicCard.lean:66`.
-
-```lean
-⟨⟨
-    ...
-  ⟩⟩
-```
-
-This is known and intentionally deferred. Do not treat it as a validation
-failure unless the formatting policy changes.
-
-### Source-break spacing after `<|`
-
-Status: intentional.
-
-`Mathlib/Lean/Expr/Basic.lean:301` formats with two spaces after `<|`:
-
-```lean
-<|  if bi.isInstImplicit ...
-```
-
-The output reflects the intentional interaction between the preserved source
-break boundary and operator spacing. Do not file or fix this as an accidental
-duplicate-space issue.
-
-## Completed fix sequence
+### Completed initial fix sequence
 
 Each logical fix was kept in a separate commit with focused regression
 coverage. The formatter's self-format gate and affected Mathlib representatives
 were rerun as the fixes progressed.
 
-### Phase 1: low-risk syntax-boundary fixes (completed)
+#### Phase 1: low-risk syntax-boundary fixes (completed)
 
 1. Resolved issue 5 by retaining the declaration's ordinary break before `:`.
    Comments on the following line use the result indentation; comments explicitly
@@ -1363,7 +1377,7 @@ were rerun as the fixes progressed.
 These fixes stayed in syntax regrouping or line-break rules and did not add
 file- or declaration-name checks to the renderer.
 
-### Phase 2: high-risk layout-base fixes (completed)
+#### Phase 2: high-risk layout-base fixes (completed)
 
 1. Addressed issue 4 by making conditional branch ownership explicit in the
    syntax tree or rule data. `else` uses the owning `if` base, and each branch
