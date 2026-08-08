@@ -1,7 +1,28 @@
 def listNonempty {α : Type} (values : List α) : Prop :=
   values ≠ []
+
+syntax:50 term:51 " =test[" term " ] " term:51 : term
+
+def longIndexedRelation := exceptionallyLongIndexedRelationLeftOperandName =test[relationIndex] exceptionallyLongIndexedRelationRightOperandName
+
+def isMonotoneKind (kind : Name) : Bool :=
+  if kind matches `Monotone | `Antitone | `StrictMono | `StrictAnti | `MonotoneOn | `AntitoneOn | `StrictMonoOn | `StrictAntiOn then true else false
 -----------------------------------------------------------------------------------------
 -- leanfmt: expected output below (DO NOT EDIT)
 -----------------------------------------------------------------------------------------
 def listNonempty {α : Type} (values : List α) : Prop :=
   values ≠ []
+
+syntax:50 term:51 " =test[" term " ] " term:51 : term
+
+def longIndexedRelation :=
+  exceptionallyLongIndexedRelationLeftOperandName
+  =test[relationIndex] exceptionallyLongIndexedRelationRightOperandName
+
+def isMonotoneKind (kind : Name) : Bool :=
+  if kind
+      matches `Monotone | `Antitone | `StrictMono | `StrictAnti | `MonotoneOn
+              | `AntitoneOn | `StrictMonoOn | `StrictAntiOn then
+    true
+  else
+    false

@@ -90,6 +90,10 @@ def result : Prop :=
 
 leanfmt generally breaks before operators for this reason. Bodies after `:=`,
 `=>`, `with`, quantifier commas, and similar separators are indented instead.
+The low-priority application operator `<|` is the one exception: its grouped
+right operand can introduce another boundary after the operator when the
+operand needs a separate structural base. Other infix operators expose only
+their leading boundary.
 
 ### Preserve intentional source breaks selectively
 
@@ -1259,14 +1263,13 @@ else
 ```
 
 An infix-like condition with a bar-separated right operand, such as `matches`,
-flows at the right operand and its bars. Alternatives are packed while they fit
-and continue at the same indentation:
+keeps its first alternative with the leading operator. Later alternatives are
+packed while they fit and their bars align with that first alternative:
 
 ```lean
 if kind
-    matches
-    `Monotone | `Antitone | `StrictMono
-    | `StrictAnti | `MonotoneOn then
+    matches `Monotone | `Antitone | `StrictMono
+            | `StrictAnti | `MonotoneOn then
   true
 else
   false

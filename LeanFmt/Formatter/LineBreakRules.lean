@@ -2553,41 +2553,18 @@ def setBuilderRule : LineBreakRule :=
     breakPoints := setBuilderBreaks
   }
 
-def bracketedRelationBreaks (_context : RuleContext) (segment : Segment)
-    : List BreakPoint :=
-  match nonemptyChildIndexes segment with
-  | [_, operatorIndex, _, _, rhsIndex] =>
-      [
-        boundaryBreak? segment operatorIndex 1,
-        boundaryBreak? segment rhsIndex 1
-      ].filterMap
-        id
-  | _ => []
-
-def bracketedRelationRule : LineBreakRule :=
-  {
-    name := "bracketedRelation"
-    useExistingBreaks := fun _ _ => true
-    flow := fun _ _ => true
-    breakPoints := bracketedRelationBreaks
-  }
-
 def indexedNotationBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
   match segment.parent, nonemptyChildIndexes segment with
-  | .node (.indexedInfix _) _, [_, operatorIndex, _, _, rhsIndex] =>
-      [
-        boundaryBreak? segment operatorIndex 1,
-        boundaryBreak? segment rhsIndex 1
-      ].filterMap
-        id
+  | .node (.indexedInfix _) _, [_, operatorIndex, _, _, _] =>
+      [boundaryBreak? segment operatorIndex 0].filterMap id
   | _, _ => []
 
 def indexedNotationRule : LineBreakRule :=
   {
     name := "indexedNotation"
     useExistingBreaks := fun _ _ => true
-    flow := fun _ _ => true
+    liftsTailIndentation := fun _ _ => true
     breakPoints := indexedNotationBreaks
   }
 
@@ -2879,19 +2856,6 @@ def barSeparatedSequence (segment : Segment) : Bool :=
         else
           !childStartsWithLexeme segment index "|"
 
-def childIsBarSeparatedSequence (segment : Segment) (index : Nat) : Bool :=
-  match segment.child? index with
-  | some tree@(.node (.raw `null) _) =>
-      barSeparatedSequence (Segment.ofTree tree)
-  | _ => false
-
-def infixAlternativeRhsBreak? (segment : Segment) : Option BreakPoint := do
-  let rhsIndex ← (nonemptyChildIndexes segment).getLast?
-  if childIsBarSeparatedSequence segment rhsIndex then
-    boundaryBreak? segment rhsIndex 1
-  else
-    none
-
 def infixBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   if lowPriorityInfixSegment segment then
     segment.indexes.filterMap
@@ -2923,8 +2887,7 @@ def lowPriorityInfixRhsBreaks (_context : RuleContext) (segment : Segment)
     [boundaryBreak? segment (segment.start + 1) 1].filterMap id
 
 def infixRuleBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
-  let breaks :=
-    infixBreaks context segment ++ [infixAlternativeRhsBreak? segment].filterMap id
+  let breaks := infixBreaks context segment
   if infixAttachedBodyAssignmentValue context segment then
     breaks.map
       fun breakPoint =>
@@ -4149,9 +4112,6 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `«term_ᵐᵒᵖ») _ => some defaultRule
   | .node (.raw `«term__[_]») _ => some indexedTermRule
   | .node (.raw `Uniformity.«term𝓤[_]») _ => some transparentRule
-  | .node (.raw `Asymptotics.«term_=O[_]_») _ => some bracketedRelationRule
-  | .node (.raw `Asymptotics.«term_=o[_]_») _ => some bracketedRelationRule
-  | .node (.raw `Asymptotics.«term_=Θ[_]_») _ => some bracketedRelationRule
   | .node (.raw `«term_→ₗ[_]_») _ => some defaultRule
   | .node (.raw `«term_≃ₗ[_]_») _ => some defaultRule
   | .node (.raw `«term_→ₐ[_]_») _ => some defaultRule

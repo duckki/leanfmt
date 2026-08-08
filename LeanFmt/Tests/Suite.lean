@@ -1137,6 +1137,28 @@ def assertGroupedInfixChain (env : Lean.Environment) : IO Unit := do
       <| IO.userError
           s!"expected infix chain to contain three operands and two operators, got {repr other}"
 
+def assertLowPriorityInfixOwnsBothOperatorBoundaries (env : Lean.Environment)
+    : IO Unit := do
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env "def x := lhs <| rhs\n"
+      "low-priority-infix-boundaries.lean"
+  let outer ←
+    match findTreeNode? (.infixChain `«term_<|_») moduleTree.tree with
+    | some outer => pure outer
+    | none => throw <| IO.userError "low-priority infix chain was not regrouped"
+  let outerSegment := Formatter.LineBreakRules.Segment.ofTree outer
+  let outerRule := Formatter.LineBreakRules.formattingRuleFor outer
+  assertTrue "low-priority infix chain owns the leading operator boundary"
+    (outerRule.breakPoints {} outerSegment == [{ index := 1, indentLevels := 0 }])
+  let rhsGroup ←
+    match findTreeNode? .lowPriorityInfixRhs outer with
+    | some rhsGroup => pure rhsGroup
+    | none => throw <| IO.userError "low-priority infix RHS was not regrouped"
+  let rhsSegment := Formatter.LineBreakRules.Segment.ofTree rhsGroup
+  let rhsRule := Formatter.LineBreakRules.formattingRuleFor rhsGroup
+  assertTrue "low-priority infix RHS owns the post-operator boundary"
+    (rhsRule.breakPoints {} rhsSegment == [{ index := 1, indentLevels := 1 }])
+
 def assertGroupedEqualPrecedenceInfixChain (env : Lean.Environment) : IO Unit := do
   let plusPrecedence := SyntaxTree.parserPrecedence env {} `«term_+_»
   let minusPrecedence := SyntaxTree.parserPrecedence env {} `«term_-_»
@@ -6632,17 +6654,16 @@ def assertInfixAlternativeSequenceFlows (env : Lean.Environment) : IO Unit := do
   let expected :=
     "def isMonotoneKind (kind : Name) : Bool :=\n"
     ++ "  if kind\n"
-    ++ "      matches\n"
-    ++ "      `Monotone | `Antitone | `StrictMono | `StrictAnti\n"
-    ++ "      | `MonotoneOn | `AntitoneOn | `StrictMonoOn\n"
-    ++ "      | `StrictAntiOn then\n"
+    ++ "      matches `Monotone | `Antitone | `StrictMono\n"
+    ++ "              | `StrictAnti | `MonotoneOn | `AntitoneOn\n"
+    ++ "              | `StrictMonoOn | `StrictAntiOn then\n"
     ++ "    true\n"
     ++ "  else\n"
     ++ "    false\n"
   let formatted ←
     Formatter.formatSourceWithEnv env source "infix-alternative-sequence.lean"
       { lineWidth := 60 }
-  assertEq "infix RHS alternatives flow before bars" expected formatted
+  assertEq "infix operator stays with its first RHS alternative" expected formatted
   assertTrue "infix RHS alternative formatting preserves code"
     (← codePreservedIgnoringWhitespace env source formatted)
   let moduleTree ←
@@ -11226,26 +11247,7 @@ def assertBracketedNotationRulesKeepDelimitersAttached : IO Unit := do
       in [
         `Asymptotics.«term_=O[_]_»,
         `Asymptotics.«term_=o[_]_»,
-        `Asymptotics.«term_=Θ[_]_»
-      ] do
-    let relation :=
-      SyntaxTree.Tree.node (.raw kind)
-        #[
-          .leaf (syntheticAtomToken "f"),
-          .leaf (syntheticAtomToken "=O["),
-          .leaf (syntheticAtomToken "filter"),
-          .leaf (syntheticAtomToken "]"),
-          .leaf (syntheticAtomToken "g")
-        ]
-    let segment := Formatter.LineBreakRules.Segment.ofTree relation
-    let rule := Formatter.LineBreakRules.formattingRuleFor relation
-    assertTrue s!"bracketed relation breaks before its operator and right operand: {kind}"
-      (rule.breakPoints {} segment
-        == [{ index := 1, indentLevels := 1 }, { index := 4, indentLevels := 1 }])
-    assertTrue s!"bracketed relation operands flow: {kind}" (rule.flow {} segment)
-
-  for kind
-      in [
+        `Asymptotics.«term_=Θ[_]_»,
         `«term_→ₗ[_]_»,
         `«term_≃ₗ[_]_»,
         `«term_→ₐ[_]_»,
@@ -11268,10 +11270,9 @@ def assertBracketedNotationRulesKeepDelimitersAttached : IO Unit := do
       (indexedRelation.containsNodeKind (.indexedInfix kind))
     assertEq s!"indexed notation selects its delimiter-aware rule: {kind}"
       "indexedNotation" rule.name
-    assertTrue s!"indexed notation keeps closing delimiter attached: {kind}"
-      (rule.breakPoints {} segment
-        == [{ index := 1, indentLevels := 1 }, { index := 4, indentLevels := 1 }])
-    assertTrue s!"indexed notation operands flow: {kind}" (rule.flow {} segment)
+    assertTrue s!"indexed notation breaks only before its complete operator: {kind}"
+      (rule.breakPoints {} segment == [{ index := 1, indentLevels := 0 }])
+    assertTrue s!"indexed notation uses balanced layout: {kind}" (!rule.flow {} segment)
   let ordinaryBracketedTerm :=
     SyntaxTree.regroupTree
     <| SyntaxTree.Tree.node (.raw `explicitBracketedTerm)
@@ -11306,6 +11307,55 @@ def assertIndexedTermsRenderWithAttachedClosingDelimiter (env : Lean.Environment
     Formatter.formatSourceWithEnv env formatted "indexed-term-rendering-formatted.lean"
       { lineWidth := 40 }
   assertEq "source-level indexed term formatting is idempotent" formatted formattedAgain
+
+def assertIndexedInfixRendersWithLeadingOperator (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "syntax:50 term:51 \" =test[\" term \" ] \" term:51 : term\n"
+    ++ "\n"
+    ++ "def longIndexedRelation := exceptionallyLongIndexedRelationLeftOperandName =test[relationIndex] rhs\n"
+    ++ "\n"
+    ++ "def fittingSourceBreak :=\n"
+    ++ "  lhs =test[index]\n"
+    ++ "    rhs\n"
+    ++ "\n"
+    ++ "def indexedLambda :=\n"
+    ++ "  exceptionallyLongIndexedRelationLeftOperandName =test[relationIndex] fun y =>\n"
+    ++ "                                                                        y\n"
+    ++ "\n"
+    ++ "def indexedApplication := exceptionallyLongIndexedRelationLeftOperandName =test[relationIndex] exceptionallyLongFunctionName firstArgument secondArgument\n"
+  let expected :=
+    "syntax:50 term:51 \" =test[\" term \" ] \" term:51 : term\n"
+    ++ "\n"
+    ++ "def longIndexedRelation :=\n"
+    ++ "  exceptionallyLongIndexedRelationLeftOperandName\n"
+    ++ "  =test[relationIndex] rhs\n"
+    ++ "\n"
+    ++ "def fittingSourceBreak :=\n"
+    ++ "  lhs =test[index] rhs\n"
+    ++ "\n"
+    ++ "def indexedLambda :=\n"
+    ++ "  exceptionallyLongIndexedRelationLeftOperandName\n"
+    ++ "  =test[relationIndex] fun y =>\n"
+    ++ "                        y\n"
+    ++ "\n"
+    ++ "def indexedApplication :=\n"
+    ++ "  exceptionallyLongIndexedRelationLeftOperandName\n"
+    ++ "  =test[relationIndex] exceptionallyLongFunctionName\n"
+    ++ "                        firstArgument secondArgument\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "indexed-infix-leading-operator.lean"
+      { lineWidth := 60 }
+  assertTrue "indexed infix leading-operator formatting does not fall back"
+    (!result.fellBack)
+  assertEq "indexed infix uses only its leading operator boundary"
+    expected result.formatted
+  assertTrue "indexed infix leading-operator formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "indexed-infix-leading-operator-formatted.lean" { lineWidth := 60 }
+  assertEq "indexed infix leading-operator formatting is idempotent"
+    result.formatted formattedAgain
 
 def assertLakeDslFormatting : IO Unit := do
   let env ← SyntaxTree.importEnvironment #[{ module := `Lake }]
@@ -12384,6 +12434,7 @@ def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertOverlappingEmptySyntaxTokensRemoved env
   assertGroupedApplication env
   assertGroupedInfixChain env
+  assertLowPriorityInfixOwnsBothOperatorBoundaries env
   assertGroupedEqualPrecedenceInfixChain env
   assertDoFallbackRegrouping env
   assertDefinitionLikeCommandsRegroup
@@ -12712,6 +12763,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertRecursiveCommandArgumentsShareBase
   assertBracketedNotationRulesKeepDelimitersAttached
   assertIndexedTermsRenderWithAttachedClosingDelimiter env
+  assertIndexedInfixRendersWithLeadingOperator env
   assertLakeDslFormatting
   assertMathlibLowRiskSyntaxKindsHaveRules
   assertMissingRuleCheckUsesDispatch env loader
