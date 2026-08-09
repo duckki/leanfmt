@@ -78,8 +78,6 @@ inductive NodeKind where
   | structureDeriving
   | calcBody
   | calcStep
-  | calcRelation
-  | calcOperand
   | matchDiscriminants
   | matchPatterns
   | doForHeader
@@ -118,8 +116,6 @@ def nodeKindName : NodeKind → String
   | .structureDeriving => "LeanFmt.SyntaxTree.NodeKind.structureDeriving"
   | .calcBody => "LeanFmt.SyntaxTree.NodeKind.calcBody"
   | .calcStep => "LeanFmt.SyntaxTree.NodeKind.calcStep"
-  | .calcRelation => "LeanFmt.SyntaxTree.NodeKind.calcRelation"
-  | .calcOperand => "LeanFmt.SyntaxTree.NodeKind.calcOperand"
   | .matchDiscriminants => "LeanFmt.SyntaxTree.NodeKind.matchDiscriminants"
   | .matchPatterns => "LeanFmt.SyntaxTree.NodeKind.matchPatterns"
   | .doForHeader => "LeanFmt.SyntaxTree.NodeKind.doForHeader"
@@ -243,6 +239,7 @@ partial def protectNestedTacticSequences : Tree → Tree
         .node (.proofBody tree.containsTacticLayoutOwner) #[tree]
       else
         tree
+  | tree@(.node (.proofBody _) _) => tree
   | .node kind children =>
       .node kind (children.map protectNestedTacticSequences)
   | tree => tree
@@ -1591,18 +1588,15 @@ partial def flattenDelimitedCollectionChildren (children : Array Tree) : Array T
       | _ => children
   | none => children
 
-private def calcRelationChildren? : Tree → Option (Array Tree)
-  | .node (.infixChain _) children =>
-      if children.size == 3 then some children else none
-  | .node (.indexedInfix _) children =>
-      if children.size == 5 then some children else none
+private def splitCalcAttachedProof? : Tree → Option (Tree × Tree)
+  | .node (.raw kind) #[keyword, body] =>
+      if kind == `Lean.Parser.Term.byTactic
+          || kind == `Lean.Parser.Term.do
+          || kind == `Lean.calc then
+        some (keyword, body)
+      else
+        none
   | _ => none
-
-private def regroupCalcRelationRhs (rhs : Tree) : Tree :=
-  match rhs with
-  | .node .application _
-  | .node (.infixChain _) _ => rhs
-  | _ => .node .calcOperand #[rhs]
 
 private def regroupCalcStep? (children : Array Tree) : Option Tree := do
   let relation ← children[0]?
@@ -1620,23 +1614,21 @@ private def regroupCalcStep? (children : Array Tree) : Option Tree := do
   if !(proof.any fun child => child.firstToken?.isSome) then
     none
   else
-    let decomposedRelation? : Option Tree := do
-      let relationChildren ← calcRelationChildren? relation
-      let lhs ← relationChildren[0]?
-      let rhsIndex := relationChildren.size - 1
-      let rhs ← relationChildren[rhsIndex]?
-      let operator := childrenRange relationChildren 1 rhsIndex
-      some
-      <| .node .calcRelation
-      <| #[
-        .node .calcOperand #[lhs],
-        .node .suffixGroup (operator ++ #[regroupCalcRelationRhs rhs] ++ assignment)
-      ]
-    let relation :=
-      decomposedRelation?.getD
-      <| .node .calcRelation
-      <| #[.node .suffixGroup (#[.node .calcOperand #[relation]] ++ assignment)]
-    some <| .node .calcStep <| #[relation] ++ proof
+    match proof with
+    | #[proof] =>
+        match splitCalcAttachedProof? proof with
+        | some (suffix, body) =>
+            some
+            <| .node .calcStep
+            <| #[.node .suffixGroup (#[relation] ++ assignment ++ #[suffix]), body]
+        | none =>
+            some
+            <| .node .calcStep
+            <| #[.node .suffixGroup (#[relation] ++ assignment), proof]
+    | _ =>
+        some
+        <| .node .calcStep
+        <| #[.node .suffixGroup (#[relation] ++ assignment), .node (.raw `null) proof]
 
 private def regroupCalcBodyChildren (children : Array Tree) : Array Tree :=
   children.foldl
@@ -1653,7 +1645,7 @@ private def regroupCalcChildren (children : Array Tree) : Array Tree :=
       | some (Tree.node (NodeKind.raw `Lean.calcFirstStep) initialChildren) =>
           let initial := Tree.node (NodeKind.raw `Lean.calcFirstStep) initialChildren
           #[
-            .node .suffixGroup #[keyword, .node .calcOperand #[initial]],
+            .node .suffixGroup #[keyword, initial],
             .node .calcBody (childrenRange steps 1 steps.size)
           ]
       | _ => children

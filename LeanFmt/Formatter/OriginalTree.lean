@@ -563,10 +563,6 @@ def classify? (tree : SyntaxTree.Tree) : Option LayoutIslandKind :=
     some .attributes
   else if isDefinitionContainingQuotation tree then
     some .definitionQuotation
-  else if match tree with
-          | .node .calcOperand _ => true
-          | _ => false then
-    some .calc
   else if isCalcTree tree && !isStructuredCalcTree tree then
     some .calc
   else if isCommentSensitiveMatchExpr tree then

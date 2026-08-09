@@ -461,13 +461,13 @@ def suffixKeywordLexeme (lexeme : String) : Bool :=
     ["by", "calc", "do", "from", "where", "with", "deriving", "then", "else"]
 
 def suffixOpeningDelimiterLexeme (lexeme : String) : Bool :=
-  SpaceRules.stringEndsWithAny lexeme ["(", "[", "{", "⟨", "⟪"]
+  SpaceRules.stringEndsWithAny lexeme ["(", "[", "{", "⟨", "⟪", "‖"]
 
 def treeStartsWithOpeningDelimiter (tree : SyntaxTree.Tree) : Bool :=
   tree.firstToken?.any fun token => suffixOpeningDelimiterLexeme token.lexeme
 
 def suffixClosingDelimiterLexeme (lexeme : String) : Bool :=
-  lexemeIn lexeme [")", "]", "}", "⟩", "⟫"]
+  lexemeIn lexeme [")", "]", "}", "⟩", "⟫", "‖"]
 
 def suffixDelimiterLexeme (lexeme : String) : Bool :=
   suffixOpeningDelimiterLexeme lexeme
@@ -548,10 +548,20 @@ def suffixInfixOperatorIn : List Frame → Bool
 def suffixInfixOperator (context : RuleContext) : Bool :=
   suffixInfixOperatorIn context.ancestors
 
+def selectedChildIsProofBody (context : RuleContext) : Bool :=
+  match context.ancestors with
+  | parent :: _ =>
+      match parent.segment.child? parent.childIndex with
+      | some (.node (.proofBody _) _) => true
+      | _ => false
+  | _ => false
+
 def suffixTokenAction (context : RuleContext) (token : SyntaxTree.Token)
     : SuffixTokenAction :=
   if token.lexeme.isEmpty then
     .skip
+  else if selectedChildIsProofBody context then
+    .stop
   else if suffixProjectionMember context || suffixInfixOperator context then
     .emit
   else if suffixEligibleToken token then
@@ -1877,13 +1887,7 @@ def calcBodyBreaks (_context : RuleContext) (segment : Segment) : List BreakPoin
   | _ :: rest => rest.filterMap fun index => boundaryBreak? segment index 0
 
 def calcStepBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
-  if childStartsWithSuffixKeywordToken segment 1 then
-    []
-  else
-    [boundaryBreak? segment 1 1].filterMap id
-
-def calcRelationBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
-  [boundaryBreak? segment 1 2].filterMap id
+  [boundaryBreak? segment 1 1].filterMap id
 
 def fromTermBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   [delimiterValueBreak? segment "from"].filterMap id
@@ -2882,6 +2886,11 @@ def barSeparatedSequence (segment : Segment) : Bool :=
         else
           !childStartsWithLexeme segment index "|"
 
+def placeholderEqualityOperator (segment : Segment) (index : Nat) : Bool :=
+  index == segment.start + 1
+  && (segment.child? segment.start >>= SyntaxTree.Tree.singleToken?).any (·.lexeme == "_")
+  && childStartsWithLexeme segment index "="
+
 def infixBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   if lowPriorityInfixSegment segment then
     segment.indexes.filterMap
@@ -2899,7 +2908,7 @@ def infixBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :
         | some children =>
             (List.range children.size).flatMap
               fun index =>
-                if index % 2 == 1 then
+                if index % 2 == 1 && !placeholderEqualityOperator segment index then
                   [boundaryBreak? segment index 0].filterMap id
                 else
                   []
@@ -3394,18 +3403,8 @@ def calcStepRule : LineBreakRule :=
     useExistingBreaks := fun _ _ => true
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
-    keepPrefixWithChildFirstLine :=
-      fun _ segment index =>
-        index == 1 && (segment.child? index).any (·.singleToken?.isSome)
+    liftsTailIndentation := fun _ segment => 1 < segment.size
     breakPoints := calcStepBreaks
-  }
-
-def calcRelationRule : LineBreakRule :=
-  {
-    name := "calcRelation"
-    useExistingBreaks := fun _ _ => true
-    inheritBase := fun _ _ => true
-    breakPoints := calcRelationBreaks
   }
 
 def tacticEliminationHeaderRule : LineBreakRule :=
@@ -4354,8 +4353,6 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node .structureDeriving _ => some structureDerivingRule
   | .node .calcBody _ => some calcBodyRule
   | .node .calcStep _ => some calcStepRule
-  | .node .calcRelation _ => some calcRelationRule
-  | .node .calcOperand _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.export) _ => some exportRule
   | .node .definition _ => some definitionRule
   | .node (.raw `Lean.Parser.Command.definition) _ => some rawDefinitionRule

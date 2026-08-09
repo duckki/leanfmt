@@ -30,6 +30,15 @@ partial def findTreeNode? (target : SyntaxTree.NodeKind)
           none
   | _ => none
 
+partial def containsNestedProofBody : SyntaxTree.Tree → Bool
+  | .node (.proofBody _) children =>
+      children.any
+        fun
+        | .node (.proofBody _) _ => true
+        | child => containsNestedProofBody child
+  | .node _ children => children.any containsNestedProofBody
+  | _ => false
+
 partial def findTacticTree? (target : Lean.SyntaxNodeKind)
     : SyntaxTree.Tree → Option SyntaxTree.Tree
   | tree@(.node (.tactic kind _ _ _) children) =>
@@ -1149,21 +1158,19 @@ def assertCalcStepsRegrouped (env : Lean.Environment) : IO Unit := do
   match body with
   | .node .calcBody steps =>
       assertTrue "calc body contains two logical steps" (steps.size == 2)
-      assertTrue "each calc step groups its relation suffix before its proof"
+      assertTrue "each calc step groups its complete header before its proof"
         (steps.all
           fun
           | .node .calcStep children =>
-              2 <= children.size
+              children.size == 2
               && match children[0]? with
-                  | some (SyntaxTree.Tree.node .calcRelation relation) =>
-                      relation.size == 2
-                      && (match relation[0]? with
-                          | some (SyntaxTree.Tree.node .calcOperand _) => true
+                  | some (SyntaxTree.Tree.node .suffixGroup header) =>
+                      header.size == 2
+                      && (match header[0]? with
+                          | some (SyntaxTree.Tree.node (.infixChain _) _) => true
                           | _ => false)
-                      && match relation[1]? with
-                          | some (SyntaxTree.Tree.node .suffixGroup suffix) =>
-                              3 <= suffix.size
-                          | _ => false
+                      && (header[1]? >>= SyntaxTree.Tree.lastToken?).any
+                          (·.lexeme == ":=")
                   | _ => false
           | _ => false)
   | _ => throw <| IO.userError "calc body has the wrong grouped node kind"
@@ -1173,20 +1180,23 @@ def assertCalcInfixRelationRhsRemainsStructural (env : Lean.Environment) : IO Un
   let source := "def x := calc lhs = first + second := proof\n"
   let moduleTree ←
     SyntaxTree.parseModuleStringWithEnv env source "grouped-calc-infix-rhs.lean"
-  let relation ←
-    match findTreeNode? .calcRelation moduleTree.tree with
-    | some relation => pure relation
-    | none => throw <| IO.userError "calc infix RHS had no grouped relation"
-  match relation with
-  | .node .calcRelation children =>
+  let step ←
+    match findTreeNode? .calcStep moduleTree.tree with
+    | some step => pure step
+    | none => throw <| IO.userError "calc infix RHS had no grouped step"
+  match step with
+  | .node .calcStep children =>
       assertTrue "ordinary calc infix RHS remains structurally grouped"
-        (match children[1]? with
-          | some (SyntaxTree.Tree.node .suffixGroup suffix) =>
-              match suffix[1]? with
-              | some (SyntaxTree.Tree.node (.infixChain `«term_+_») _) => true
+        (match children[0]? with
+          | some (SyntaxTree.Tree.node .suffixGroup header) =>
+              match header[0]? with
+              | some (SyntaxTree.Tree.node (.infixChain `«term_=_») relation) =>
+                  match relation[2]? with
+                  | some (SyntaxTree.Tree.node (.infixChain `«term_+_») _) => true
+                  | _ => false
               | _ => false
           | _ => false)
-  | _ => throw <| IO.userError "calc infix RHS has the wrong grouped node kind"
+  | _ => throw <| IO.userError "calc infix RHS has the wrong grouped step kind"
   assertEq "calc infix RHS regrouping is lossless" source moduleTree.reconstruct
 
 def assertCalcProofIntroducersRegrouped (env : Lean.Environment) : IO Unit := do
@@ -1204,14 +1214,11 @@ def assertCalcProofIntroducersRegrouped (env : Lean.Environment) : IO Unit := do
     match step with
     | .node .calcStep children =>
         match children[0]? with
-        | some (SyntaxTree.Tree.node .calcRelation relation) =>
-            match relation.back? with
-            | some (SyntaxTree.Tree.node .suffixGroup suffix) =>
-                (suffix.back?.bind SyntaxTree.Tree.lastToken?).any (·.lexeme == ":=")
-                && ((SyntaxTree.childrenRange children 1 children.size).findSome?
-                      SyntaxTree.Tree.firstToken?).any
-                    (·.lexeme == expected)
-            | _ => false
+        | some (SyntaxTree.Tree.node .suffixGroup header) =>
+            (header.back?.bind SyntaxTree.Tree.lastToken?).any (·.lexeme == expected)
+            && (header[header.size - 2]? >>= SyntaxTree.Tree.lastToken?).any
+                (·.lexeme == ":=")
+            && (children[1]? >>= SyntaxTree.Tree.firstToken?).isSome
         | _ => false
     | _ => false
   match body with
@@ -1223,9 +1230,12 @@ def assertCalcProofIntroducersRegrouped (env : Lean.Environment) : IO Unit := do
       assertTrue "calc leaves a nested calc attached through suffix rendering"
         (steps[2]?.any fun step => proofStartsWith step "calc")
   | _ => throw <| IO.userError "calc proof introducers have the wrong body kind"
+  assertTrue "calc proof bodies are protected exactly once"
+    (!containsNestedProofBody moduleTree.tree)
   assertEq "calc proof introducer regrouping is lossless" source moduleTree.reconstruct
 
-def assertMultiOperatorCalcRelationRemainsOpaque (env : Lean.Environment) : IO Unit := do
+def assertMultiOperatorCalcRelationRemainsStructural (env : Lean.Environment)
+    : IO Unit := do
   let source :=
     "infixl:50 \" ~test \" => Test.op\n"
     ++ "def x := calc first ~test second ~test third := proof\n"
@@ -1238,13 +1248,13 @@ def assertMultiOperatorCalcRelationRemainsOpaque (env : Lean.Environment) : IO U
     | none => throw <| IO.userError "multi-operator calc relation was not regrouped"
   match step with
   | .node .calcStep children =>
-      assertTrue "multi-operator calc relation remains one opaque relation"
+      assertTrue "multi-operator calc relation retains its structural infix chain"
         (match children[0]? with
-          | some (SyntaxTree.Tree.node .calcRelation relation) =>
-              relation.size == 1
-              && match relation[0]? with
-                  | some (SyntaxTree.Tree.node .suffixGroup _) => true
-                  | _ => false
+          | some (SyntaxTree.Tree.node .suffixGroup header) =>
+              match header[0]? with
+              | some (SyntaxTree.Tree.node (.infixChain _) relation) =>
+                  relation.size == 5
+              | _ => false
           | _ => false)
   | _ => throw <| IO.userError "multi-operator calc step has the wrong grouped node kind"
   assertEq "multi-operator calc regrouping is lossless" source moduleTree.reconstruct
@@ -1286,16 +1296,12 @@ def assertIndexedCalcRelationRegrouped (env : Lean.Environment) : IO Unit := do
       assertTrue "indexed calc step separates its relation from its proof"
         (children.size == 2
           && match children[0]? with
-              | some (SyntaxTree.Tree.node .calcRelation relation) =>
-                  relation.size == 2
-                  && match relation[1]? with
-                      | some (SyntaxTree.Tree.node .suffixGroup suffixChildren) =>
-                          !suffixChildren.isEmpty
-                          && (suffixChildren[0]? >>= SyntaxTree.Tree.firstToken?).any
-                              (·.lexeme == "=test[")
-                          && (suffixChildren.back?.bind SyntaxTree.Tree.lastToken?).any
-                              (·.lexeme == ":=")
-                      | _ => false
+              | some (SyntaxTree.Tree.node .suffixGroup header) =>
+                  (match header[0]? with
+                    | some (SyntaxTree.Tree.node (.indexedInfix _) relation) =>
+                        relation.size == 5
+                    | _ => false)
+                  && (header.back?.bind SyntaxTree.Tree.lastToken?).any (·.lexeme == ":=")
               | _ => false)
   | _ => throw <| IO.userError "indexed calc step has the wrong grouped node kind"
   assertEq "indexed calc relation regrouping is lossless" source moduleTree.reconstruct
@@ -1312,18 +1318,12 @@ def assertOpaqueCalcRelationRegrouped (env : Lean.Environment) : IO Unit := do
     | none => throw <| IO.userError "opaque calc relation was not regrouped"
   match step with
   | .node .calcStep children =>
-      assertTrue "opaque calc step keeps its complete relation with the assignment"
+      assertTrue "custom calc relation remains structural inside the complete header"
         (children.size == 2
           && match children[0]? with
-              | some (SyntaxTree.Tree.node .calcRelation relation) =>
-                  match relation[0]? with
-                  | some (SyntaxTree.Tree.node .suffixGroup header) =>
-                      relation.size == 1
-                      && (header[0]? >>= SyntaxTree.Tree.firstToken?).any
-                          (·.lexeme == "lhs")
-                      && (header.back?.bind SyntaxTree.Tree.lastToken?).any
-                          (·.lexeme == ":=")
-                  | _ => false
+              | some (SyntaxTree.Tree.node .suffixGroup header) =>
+                  (header[0]? >>= SyntaxTree.Tree.firstToken?).any (·.lexeme == "lhs")
+                  && (header.back?.bind SyntaxTree.Tree.lastToken?).any (·.lexeme == ":=")
               | _ => false)
   | _ => throw <| IO.userError "opaque calc step has the wrong grouped node kind"
   assertEq "opaque calc relation regrouping is lossless" source moduleTree.reconstruct
@@ -4491,6 +4491,38 @@ def assertDeclarationProofIntroducerStaysWithAssignment (env : Lean.Environment)
       "declaration-proof-introducer-assignment.lean"
   assertEq "declaration proof introducer stays with assignment" expected formatted
 
+def assertDeclarationSignatureFitStopsBeforeBrokenByBody (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "theorem declarationSignatureFitStopsBeforeBrokenByBody\n"
+    ++ "    (hblocked : selectionDirectivesAllowBool variableValues directives = false)\n"
+    ++ "    : executeRootSelectionSet schema resolvers variableValues depth parentType source\n"
+    ++ "        (left ++ [.field responseName fieldName arguments directives selectionSet])\n"
+    ++ "      = GraphQL.Execution.executeRootSelectionSet schema resolvers variableValues\n"
+    ++ "          depth parentType source\n"
+    ++ "          (left\n"
+    ++ "            ++ [.field responseName fieldName arguments directiveApplications selectionSet]) := by\n"
+    ++ "  calc\n"
+    ++ "    left = right := by exact proof\n"
+  let expected := source
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "declaration-signature-fit-before-broken-by-body.lean" { lineWidth := 100 }
+  assertTrue "declaration signature fit before a broken by body does not fall back"
+    (!result.fellBack)
+  assertEq "declaration signature fit stops before a broken by body"
+    expected result.formatted
+  assertTrue "declaration signature fit before a broken by body fits its configured width"
+    (Formatter.linesFit result.formatted 100)
+  assertTrue "declaration signature fit before a broken by body preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "declaration-signature-fit-before-broken-by-body-formatted.lean"
+      { lineWidth := 100 }
+  assertEq "declaration signature fit before a broken by body is idempotent"
+    result.formatted formattedAgain
+
 def assertDeclarationValueWithNestedProofBreaksAfterAssignment (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -4807,7 +4839,8 @@ def assertInlineCalcFirstStepBreaksWithLowPriorityPipe (env : Lean.Environment)
     ++ "    ltIrrefl (twice * card (union firstVeryLongImageExpression secondVeryLongImageExpression))\n"
     ++ "    <| calc\n"
     ++ "      twice * card (union firstVeryLongImageExpression secondVeryLongImageExpression)\n"
-    ++ "          <= twice * totalCard := firstProof\n"
+    ++ "          <= twice * totalCard :=\n"
+    ++ "        firstProof\n"
     ++ "      _ = totalCard + totalCard := secondProof\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
@@ -4870,13 +4903,14 @@ def assertProoflessCalcInitialPreservesProjection (env : Lean.Environment) : IO 
   let expected :=
     "def x := by\n"
     ++ "  calc (veryLongFunctionNameWithEnoughCharacters firstArgument\n"
-    ++ "        secondArgument).coeff k\n"
+    ++ "          secondArgument).coeff\n"
+    ++ "        k\n"
     ++ "    _ = result := proof\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "proofless-calc-initial-projection.lean" { lineWidth := 80 }
   assertTrue "proofless calc projection does not fall back" (!result.fellBack)
-  assertEq "proofless calc projection preserves its operand layout"
+  assertEq "proofless calc projection uses structural operand layout"
     expected result.formatted
   assertTrue "proofless calc projection preserves code"
     (← codePreservedIgnoringWhitespace env source result.formatted)
@@ -4923,7 +4957,7 @@ def assertCalcApplicationRelationUsesStructuralLayout (env : Lean.Environment)
     ++ "        = veryLongFunctionName schema resolvers variableValues depth parentType source\n"
     ++ "            (left\n"
     ++ "              ++ [.field responseName fieldName arguments directives selectionSet]) := by\n"
-    ++ "        exact proof\n"
+    ++ "      exact proof\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "calc-application-relation-layout.lean" { lineWidth := 90 }
@@ -4938,6 +4972,35 @@ def assertCalcApplicationRelationUsesStructuralLayout (env : Lean.Environment)
     Formatter.formatSourceWithEnv env result.formatted
       "calc-application-relation-layout-formatted.lean" { lineWidth := 90 }
   assertEq "calc application relation is idempotent" result.formatted formattedAgain
+
+def assertCalcPlaceholderStaysWithRelationOperator (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "def x := by\n"
+    ++ "  calc\n"
+    ++ "    _ = veryLongFunctionName schema resolvers variableValues depth parentType source\n"
+    ++ "      (left ++ [.field responseName fieldName arguments directives selectionSet]) := by\n"
+    ++ "        exact proof\n"
+  let expected :=
+    "def x := by\n"
+    ++ "  calc\n"
+    ++ "    _ = veryLongFunctionName schema resolvers variableValues depth parentType source\n"
+    ++ "          (left\n"
+    ++ "            ++ [.field responseName fieldName arguments directives selectionSet]) := by\n"
+    ++ "      exact proof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "calc-placeholder-relation-layout.lean" { lineWidth := 90 }
+  assertTrue "calc placeholder relation does not fall back" (!result.fellBack)
+  assertEq "calc placeholder stays with its relation operator" expected result.formatted
+  assertTrue "calc placeholder relation fits its configured width"
+    (Formatter.linesFit result.formatted 90)
+  assertTrue "calc placeholder relation preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "calc-placeholder-relation-layout-formatted.lean" { lineWidth := 90 }
+  assertEq "calc placeholder relation is idempotent" result.formatted formattedAgain
 
 def assertCalcInfixRelationUsesStructuralLayout (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -6743,6 +6806,38 @@ def assertNestedChildFitCountsInfixSuffix (env : Lean.Environment) : IO Unit := 
     Formatter.formatSourceWithEnv env source "nested-child-fit-infix-suffix.lean"
       { lineWidth := 100 }
   assertEq "nested child fit counts an enclosing infix suffix" expected formatted
+
+def assertNestedInfixFitCountsPairedDelimiterSuffix (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "syntax:max \"‖\" term \"‖\" : term\n\n"
+    ++ "def pairedDelimiterCalc := by\n"
+    ++ "  calc\n"
+    ++ "    ‖(r / 2) • (L1 - L2)‖\n"
+    ++ "        = ‖f (x + r / 2) - f x - (x + r / 2 - x) • L2 - (f (x + r / 2) - f x - (x + r / 2 - x) • L1)‖ := by\n"
+    ++ "      exact proof\n"
+  let expected :=
+    "syntax:max \"‖\" term \"‖\" : term\n\n"
+    ++ "def pairedDelimiterCalc := by\n"
+    ++ "  calc\n"
+    ++ "    ‖(r / 2) • (L1 - L2)‖\n"
+    ++ "        = ‖f (x + r / 2)\n"
+    ++ "            - f x\n"
+    ++ "            - (x + r / 2 - x) • L2\n"
+    ++ "            - (f (x + r / 2) - f x - (x + r / 2 - x) • L1)‖ := by\n"
+    ++ "      exact proof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "paired-delimiter-suffix-fit.lean"
+      { lineWidth := 100 }
+  assertTrue "paired delimiter suffix fit does not fall back" (!result.fellBack)
+  assertEq "nested infix fit counts a paired delimiter and calc suffix"
+    expected result.formatted
+  assertTrue "paired delimiter suffix fit preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "paired-delimiter-suffix-fit-formatted.lean" { lineWidth := 100 }
+  assertEq "paired delimiter suffix fit is idempotent" result.formatted formattedAgain
 
 def assertNestedChildFitCountsProjectionMemberSuffix (env : Lean.Environment)
     : IO Unit := do
@@ -10958,14 +11053,14 @@ def assertFormattingExceptionChecks (env : Lean.Environment) : IO Unit := do
     SyntaxTree.parseModuleStringWithEnv env movedCalc "moved-calc-overflow.lean"
   assertTrue "calc row fits before structural movement"
     (Formatter.linesFit fittingCalc Formatter.maxLineWidth)
-  assertTrue "structurally moved calc row demonstrates an unbreakable overflow"
+  assertTrue "structurally moved calc row demonstrates overflow"
     (!Formatter.linesFit movedCalc Formatter.maxLineWidth)
-  assertTrue "moved calc row does not report actionable overflow"
-    (!(Formatter.Diagnostics.formattingExceptions fittingCalcModule movedCalcModule).any
-        fun exception =>
-          match exception with
-          | .lineOverflow _ => true
-          | _ => false)
+  assertTrue "moved structural calc row reports actionable overflow"
+    ((Formatter.Diagnostics.formattingExceptions fittingCalcModule movedCalcModule).any
+      fun exception =>
+        match exception with
+        | .lineOverflow _ => true
+        | _ => false)
   let calcArgumentPayload :=
     String.intercalate " " (List.replicate 9 "argument" ++ ["value"])
   let fittingCalcOperand :=
@@ -10988,17 +11083,17 @@ def assertFormattingExceptionChecks (env : Lean.Environment) : IO Unit := do
   let movedCalcOperandModule ←
     SyntaxTree.parseModuleStringWithEnv env movedCalcOperand
       "moved-calc-operand-overflow.lean"
-  assertTrue "protected calc operand with assignment fits before structural movement"
+  assertTrue "calc relation with assignment fits before structural movement"
     (Formatter.linesFit fittingCalcOperand 100)
-  assertTrue "moved protected calc operand with assignment demonstrates overflow"
+  assertTrue "moved calc relation with assignment demonstrates overflow"
     (!Formatter.linesFit movedCalcOperand 100)
-  assertTrue "attached assignment does not make a moved calc operand overflow actionable"
-    (!(Formatter.Diagnostics.formattingExceptions
+  assertTrue "moved structural calc relation reports actionable overflow"
+    ((Formatter.Diagnostics.formattingExceptions
         fittingCalcOperandModule movedCalcOperandModule { lineWidth := 100 }).any
-        fun exception =>
-          match exception with
-          | .lineOverflow _ => true
-          | _ => false)
+      fun exception =>
+        match exception with
+        | .lineOverflow _ => true
+        | _ => false)
   let fittingProofLayout :=
     "def movedProofLayout (n : Nat) :=\n"
     ++ "  Nat.recOn n default fun n Y =>\n"
@@ -13033,7 +13128,7 @@ def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertCalcStepsRegrouped env
   assertCalcInfixRelationRhsRemainsStructural env
   assertCalcProofIntroducersRegrouped env
-  assertMultiOperatorCalcRelationRemainsOpaque env
+  assertMultiOperatorCalcRelationRemainsStructural env
   assertProoflessCalcInitialRegrouped env
   assertIndexedCalcRelationRegrouped env
   assertOpaqueCalcRelationRegrouped env
@@ -13166,6 +13261,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertLongDeclarationDirectValueBreaksAfterAssign env
   assertDeclarationProofValueBreaksAfterAssignWhenSignatureCannotFit env
   assertDeclarationProofIntroducerStaysWithAssignment env
+  assertDeclarationSignatureFitStopsBeforeBrokenByBody env
   assertDeclarationValueWithNestedProofBreaksAfterAssignment env
   assertTheoremDirectValueBreaksBeforeSignatureChildren env
   assertDeclarationWhereSuffixCountsForSignatureFit env
@@ -13182,6 +13278,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertProoflessCalcInitialPreservesProjection env
   assertCalcProofApplicationBreaksAfterAssignment env
   assertCalcApplicationRelationUsesStructuralLayout env
+  assertCalcPlaceholderStaysWithRelationOperator env
   assertCalcInfixRelationUsesStructuralLayout env
   assertBrokenCalcRelationKeepsProofBodyBase env
   assertLongCalcProofBreaksAfterAssignment env
@@ -13247,6 +13344,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertChildFitCountsParentSuffix env
   assertChildFitCountsDelimitedPostfixSuffix env
   assertNestedChildFitCountsInfixSuffix env
+  assertNestedInfixFitCountsPairedDelimiterSuffix env
   assertNestedChildFitCountsProjectionMemberSuffix env
   assertLineFitCountsTrailingComment env
   assertColumnIndentationIsConservative

@@ -1022,11 +1022,12 @@ partial def firstTokenWithContext?
         fun index =>
           segment.child? index >>= firstTokenWithContext? (context.push segment index)
 
-def suffixMayContinueAcrossRuleBreak (segment : LineBreakRules.Segment) (index : Nat)
+def suffixMayContinueAcrossRuleBreak (context : LineBreakRules.RuleContext)
+    (segment : LineBreakRules.Segment) (index : Nat)
     : Bool :=
   match segment.child? index >>= SyntaxTree.Tree.firstToken? with
   | some token =>
-      LineBreakRules.suffixTokenAction { ancestors := [] } token == .emit
+      LineBreakRules.suffixTokenAction (context.push segment index) token == .emit
   | none => false
 
 def treeStartsWithStructuralSuffix (tree : SyntaxTree.Tree) : Bool :=
@@ -1178,7 +1179,7 @@ partial def measureSuffixOfTree
               | some child =>
                   if segment.start < index
                       && hasRuleBreakAt context segment index
-                      && !suffixMayContinueAcrossRuleBreak segment index then
+                      && !suffixMayContinueAcrossRuleBreak context segment index then
                     (state.appendCommentTriviaBeforeTree child, true)
                   else
                     let childContext := context.push segment index
@@ -1285,7 +1286,7 @@ def firstRuleBreakAfter
     (fun stop breakPoint =>
       if index < breakPoint.index
           && breakPoint.index < stop
-          && !suffixMayContinueAcrossRuleBreak segment breakPoint.index
+          && !suffixMayContinueAcrossRuleBreak context segment breakPoint.index
           && !groupedSuffixMayContinueAcrossRuleBreak segment breakPoint.index then
         breakPoint.index
       else
