@@ -1137,6 +1137,197 @@ def assertGroupedInfixChain (env : Lean.Environment) : IO Unit := do
       <| IO.userError
           s!"expected infix chain to contain three operands and two operators, got {repr other}"
 
+def assertCalcStepsRegrouped (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def x := calc lhs = middle := firstProof\n" ++ "  _ = rhs := secondProof\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "grouped-calc-steps.lean"
+  let body ←
+    match findTreeNode? .calcBody moduleTree.tree with
+    | some body => pure body
+    | none => throw <| IO.userError "calc body was not regrouped"
+  match body with
+  | .node .calcBody steps =>
+      assertTrue "calc body contains two logical steps" (steps.size == 2)
+      assertTrue "each calc step groups its relation suffix before its proof"
+        (steps.all
+          fun
+          | .node .calcStep children =>
+              2 <= children.size
+              && match children[0]? with
+                  | some (SyntaxTree.Tree.node .calcRelation relation) =>
+                      relation.size == 2
+                      && (match relation[0]? with
+                          | some (SyntaxTree.Tree.node .calcOperand _) => true
+                          | _ => false)
+                      && match relation[1]? with
+                          | some (SyntaxTree.Tree.node .suffixGroup suffix) =>
+                              3 <= suffix.size
+                          | _ => false
+                  | _ => false
+          | _ => false)
+  | _ => throw <| IO.userError "calc body has the wrong grouped node kind"
+  assertEq "calc regrouping is lossless" source moduleTree.reconstruct
+
+def assertCalcInfixRelationRhsRemainsStructural (env : Lean.Environment) : IO Unit := do
+  let source := "def x := calc lhs = first + second := proof\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "grouped-calc-infix-rhs.lean"
+  let relation ←
+    match findTreeNode? .calcRelation moduleTree.tree with
+    | some relation => pure relation
+    | none => throw <| IO.userError "calc infix RHS had no grouped relation"
+  match relation with
+  | .node .calcRelation children =>
+      assertTrue "ordinary calc infix RHS remains structurally grouped"
+        (match children[1]? with
+          | some (SyntaxTree.Tree.node .suffixGroup suffix) =>
+              match suffix[1]? with
+              | some (SyntaxTree.Tree.node (.infixChain `«term_+_») _) => true
+              | _ => false
+          | _ => false)
+  | _ => throw <| IO.userError "calc infix RHS has the wrong grouped node kind"
+  assertEq "calc infix RHS regrouping is lossless" source moduleTree.reconstruct
+
+def assertCalcProofIntroducersRegrouped (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def x := calc lhs = middle := by exact firstProof\n"
+    ++ "  _ = rhs := do pure secondProof\n"
+    ++ "  _ = final := calc rhs = final := thirdProof\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "grouped-calc-proof-introducers.lean"
+  let body ←
+    match findTreeNode? .calcBody moduleTree.tree with
+    | some body => pure body
+    | none => throw <| IO.userError "calc proof introducers had no grouped body"
+  let proofStartsWith (step : SyntaxTree.Tree) (expected : String) : Bool :=
+    match step with
+    | .node .calcStep children =>
+        match children[0]? with
+        | some (SyntaxTree.Tree.node .calcRelation relation) =>
+            match relation.back? with
+            | some (SyntaxTree.Tree.node .suffixGroup suffix) =>
+                (suffix.back?.bind SyntaxTree.Tree.lastToken?).any (·.lexeme == ":=")
+                && ((SyntaxTree.childrenRange children 1 children.size).findSome?
+                      SyntaxTree.Tree.firstToken?).any
+                    (·.lexeme == expected)
+            | _ => false
+        | _ => false
+    | _ => false
+  match body with
+  | .node .calcBody steps =>
+      assertTrue "calc leaves by attached through suffix rendering"
+        (steps[0]?.any fun step => proofStartsWith step "by")
+      assertTrue "calc leaves do attached through suffix rendering"
+        (steps[1]?.any fun step => proofStartsWith step "do")
+      assertTrue "calc leaves a nested calc attached through suffix rendering"
+        (steps[2]?.any fun step => proofStartsWith step "calc")
+  | _ => throw <| IO.userError "calc proof introducers have the wrong body kind"
+  assertEq "calc proof introducer regrouping is lossless" source moduleTree.reconstruct
+
+def assertMultiOperatorCalcRelationRemainsOpaque (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "infixl:50 \" ~test \" => Test.op\n"
+    ++ "def x := calc first ~test second ~test third := proof\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source
+      "grouped-multi-operator-calc-relation.lean"
+  let step ←
+    match findTreeNode? .calcStep moduleTree.tree with
+    | some step => pure step
+    | none => throw <| IO.userError "multi-operator calc relation was not regrouped"
+  match step with
+  | .node .calcStep children =>
+      assertTrue "multi-operator calc relation remains one opaque relation"
+        (match children[0]? with
+          | some (SyntaxTree.Tree.node .calcRelation relation) =>
+              relation.size == 1
+              && match relation[0]? with
+                  | some (SyntaxTree.Tree.node .suffixGroup _) => true
+                  | _ => false
+          | _ => false)
+  | _ => throw <| IO.userError "multi-operator calc step has the wrong grouped node kind"
+  assertEq "multi-operator calc regrouping is lossless" source moduleTree.reconstruct
+
+def assertProoflessCalcInitialRegrouped (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def x := calc _\n"
+    ++ "  _ = middle := firstProof\n"
+    ++ "  _ = final := secondProof\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "grouped-proofless-calc-initial.lean"
+  let calcTree ←
+    match findTreeNode? (.raw `Lean.calc) moduleTree.tree with
+    | some calcTree => pure calcTree
+    | none => throw <| IO.userError "proofless calc had no calc tree"
+  match calcTree with
+  | .node _ children =>
+      assertTrue "proofless calc groups its initial term with the keyword"
+        (match children[0]? with
+          | some (SyntaxTree.Tree.node .suffixGroup header) =>
+              (header[0]? >>= SyntaxTree.Tree.firstToken?).any (·.lexeme == "calc")
+              && (header[1]? >>= SyntaxTree.Tree.firstToken?).any (·.lexeme == "_")
+          | _ => false)
+  | _ => throw <| IO.userError "proofless calc has the wrong tree shape"
+  assertEq "proofless calc regrouping is lossless" source moduleTree.reconstruct
+
+def assertIndexedCalcRelationRegrouped (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "syntax:50 term:51 \" =test[\" term \" ] \" term:51 : term\n"
+    ++ "def x := calc lhs =test[index] rhs := proof\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "grouped-indexed-calc-relation.lean"
+  let step ←
+    match findTreeNode? .calcStep moduleTree.tree with
+    | some step => pure step
+    | none => throw <| IO.userError "indexed calc relation was not regrouped"
+  match step with
+  | .node .calcStep children =>
+      assertTrue "indexed calc step separates its relation from its proof"
+        (children.size == 2
+          && match children[0]? with
+              | some (SyntaxTree.Tree.node .calcRelation relation) =>
+                  relation.size == 2
+                  && match relation[1]? with
+                      | some (SyntaxTree.Tree.node .suffixGroup suffixChildren) =>
+                          !suffixChildren.isEmpty
+                          && (suffixChildren[0]? >>= SyntaxTree.Tree.firstToken?).any
+                              (·.lexeme == "=test[")
+                          && (suffixChildren.back?.bind SyntaxTree.Tree.lastToken?).any
+                              (·.lexeme == ":=")
+                      | _ => false
+              | _ => false)
+  | _ => throw <| IO.userError "indexed calc step has the wrong grouped node kind"
+  assertEq "indexed calc relation regrouping is lossless" source moduleTree.reconstruct
+
+def assertOpaqueCalcRelationRegrouped (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "notation:50 lhs \" ≡test \" rhs \" [MODTEST \" modulus \" ]\" => lhs = rhs\n"
+    ++ "def x := calc lhs ≡test rhs [MODTEST modulus] := proof\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "grouped-opaque-calc-relation.lean"
+  let step ←
+    match findTreeNode? .calcStep moduleTree.tree with
+    | some step => pure step
+    | none => throw <| IO.userError "opaque calc relation was not regrouped"
+  match step with
+  | .node .calcStep children =>
+      assertTrue "opaque calc step keeps its complete relation with the assignment"
+        (children.size == 2
+          && match children[0]? with
+              | some (SyntaxTree.Tree.node .calcRelation relation) =>
+                  match relation[0]? with
+                  | some (SyntaxTree.Tree.node .suffixGroup header) =>
+                      relation.size == 1
+                      && (header[0]? >>= SyntaxTree.Tree.firstToken?).any
+                          (·.lexeme == "lhs")
+                      && (header.back?.bind SyntaxTree.Tree.lastToken?).any
+                          (·.lexeme == ":=")
+                  | _ => false
+              | _ => false)
+  | _ => throw <| IO.userError "opaque calc step has the wrong grouped node kind"
+  assertEq "opaque calc relation regrouping is lossless" source moduleTree.reconstruct
+
 def assertLowPriorityInfixOwnsBothOperatorBoundaries (env : Lean.Environment)
     : IO Unit := do
   let moduleTree ←
@@ -2915,6 +3106,48 @@ def assertStructureValueWhereFormattingKeepsSuffix (env : Lean.Environment)
   assertEq "structure-value where formatting is idempotent"
     result.formatted formattedAgain
 
+def assertWhereStructInstFieldsUseDeclarationBase (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "structure ProofCarrier where\n"
+    ++ "  value : Nat\n"
+    ++ "  value_eq : value = value\n"
+    ++ "  second_eq : value = value\n"
+    ++ "\n"
+    ++ "def makeProofCarrierWithLongDeclarationName (value : Nat)\n"
+    ++ "    : ProofCarrier\n"
+    ++ "    where\n"
+    ++ "  value := value\n"
+    ++ "  value_eq := by\n"
+    ++ "    rfl\n"
+    ++ "  second_eq := by\n"
+    ++ "    have h : value = value := rfl\n"
+    ++ "    exact h\n"
+  let expected :=
+    "structure ProofCarrier where\n"
+    ++ "  value : Nat\n"
+    ++ "  value_eq : value = value\n"
+    ++ "  second_eq : value = value\n"
+    ++ "\n"
+    ++ "def makeProofCarrierWithLongDeclarationName (value : Nat)\n"
+    ++ "    : ProofCarrier where\n"
+    ++ "  value := value\n"
+    ++ "  value_eq := by\n"
+    ++ "    rfl\n"
+    ++ "  second_eq := by\n"
+    ++ "    have h : value = value := rfl\n"
+    ++ "    exact h\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "where-struct-inst-field-base.lean" { lineWidth := 60 }
+  assertTrue "where structure fields do not fall back" (!result.fellBack)
+  assertEq "where remains a suffix and structure fields use the declaration base"
+    expected result.formatted
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "where-struct-inst-field-base-formatted.lean" { lineWidth := 60 }
+  assertEq "where structure field formatting is idempotent"
+    result.formatted formattedAgain
+
 def assertWhereStructInstTrailingWhereUsesCommandBase (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -3106,18 +3339,28 @@ def assertMovedProofBodiesKeepRelativeIndentation (env : Lean.Environment) : IO 
     ++ "      exact True.intro\n"
     ++ "    | false => by\n"
     ++ "      exact True.intro\n"
-  let matchFormatted ←
-    Formatter.formatSourceWithEnv env matchSource
+  let matchExpected :=
+    "def proofUnderMovedMatchAlternative :=\n"
+    ++ "  le_antisymm veryLongLeftProofNameWithEnoughCharactersToForceTheOperatorToBreak\n"
+    ++ "    veryLongRightProofNameWithEnoughCharactersToForceTheOperatorToBreak\n"
+    ++ "  <| match condition with\n"
+    ++ "      | true => by\n"
+    ++ "        exact True.intro\n"
+    ++ "      | false => by\n"
+    ++ "        exact True.intro\n"
+  let matchResult ←
+    Formatter.formatSourceWithEnvDetailed env matchSource
       "proof-under-moved-match-alternative.lean"
-  assertTrue "match alternative proof outer layout changes"
-    (matchFormatted != matchSource)
+  assertTrue "moved match alternative proof does not fall back" (!matchResult.fellBack)
+  assertEq "moved match alternative proof starts a new pipe group"
+    matchExpected matchResult.formatted
   assertTrue "moved match alternative proof preserves code"
-    (← codePreservedIgnoringWhitespace env matchSource matchFormatted)
+    (← codePreservedIgnoringWhitespace env matchSource matchResult.formatted)
   let matchFormattedAgain ←
-    Formatter.formatSourceWithEnv env matchFormatted
+    Formatter.formatSourceWithEnv env matchResult.formatted
       "proof-under-moved-match-alternative-formatted.lean"
   assertEq "moved match alternative proof is idempotent"
-    matchFormatted matchFormattedAgain
+    matchResult.formatted matchFormattedAgain
 
   let whereSource :=
     "private theorem outer\n"
@@ -4533,9 +4776,9 @@ def assertCalcLayoutIslandAfterNestedInfix (env : Lean.Environment) : IO Unit :=
     ++ "  (firstFunction <| c.sizeUpTo i).trans\n"
     ++ "  <| secondFunction\n"
     ++ "  <| calc\n"
-    ++ "      c.sizeUpTo i + c.blocksFun i = c.sizeUpTo (i + 1) := (c.sizeUpTo_succ i.2).symm\n"
-    ++ "      _ ≤ c.sizeUpTo c.length := monotone_sum_take _ i.2\n"
-    ++ "      _ = n := c.sizeUpTo_length\n"
+    ++ "    c.sizeUpTo i + c.blocksFun i = c.sizeUpTo (i + 1) := (c.sizeUpTo_succ i.2).symm\n"
+    ++ "    _ ≤ c.sizeUpTo c.length := monotone_sum_take _ i.2\n"
+    ++ "    _ = n := c.sizeUpTo_length\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "calc-layout-island-after-nested-infix.lean"
@@ -4548,6 +4791,222 @@ def assertCalcLayoutIslandAfterNestedInfix (env : Lean.Environment) : IO Unit :=
     Formatter.formatSourceWithEnv env result.formatted
       "calc-layout-island-after-nested-infix-formatted.lean"
   assertEq "calc after nested infix is idempotent" result.formatted formattedAgain
+
+def assertInlineCalcFirstStepBreaksWithLowPriorityPipe (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "def inlineCalcAfterLongPipeArgument : Nat :=\n"
+    ++ "  fun hd : Nat =>\n"
+    ++ "  ltIrrefl (twice * card (union firstVeryLongImageExpression secondVeryLongImageExpression)) <|\n"
+    ++ "    calc twice * card (union firstVeryLongImageExpression secondVeryLongImageExpression)\n"
+    ++ "        <= twice * totalCard := firstProof\n"
+    ++ "      _ = totalCard + totalCard := secondProof\n"
+  let expected :=
+    "def inlineCalcAfterLongPipeArgument : Nat :=\n"
+    ++ "  fun hd : Nat =>\n"
+    ++ "    ltIrrefl (twice * card (union firstVeryLongImageExpression secondVeryLongImageExpression))\n"
+    ++ "    <| calc\n"
+    ++ "      twice * card (union firstVeryLongImageExpression secondVeryLongImageExpression)\n"
+    ++ "          <= twice * totalCard := firstProof\n"
+    ++ "      _ = totalCard + totalCard := secondProof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "inline-calc-first-step-after-low-priority-pipe.lean" { lineWidth := 100 }
+  assertTrue "inline calc after low-priority pipe does not fall back" (!result.fellBack)
+  assertEq "inline calc after low-priority pipe keeps a valid calc layout"
+    expected result.formatted
+  assertTrue "inline calc after low-priority pipe preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "inline-calc-first-step-after-low-priority-pipe-formatted.lean" { lineWidth := 100 }
+  assertEq "inline calc after low-priority pipe is idempotent"
+    result.formatted formattedAgain
+
+def assertDirectCalcBreaksBeforeItsBody (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def directCalcWithLongDeclarationName : Nat :=\n"
+    ++ "  calc firstProposition = secondProposition := firstProof\n"
+  let expected :=
+    "def directCalcWithLongDeclarationName : Nat :=\n"
+    ++ "  calc\n"
+    ++ "    firstProposition = secondProposition := firstProof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "direct-calc-body-boundary.lean" { lineWidth := 80 }
+  assertTrue "direct calc body boundary does not fall back" (!result.fellBack)
+  assertEq "direct calc breaks before its body" expected result.formatted
+  assertTrue "direct calc body boundary preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "direct-calc-body-boundary-formatted.lean" { lineWidth := 80 }
+  assertEq "direct calc body boundary is idempotent" result.formatted formattedAgain
+
+def assertProoflessCalcInitialStaysWithKeyword (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def prooflessCalcInitial : Nat :=\n"
+    ++ "  calc _\n"
+    ++ "    _ = middle := firstProof\n"
+    ++ "    _ = final := secondProof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "proofless-calc-initial-layout.lean" { lineWidth := 80 }
+  assertTrue "proofless calc initial does not fall back" (!result.fellBack)
+  assertEq "proofless calc initial stays with calc" source result.formatted
+  assertTrue "proofless calc initial preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "proofless-calc-initial-layout-formatted.lean" { lineWidth := 80 }
+  assertEq "proofless calc initial is idempotent" result.formatted formattedAgain
+
+def assertProoflessCalcInitialPreservesProjection (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def x := by\n"
+    ++ "  calc (veryLongFunctionNameWithEnoughCharacters firstArgument\n"
+    ++ "            secondArgument).coeff k\n"
+    ++ "      _ = result := proof\n"
+  let expected :=
+    "def x := by\n"
+    ++ "  calc (veryLongFunctionNameWithEnoughCharacters firstArgument\n"
+    ++ "        secondArgument).coeff k\n"
+    ++ "    _ = result := proof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "proofless-calc-initial-projection.lean" { lineWidth := 80 }
+  assertTrue "proofless calc projection does not fall back" (!result.fellBack)
+  assertEq "proofless calc projection preserves its operand layout"
+    expected result.formatted
+  assertTrue "proofless calc projection preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "proofless-calc-initial-projection-formatted.lean" { lineWidth := 80 }
+  assertEq "proofless calc projection is idempotent" result.formatted formattedAgain
+
+def assertCalcProofApplicationBreaksAfterAssignment (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "theorem calcProofApplication : True := by\n"
+    ++ "  calc\n"
+    ++ "    leftHandSide = rightHandSide := proofFunctionWithLongName firstArgument secondArgument\n"
+  let expected :=
+    "theorem calcProofApplication : True := by\n"
+    ++ "  calc\n"
+    ++ "    leftHandSide = rightHandSide :=\n"
+    ++ "      proofFunctionWithLongName firstArgument secondArgument\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "calc-proof-application-boundary.lean" { lineWidth := 80 }
+  assertTrue "calc proof application does not fall back" (!result.fellBack)
+  assertEq "calc proof application breaks after assignment" expected result.formatted
+  assertTrue "calc proof application preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "calc-proof-application-boundary-formatted.lean" { lineWidth := 80 }
+  assertEq "calc proof application is idempotent" result.formatted formattedAgain
+
+def assertCalcApplicationRelationUsesStructuralLayout (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "def x := by\n"
+    ++ "  calc\n"
+    ++ "    left = veryLongFunctionName schema resolvers variableValues depth parentType source\n"
+    ++ "      (left ++ [.field responseName fieldName arguments directives selectionSet]) := by\n"
+    ++ "        exact proof\n"
+  let expected :=
+    "def x := by\n"
+    ++ "  calc\n"
+    ++ "    left\n"
+    ++ "        = veryLongFunctionName schema resolvers variableValues depth parentType source\n"
+    ++ "            (left\n"
+    ++ "              ++ [.field responseName fieldName arguments directives selectionSet]) := by\n"
+    ++ "        exact proof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "calc-application-relation-layout.lean" { lineWidth := 90 }
+  assertTrue "calc application relation does not fall back" (!result.fellBack)
+  assertEq "calc application relation uses structural application breaks"
+    expected result.formatted
+  assertTrue "calc application relation fits its configured width"
+    (Formatter.linesFit result.formatted 90)
+  assertTrue "calc application relation preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "calc-application-relation-layout-formatted.lean" { lineWidth := 90 }
+  assertEq "calc application relation is idempotent" result.formatted formattedAgain
+
+def assertCalcInfixRelationUsesStructuralLayout (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def x := by\n"
+    ++ "  calc\n"
+    ++ "    left = firstFunctionWithEnoughCharacters firstArgument + secondFunctionWithEnoughCharacters secondArgument := by\n"
+    ++ "      exact proof\n"
+  let expected :=
+    "def x := by\n"
+    ++ "  calc\n"
+    ++ "    left\n"
+    ++ "        = firstFunctionWithEnoughCharacters firstArgument\n"
+    ++ "          + secondFunctionWithEnoughCharacters secondArgument := by\n"
+    ++ "      exact proof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "calc-infix-relation-layout.lean" { lineWidth := 80 }
+  assertTrue "calc infix relation does not fall back" (!result.fellBack)
+  assertEq "calc infix relation uses structural operator breaks" expected result.formatted
+  assertTrue "calc infix relation fits its configured width"
+    (Formatter.linesFit result.formatted 80)
+  assertTrue "calc infix relation preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "calc-infix-relation-layout-formatted.lean" { lineWidth := 80 }
+  assertEq "calc infix relation is idempotent" result.formatted formattedAgain
+
+def assertBrokenCalcRelationKeepsProofBodyBase (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "theorem brokenCalcRelationProofBody : True := by\n"
+    ++ "  calc\n"
+    ++ "    leftHandSideWithEnoughCharactersToForceTheRelationOntoTheNextLine\n"
+    ++ "        = rightHandSideWithEnoughCharactersToKeepTheStepLong := by\n"
+    ++ "      exact proof\n"
+    ++ "    _ = finalValue := finalProof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "broken-calc-relation-proof-body.lean" { lineWidth := 80 }
+  assertTrue "broken calc relation proof body does not fall back" (!result.fellBack)
+  assertEq "broken calc relation proof body uses the step base" source result.formatted
+  assertTrue "broken calc relation proof body preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "broken-calc-relation-proof-body-formatted.lean" { lineWidth := 80 }
+  assertEq "broken calc relation proof body is idempotent" result.formatted formattedAgain
+
+def assertLongCalcProofBreaksAfterAssignment (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "theorem longCalcProof : True := by\n"
+    ++ "  calc\n"
+    ++ "    leftHandSide = rightHandSide := proofTermWithEnoughCharactersToRequireItsOwnCalcAssignmentLine\n"
+  let expected :=
+    "theorem longCalcProof : True := by\n"
+    ++ "  calc\n"
+    ++ "    leftHandSide = rightHandSide :=\n"
+    ++ "      proofTermWithEnoughCharactersToRequireItsOwnCalcAssignmentLine\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "long-calc-proof-after-assignment.lean" { lineWidth := 80 }
+  assertTrue "long calc proof does not fall back" (!result.fellBack)
+  assertEq "long calc proof breaks after its assignment" expected result.formatted
+  assertTrue "long calc proof preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "long-calc-proof-after-assignment-formatted.lean" { lineWidth := 80 }
+  assertEq "long calc proof is idempotent" result.formatted formattedAgain
 
 def assertDetachedCalcUsesRenderedIntroducerBase (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -4581,10 +5040,9 @@ def assertLowPriorityPipeCalcKeepsIndentedOperand (env : Lean.Environment) : IO 
     ++ "    _ = right := proofTwo\n"
   let expected :=
     "def pipeCalc : Nat :=\n"
-    ++ "  longProofNameWithEnoughCharactersToForceLowPriorityPipeBreak\n"
-    ++ "  <| calc\n"
-    ++ "      left = middle := proofOne\n"
-    ++ "      _ = right := proofTwo\n"
+    ++ "  longProofNameWithEnoughCharactersToForceLowPriorityPipeBreak <| calc\n"
+    ++ "    left = middle := proofOne\n"
+    ++ "    _ = right := proofTwo\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "low-priority-pipe-calc.lean" { lineWidth := 70 }
@@ -4596,6 +5054,80 @@ def assertLowPriorityPipeCalcKeepsIndentedOperand (env : Lean.Environment) : IO 
     Formatter.formatSourceWithEnv env result.formatted
       "low-priority-pipe-calc-formatted.lean" { lineWidth := 70 }
   assertEq "low-priority pipe calc is idempotent" result.formatted formattedAgain
+
+def assertLowPriorityPipeBoundaryPolicy (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def pipeDo :=\n"
+    ++ "  longFunctionNameWithEnoughCharactersToForceThePipeGroupOntoItsOwnLine <| do\n"
+    ++ "    let value := 0\n"
+    ++ "    pure value\n\n"
+    ++ "def pipeBy :=\n"
+    ++ "  longFunctionNameWithEnoughCharactersToForceThePipeGroupOntoItsOwnLine <| by\n"
+    ++ "    exact value\n\n"
+    ++ "def pipeMatch (errors : Nat) :=\n"
+    ++ "  id <| match errors with\n"
+    ++ "  | 0 => 1\n"
+    ++ "  | errors + 1 => errors + 1\n\n"
+    ++ "def pipeLet :=\n"
+    ++ "  id <| let value := source\n"
+    ++ "  value\n\n"
+    ++ "def pipeHave :=\n"
+    ++ "  id <| have value := source\n"
+    ++ "  value\n"
+  let expected :=
+    "def pipeDo :=\n"
+    ++ "  longFunctionNameWithEnoughCharactersToForceThePipeGroupOntoItsOwnLine\n"
+    ++ "  <| do\n"
+    ++ "    let value := 0\n"
+    ++ "    pure value\n\n"
+    ++ "def pipeBy :=\n"
+    ++ "  longFunctionNameWithEnoughCharactersToForceThePipeGroupOntoItsOwnLine\n"
+    ++ "  <| by\n"
+    ++ "    exact value\n\n"
+    ++ "def pipeMatch (errors : Nat) :=\n"
+    ++ "  id\n"
+    ++ "  <| match errors with\n"
+    ++ "      | 0 => 1\n"
+    ++ "      | errors + 1 => errors + 1\n\n"
+    ++ "def pipeLet :=\n"
+    ++ "  id\n"
+    ++ "  <|  let value := source\n"
+    ++ "      value\n\n"
+    ++ "def pipeHave :=\n"
+    ++ "  id\n"
+    ++ "  <|  have value := source\n"
+    ++ "      value\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "low-priority-pipe-boundary-policy.lean" { lineWidth := 70 }
+  assertTrue "low-priority pipe boundary policy does not fall back" (!result.fellBack)
+  assertEq "low-priority pipe boundary policy" expected result.formatted
+  assertTrue "low-priority pipe boundary policy preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "low-priority-pipe-boundary-policy-formatted.lean" { lineWidth := 70 }
+  assertEq "low-priority pipe boundary policy is idempotent"
+    result.formatted formattedAgain
+
+def assertLowPriorityPipeApplicationKeepsOperandBase (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "def pipeApplication :=\n"
+    ++ "  discard\n"
+    ++ "  <| parseModuleSyntaxWithoutParserStateUpdates defaultEnvironment\n"
+    ++ "      normalizedSource fileName\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "low-priority-pipe-application-base.lean"
+  assertTrue "low-priority pipe application does not fall back" (!result.fellBack)
+  assertEq "low-priority pipe application keeps its operand base" source result.formatted
+  assertTrue "low-priority pipe application preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "low-priority-pipe-application-base-formatted.lean"
+  assertEq "low-priority pipe application is idempotent" result.formatted formattedAgain
 
 def assertLowPriorityPipeAlignsBindingOperands (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -4617,19 +5149,16 @@ def assertLowPriorityPipeAlignsBindingOperands (env : Lean.Environment) : IO Uni
   let expected :=
     "def pipeLet : Nat :=\n"
     ++ "  longFunctionNameWithEnoughCharactersToForceLowPriorityPipeBreak\n"
-    ++ "  <|\n"
-    ++ "    let value := 0\n"
-    ++ "    value\n\n"
+    ++ "  <|  let value := 0\n"
+    ++ "      value\n\n"
     ++ "def pipeHave : Nat :=\n"
     ++ "  longFunctionNameWithEnoughCharactersToForceLowPriorityPipeBreak\n"
-    ++ "  <|\n"
-    ++ "    have value := 0\n"
-    ++ "    value\n\n"
+    ++ "  <|  have value := 0\n"
+    ++ "      value\n\n"
     ++ "def pipeHaveI : Nat :=\n"
     ++ "  longFunctionNameWithEnoughCharactersToForceLowPriorityPipeBreak\n"
-    ++ "  <|\n"
-    ++ "    haveI value : Nat := 0\n"
-    ++ "    value\n"
+    ++ "  <|  haveI value : Nat := 0\n"
+    ++ "      value\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "low-priority-pipe-bindings.lean" { lineWidth := 70 }
@@ -4765,10 +5294,10 @@ def assertHaveProofAfterInfixPreservesLayout (env : Lean.Environment) : IO Unit 
     ++ "  Nat.succ (Classical.choose hex)\n"
   let expected :=
     "def f (hM : ∃ n : Nat, n = n) : Nat :=\n"
-    ++ "  id <|\n"
-    ++ "    have hex : ∃ n : Nat, n = n := by\n"
-    ++ "      obtain ⟨n, h⟩ := hM; refine ⟨n, h⟩\n"
-    ++ "    Nat.succ (Classical.choose hex)\n"
+    ++ "  id\n"
+    ++ "  <|  have hex : ∃ n : Nat, n = n := by\n"
+    ++ "        obtain ⟨n, h⟩ := hM; refine ⟨n, h⟩\n"
+    ++ "      Nat.succ (Classical.choose hex)\n"
   let formatted ← Formatter.formatSourceWithEnv env source "have-proof-after-infix.lean"
   assertEq "have proof after infix keeps the proof offside" expected formatted
   assertTrue "have proof after infix preserves code"
@@ -5184,13 +5713,21 @@ def assertCliSelfFormattingRegressions (env : Lean.Environment) : IO Unit := do
   assertEq "interpolated string is a single atom"
     interpolatedAtomExpected interpolatedAtomFormatted
 
-  let pipeLet :=
+  let pipeLetSource :=
     "private def G (values : List Nat) : Option Nat :=\n"
-    ++ "  Option.some <|\n"
+    ++ "  Option.some\n"
+    ++ "  <|\n"
     ++ "    let value := values.length\n"
     ++ "    value\n"
-  let pipeLetFormatted ← Formatter.formatSourceWithEnv env pipeLet "pipe-let-spacing.lean"
-  assertEq "operator spacing is not padded by child alignment" pipeLet pipeLetFormatted
+  let pipeLetExpected :=
+    "private def G (values : List Nat) : Option Nat :=\n"
+    ++ "  Option.some\n"
+    ++ "  <|  let value := values.length\n"
+    ++ "      value\n"
+  let pipeLetFormatted ←
+    Formatter.formatSourceWithEnv env pipeLetSource "pipe-let-spacing.lean"
+  assertEq "operator and aligned child share their first line"
+    pipeLetExpected pipeLetFormatted
 
 def assertSelfFormattingRulePriorities (env : Lean.Environment) : IO Unit := do
   let flatConstructor :=
@@ -6496,6 +7033,32 @@ def assertSingletonArrayKeepsBodyBase (env : Lean.Environment) : IO Unit := do
     ++ "  }]\n"
   let formatted ← Formatter.formatSourceWithEnv env source "singleton-array-base.lean"
   assertEq "singleton array keeps body base" expected formatted
+
+def assertSingletonProofRecordIndentsField (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def singletonProofRecord :=\n"
+    ++ "  constructorWithLongName {\n"
+    ++ "    default := by\n"
+    ++ "      exact 0\n"
+    ++ "  }\n"
+  let expected :=
+    "def singletonProofRecord :=\n"
+    ++ "  constructorWithLongName\n"
+    ++ "    {\n"
+    ++ "      default := by\n"
+    ++ "        exact 0\n"
+    ++ "    }\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "singleton-proof-record-indentation.lean" { lineWidth := 30 }
+  assertTrue "singleton proof record does not fall back" (!result.fellBack)
+  assertEq "singleton proof record indents its field" expected result.formatted
+  assertTrue "singleton proof record preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "singleton-proof-record-indentation-formatted.lean" { lineWidth := 30 }
+  assertEq "singleton proof record is idempotent" result.formatted formattedAgain
 
 def assertMultiItemArrayBreaksBalanced (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -10403,6 +10966,39 @@ def assertFormattingExceptionChecks (env : Lean.Environment) : IO Unit := do
           match exception with
           | .lineOverflow _ => true
           | _ => false)
+  let calcArgumentPayload :=
+    String.intercalate " " (List.replicate 9 "argument" ++ ["value"])
+  let fittingCalcOperand :=
+    "def fittingCalcOperandOverflow := calc\n"
+    ++ "  lhs = ("
+    ++ calcArgumentPayload
+    ++ ") :=\n"
+    ++ "    proof\n"
+  let movedCalcOperand :=
+    "def fittingCalcOperandOverflow :=\n"
+    ++ "  calc\n"
+    ++ "    lhs\n"
+    ++ "        = ("
+    ++ calcArgumentPayload
+    ++ ") :=\n"
+    ++ "      proof\n"
+  let fittingCalcOperandModule ←
+    SyntaxTree.parseModuleStringWithEnv env fittingCalcOperand
+      "fitting-calc-operand-overflow-source.lean"
+  let movedCalcOperandModule ←
+    SyntaxTree.parseModuleStringWithEnv env movedCalcOperand
+      "moved-calc-operand-overflow.lean"
+  assertTrue "protected calc operand with assignment fits before structural movement"
+    (Formatter.linesFit fittingCalcOperand 100)
+  assertTrue "moved protected calc operand with assignment demonstrates overflow"
+    (!Formatter.linesFit movedCalcOperand 100)
+  assertTrue "attached assignment does not make a moved calc operand overflow actionable"
+    (!(Formatter.Diagnostics.formattingExceptions
+        fittingCalcOperandModule movedCalcOperandModule { lineWidth := 100 }).any
+        fun exception =>
+          match exception with
+          | .lineOverflow _ => true
+          | _ => false)
   let fittingProofLayout :=
     "def movedProofLayout (n : Nat) :=\n"
     ++ "  Nat.recOn n default fun n Y =>\n"
@@ -12434,6 +13030,13 @@ def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertOverlappingEmptySyntaxTokensRemoved env
   assertGroupedApplication env
   assertGroupedInfixChain env
+  assertCalcStepsRegrouped env
+  assertCalcInfixRelationRhsRemainsStructural env
+  assertCalcProofIntroducersRegrouped env
+  assertMultiOperatorCalcRelationRemainsOpaque env
+  assertProoflessCalcInitialRegrouped env
+  assertIndexedCalcRelationRegrouped env
+  assertOpaqueCalcRelationRegrouped env
   assertLowPriorityInfixOwnsBothOperatorBoundaries env
   assertGroupedEqualPrecedenceInfixChain env
   assertDoFallbackRegrouping env
@@ -12524,6 +13127,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertMatchArmKeepsDoOnArrowLine env
   assertWhereFormattingKeepsSuffix env
   assertStructureValueWhereFormattingKeepsSuffix env
+  assertWhereStructInstFieldsUseDeclarationBase env
   assertWhereStructInstTrailingWhereUsesCommandBase env
   assertAbbrevStructureValueKeepsWhereSuffix env
   assertWhereFinallyKeepsHeaderAndProofBody env
@@ -12572,8 +13176,19 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertProofValuesRemainLayoutIslands env
   assertOriginalLayoutValueHonorsDeclarationBreak env
   assertCalcLayoutIslandAfterNestedInfix env
+  assertInlineCalcFirstStepBreaksWithLowPriorityPipe env
+  assertDirectCalcBreaksBeforeItsBody env
+  assertProoflessCalcInitialStaysWithKeyword env
+  assertProoflessCalcInitialPreservesProjection env
+  assertCalcProofApplicationBreaksAfterAssignment env
+  assertCalcApplicationRelationUsesStructuralLayout env
+  assertCalcInfixRelationUsesStructuralLayout env
+  assertBrokenCalcRelationKeepsProofBodyBase env
+  assertLongCalcProofBreaksAfterAssignment env
   assertDetachedCalcUsesRenderedIntroducerBase env
   assertLowPriorityPipeCalcKeepsIndentedOperand env
+  assertLowPriorityPipeBoundaryPolicy env
+  assertLowPriorityPipeApplicationKeepsOperandBase env
   assertLowPriorityPipeAlignsBindingOperands env
   assertMovedInlineCalcKeepsContinuationLayout env
   assertExplicitLambdaKeepsPrefixMarker env
@@ -12644,6 +13259,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertListApplicationColumnIndent env
   assertListApplicationSourceBreakIndent env
   assertSingletonArrayKeepsBodyBase env
+  assertSingletonProofRecordIndentsField env
   assertMultiItemArrayBreaksBalanced env
   assertCommentedArrayKeepsDelimitedLayout env
   assertParenthesizedArrayItemsUseBalancedDelimiters env

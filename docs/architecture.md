@@ -238,6 +238,7 @@ Current logical regroupings are:
 | `.application` | Lean parser applications are nested per argument, but formatting wants one function-application segment. | Child `0` is the head, children `1...` are arguments in source order. Raw `null` argument containers are spliced. |
 | `.infixChain kind` | Infix peers with equal Lean parser binding powers should break as one balanced chain, and renderer indentation should not infer peer structure from nested raw nodes. Same-kind peers remain the compatibility fallback when parser metadata is unavailable. Dedicated nested pipe-projection nodes use the same representation even though their operator token is not exposed as an ordinary binary-infix atom. | Odd-length array alternating operand, operator, operand. Operands are even indexes; operators are odd indexes. The outer parser kind is retained for rule dispatch. A pipe member with arguments is first grouped as one application operand. |
 | `.lowPriorityInfixRhs` | A low-priority operator and its right operand need one local layout owner so attachment and operand alignment do not depend on token inspection or renderer ancestry. The enclosing infix chain owns the leading boundary before each complete operator-operand group, while this nested owner can introduce the sole discretionary post-operator boundary used by an infix family. | The low-priority operator followed by its right operand. Every operator-operand pair after the first chain operand has this shape. |
+| `.calcBody`, `.calcStep`, `.calcRelation`, and `.calcOperand` | Lean's raw calc trees hide the boundary after `calc`, wrap later rows separately from the first row, and put each relation, assignment, and proof in wrappers with no shared layout owner. Logical nodes let the term or tactic owner control the body boundary, the body own peer-row alignment, each step own the break before a non-suffix proof, and each single-operator relation own the lower-priority break before its operator. Opaque operand interiors remain protected source layout so opening the surrounding calc does not expose unrelated notation and proof syntax to reformatting. | A term-level calc or annotated calc tactic contains its `calc` token followed by one `.calcBody`. A proofless first term is instead attached to the keyword through a `.suffixGroup` and protected `.calcOperand`, followed by the remaining body. This grouping is driven by the common child shape, so parser-specific tactic annotation does not change it. The body contains direct `.calcStep` children. Each proof-bearing step contains one `.calcRelation` followed by its complete proof term; existing suffix policy keeps `by`, `do`, and nested `calc` attached to `:=`. An ordinary one-operator or indexed-infix relation contains a protected left `.calcOperand` and a `.suffixGroup` containing the operator, right operand, and `:=`. A right operand already regrouped as `.application` or `.infixChain` retains that structural owner and its ordinary breaks; other right operands are protected as `.calcOperand`. Multi-operator and generated relation terms remain one protected operand beside the assignment because their governing operator cannot be inferred safely from a flattened parser tree. |
 | `.indexedInfix kind` | Infix notation with an indexed operator needs one leading break before the complete operator without allowing its closing bracket to detach from the index. Recognizing the five-child delimiter shape during regrouping covers generated and explicitly named parsers while keeping delimiter spelling out of line-break rules. | The original five children remain in source order: left operand, an operator atom ending in `[`, index, `]`, and right operand. The outer parser kind is retained for rule dispatch. |
 | `.suffixGroup` | A header suffix belongs to the preceding syntax even when the parser stores it at the start of the following body wrapper. Grouping it with the header lets the body boundary break first without allowing the suffix to detach under width pressure. The same transparent attachment keeps a non-owner tactic prefix with the first line of its final structural proof argument while that argument's intact introducer still owns the proof body. | The header followed by its suffix token. `cases` currently uses this shape for its discriminant and `with`. A proof-valued tactic contributes its protected prefix followed by the complete final proof argument. |
 | `.namedDiscriminant` | Elimination tactics parse the optional name and `:` inside a wrapper separate from the discriminant. A semantic group exposes the lower-priority break before `:` without making the line-break rule inspect tokens or optional-wrapper depth. | The name, `:`, and discriminant in source order. |
@@ -816,8 +817,10 @@ Mathlib `lemma` commands remain complete original-layout islands when their proo
 no structurally rendered tactic owner. When a proof contains a transparent owner such as
 `cases` or induction alternatives, the command exposes that owner just as an ordinary
 proof body does; the owner's existing rule then controls its direct children while leaf
-proof regions remain protected. An owner such as `calc` that is itself an original-layout
-island cannot justify opening its protected parent.
+proof regions remain protected. A regrouped `calc` is a structural owner: its wrapper,
+body, logical steps, and outer relation operator expose only their governing boundaries,
+while relation operands and nested proof regions remain protected. An unregrouped calc shape remains an original-layout compatibility
+fallback and cannot justify opening its protected parent.
 Its renderer-facing API returns the planned text, final token, and the one
 comment-boundary flag needed by subsequent ordinary rendering; it does not own or mutate
 renderer state. When the renderer reaches a recognized proof or attribute node, it
@@ -923,17 +926,26 @@ ordinary flat-fit checks, so inline extension syntax does not force its parent t
 The island normally retains its source-leading boundary as well. A surrounding rule can
 claim that boundary with `formatOriginalChildLeadingBoundary`; the renderer then supplies
 the boundary whitespace and the island preserves only its internal relative layout.
-`calc` is the deliberate exception: it always delegates its leading boundary to ordinary
-formatting while preserving the relative layout of its steps. A parent break can therefore
-produce `<| calc` without teaching an infix rule about `calc` tokens or source trivia. Its
-step floor is one indentation level beneath the line containing the rendered `calc`, not
-beneath the parent segment's earlier source base.
+`calc` uses explicit logical grouping instead of a whole-expression source island. Its
+term or tactic owner owns the mandatory break before a proof-bearing body, the body aligns
+rows one level beneath the rendered introducer line, and a proofless first term stays
+attached to `calc`. A long single-operator step can break before its operator. Opaque
+operands retain protected internal layout, while a regrouped application or infix chain on
+the right uses its ordinary breaks before the attached assignment overflows. A
+low-priority chain may keep `<| calc` after an indivisible left operand; when the left
+operand itself has structural breaks, the outer `<|` boundary takes priority over
+splitting that operand merely to reserve space for the calc suffix. Diagnostics treat an
+unchanged protected calc operand shifted right by structural indentation as an
+unbreakable-layout overflow.
 The low-priority infix rule likewise owns the first line of an ordinary right operand.
-Layout-sensitive binding expressions such as `let` and `have` instead require start
-alignment: the infix rule introduces an indented operand boundary after the operator,
-then the operand's syntax rule owns its internal body breaks at that aligned base. A right
-operand containing a protected proof body retains the same separate operand boundary;
-original-tree planning remains responsible for preserving and rebasing the proof layout.
+When a non-suffix right operand is multiline, the outer infix rule breaks before the
+complete operator-and-operand group. Layout-sensitive binding expressions such as `let`
+and `have` then require start alignment on the operator line, and the operand's syntax
+rule owns its internal body breaks at that aligned base. A right operand containing a
+protected proof body moves with the same complete group; original-tree planning remains
+responsible for preserving and rebasing the proof layout. A protected tree that starts
+with an opening delimiter can retain its source boundary after the operator when moving
+that boundary would bypass its structural layout owner.
 That ownership propagates through leading-child wrapper chains and stops at the first
 preceding sibling. A transparent type specification can therefore normalize the boundary
 after `:` even when a known application or infix node wraps the extension-owned term,

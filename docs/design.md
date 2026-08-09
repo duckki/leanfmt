@@ -91,9 +91,9 @@ def result : Prop :=
 leanfmt generally breaks before operators for this reason. Bodies after `:=`,
 `=>`, `with`, quantifier commas, and similar separators are indented instead.
 The low-priority application operator `<|` is the one exception: its grouped
-right operand can introduce another boundary after the operator when the
-operand needs a separate structural base. Other infix operators expose only
-their leading boundary.
+right operand also exposes a boundary after the operator for protected source
+layout that cannot safely move onto the operator line. Other infix operators
+expose only their leading boundary.
 
 ### Preserve intentional source breaks selectively
 
@@ -1181,15 +1181,14 @@ type that begins with `have` owns its layout base after the signature colon, so
 both its proof and following type stay offside after the signature is reflowed.
 
 When `have` is the right operand of a broken low-priority pipe, it uses the same
-mandatory start alignment as `let`. The `have` expression and its body share one
-indented base beneath `<|`:
+mandatory start alignment as `let`. The operator stays with the first line of
+the `have` expression, and the expression and its body share one aligned base:
 
 ```lean
 def pipeHave :=
   longFunctionNameWithEnoughCharactersToForceLowPriorityPipeBreak
-  <|
-    have value := 0
-    value
+  <|  have value := 0
+      value
 ```
 
 When a `by` proof is the right operand of `<|`, the introducer remains attached
@@ -1202,8 +1201,9 @@ theorem pipedProof : True :=
     exact True.intro
 ```
 
-A `have` that contains a protected proof body keeps a separate operand boundary
-so the proof and its following body continue to move as one layout island.
+A `have` that contains a protected proof body moves with the complete `<|`
+right-operand group so the proof and its following body continue to move as one
+layout island.
 When the final proof argument of `have`, `suffices`, or another tactic contains
 a structural `cases` or `induction`, the tactic header remains protected while
 the proof body exposes the existing elimination layout. Nested alternative

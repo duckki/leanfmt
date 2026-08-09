@@ -342,6 +342,14 @@ private def coreTacticKindName (kindName : String) : Bool :=
 private def isCalcTree : SyntaxTree.Tree → Bool
   | tree => SyntaxTree.Tree.isCalcTree tree
 
+private def isStructuredCalcTree : SyntaxTree.Tree → Bool
+  | .node _ children =>
+      children.any
+        fun
+        | .node .calcBody _ => true
+        | _ => false
+  | _ => false
+
 private def isTacticKindName (kindName : String) : Bool :=
   coreTacticKindName kindName || SyntaxTree.isExtensionTacticKindName kindName
 
@@ -468,9 +476,9 @@ private def isProofLayoutIsland (tree : SyntaxTree.Tree) : Bool :=
       containsProofTree tree
   | .node (.raw `Lean.Parser.Term.structInst) _ =>
       containsProofTree tree
-  | .node (.raw `«term{_}») _ =>
+  | .node (.raw `Lean.Parser.Term.structInstFields) _ =>
       containsProofTree tree
-  | .node (.raw `Lean.Parser.Command.whereStructInst) _ =>
+  | .node (.raw `«term{_}») _ =>
       containsProofTree tree
   | .node (.raw `Lean.Parser.Term.show) _ =>
       containsProofTree tree
@@ -478,9 +486,9 @@ private def isProofLayoutIsland (tree : SyntaxTree.Tree) : Bool :=
 
 private def proofLayoutRebasesFromFirstToken : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Term.structInst) _
+  | .node (.raw `Lean.Parser.Term.structInstFields) _
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _
-  | .node (.raw `«term{_}») _
-  | .node (.raw `Lean.Parser.Command.whereStructInst) _ => true
+  | .node (.raw `«term{_}») _ => true
   | _ => false
 
 private def isProofLemmaCommand (tree : SyntaxTree.Tree) : Bool :=
@@ -555,7 +563,11 @@ def classify? (tree : SyntaxTree.Tree) : Option LayoutIslandKind :=
     some .attributes
   else if isDefinitionContainingQuotation tree then
     some .definitionQuotation
-  else if isCalcTree tree then
+  else if match tree with
+          | .node .calcOperand _ => true
+          | _ => false then
+    some .calc
+  else if isCalcTree tree && !isStructuredCalcTree tree then
     some .calc
   else if isCommentSensitiveMatchExpr tree then
     some .commentSensitiveMatch
@@ -657,8 +669,8 @@ def canUseStructuralLayoutAfterParentMove : SyntaxTree.Tree → Bool
   | .node .application _
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _
   | .node (.raw `Lean.Parser.Term.structInst) _
-  | .node (.raw `«term{_}») _
-  | .node (.raw `Lean.Parser.Command.whereStructInst) _ => true
+  | .node (.raw `Lean.Parser.Term.structInstFields) _
+  | .node (.raw `«term{_}») _ => true
   | _ => false
 
 partial def startsWithEmission : SyntaxTree.Tree → Bool
@@ -896,6 +908,12 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
                 && originalLeadingHasLineStructure
                 && proofLayoutRebasesFromFirstToken tree) then
           some (sourceColumn, targetColumn)
+        else if calcLayout then
+          some
+            (
+              continuationColumns.1,
+              (targetColumn / indentationSpaces + 1) * indentationSpaces
+            )
         else
           some continuationColumns
     | some continuationColumns, none => some continuationColumns

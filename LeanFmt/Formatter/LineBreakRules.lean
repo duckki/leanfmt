@@ -174,6 +174,11 @@ def parentIsSignatureParameters (context : RuleContext) : Bool :=
 def parentIsRawKind (context : RuleContext) (kind : Lean.SyntaxNodeKind) : Bool :=
   context.parentRawKind? == some kind
 
+def parentIsNodeKind (context : RuleContext) (kind : SyntaxTree.NodeKind) : Bool :=
+  match context.ancestors with
+  | parent :: _ => parent.nodeKind? == some kind
+  | _ => false
+
 def parentIsInfixChain (context : RuleContext) : Bool :=
   match context.ancestors with
   | parent :: _ =>
@@ -452,7 +457,8 @@ def segmentContentCount (segment : Segment) : Nat :=
 -----------------------------------------------------------------------------------------
 
 def suffixKeywordLexeme (lexeme : String) : Bool :=
-  lexemeIn lexeme ["by", "do", "from", "where", "with", "deriving", "then", "else"]
+  lexemeIn lexeme
+    ["by", "calc", "do", "from", "where", "with", "deriving", "then", "else"]
 
 def suffixOpeningDelimiterLexeme (lexeme : String) : Bool :=
   SpaceRules.stringEndsWithAny lexeme ["(", "[", "{", "⟨", "⟪"]
@@ -932,8 +938,7 @@ def childLowPriorityInfixRhsHasAttachedBody (segment : Segment) (index : Nat) : 
 
 def lowPriorityInfixRhsCanFlow (segment : Segment) : Bool :=
   lowPriorityInfixRhsSegment segment
-  && (attachedBodyStart segment (segment.start + 1)
-      || lowPriorityInfixRhsHasMandatoryAlignedBody segment)
+  && childStartsWithSuffixKeywordToken segment (segment.start + 1)
 
 def childLowPriorityInfixRhsCanFlow (segment : Segment) (index : Nat) : Bool :=
   match segment.child? index with
@@ -941,10 +946,17 @@ def childLowPriorityInfixRhsCanFlow (segment : Segment) (index : Nat) : Bool :=
   | none => false
 
 def lowPriorityInfixAllRhsCanFlow (segment : Segment) : Bool :=
-  lowPriorityInfixSegment segment
-  && segment.indexes.all
-      fun index =>
-        index == segment.start || childLowPriorityInfixRhsCanFlow segment index
+  let allRhsCanFlow :=
+    segment.indexes.all
+      fun index => index == segment.start || childLowPriorityInfixRhsCanFlow segment index
+  let structuredCalcCanFlow :=
+    !(segment.indexes.any
+        fun index =>
+          segment.start < index
+          && (segment.child? index).any (·.containsNodeKind .calcBody))
+    || (segment.size == 2
+        && (segment.child? segment.start).any fun child => child.singleToken?.isSome)
+  lowPriorityInfixSegment segment && allRhsCanFlow && structuredCalcCanFlow
 
 partial def treeContainsAttachedBodyInfix : SyntaxTree.Tree → Bool
   | .missing => false
@@ -1252,7 +1264,7 @@ def structInstFieldsMandatory (context : RuleContext) (segment : Segment) : Bool
   && hasMissingCommaBetweenFields segment (structInstFieldIndexes segment)
 
 def structInstBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
-  if 1 < structInstFieldCount segment || structInstHasWith segment then
+  if 0 < structInstFieldCount segment || structInstHasWith segment then
     let hasWith := structInstHasWith segment
     let fieldBreak :=
       if hasWith then
@@ -1855,6 +1867,23 @@ def doUnlessBreaks (_context : RuleContext) (segment : Segment) : List BreakPoin
 
 def byTacticBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   [breakAfterLexeme? segment "by" 1].filterMap id
+
+def calcBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
+  [boundaryBreak? segment 1 1].filterMap id
+
+def calcBodyBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
+  match nonemptyChildIndexes segment with
+  | [] | [_] => []
+  | _ :: rest => rest.filterMap fun index => boundaryBreak? segment index 0
+
+def calcStepBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
+  if childStartsWithSuffixKeywordToken segment 1 then
+    []
+  else
+    [boundaryBreak? segment 1 1].filterMap id
+
+def calcRelationBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
+  [boundaryBreak? segment 1 2].filterMap id
 
 def fromTermBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   [delimiterValueBreak? segment "from"].filterMap id
@@ -2649,10 +2678,7 @@ def isGeneratedLocalNotationKind (kind : Lean.SyntaxNodeKind) : Bool :=
   (toString kind).endsWith "Local≺»"
 
 def structInstFieldsRule : LineBreakRule :=
-  {
-    name := "structInstFields"
-    inheritBase := fun _ _ => true
-  }
+  { name := "structInstFields" }
 
 def structInstFieldRule : LineBreakRule :=
   {
@@ -2880,11 +2906,7 @@ def infixBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :
 
 def lowPriorityInfixRhsBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
-  if lowPriorityInfixRhsHasAttachedBody segment
-      && !lowPriorityInfixRhsHasMandatoryAlignedBody segment then
-    []
-  else
-    [boundaryBreak? segment (segment.start + 1) 1].filterMap id
+  [boundaryBreak? segment (segment.start + 1) 1].filterMap id
 
 def infixRuleBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   let breaks := infixBreaks context segment
@@ -3301,12 +3323,9 @@ def infixChainRule : LineBreakRule :=
 def lowPriorityInfixRhsRule : LineBreakRule :=
   {
     name := "lowPriorityInfixRhs"
-    mandatory := fun _ segment => lowPriorityInfixRhsHasMandatoryAlignedBody segment
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
-    keepPrefixWithChildFirstLine :=
-      fun _ segment index =>
-        index == segment.start + 1 && !lowPriorityInfixRhsHasMandatoryAlignedBody segment
+    keepPrefixWithChildFirstLine := fun _ segment index => index == segment.start + 1
     breakPoints := lowPriorityInfixRhsBreaks
   }
 
@@ -3347,6 +3366,46 @@ def tacticLayoutOwnerRule : LineBreakRule :=
     inheritBase := fun _ _ => true
     roundUpBaseIndentation := true
     breakPoints := tacticLayoutOwnerBreaks
+  }
+
+def calcRule : LineBreakRule :=
+  {
+    name := "calc"
+    mandatory := fun _ segment => 1 < segment.size
+    useExistingBreaks := fun _ _ => true
+    flow := fun _ _ => true
+    inheritBase := fun _ _ => true
+    breakPoints := calcBreaks
+  }
+
+def calcBodyRule : LineBreakRule :=
+  {
+    name := "calcBody"
+    mandatory := fun _ segment => 1 < (nonemptyChildIndexes segment).length
+    useExistingBreaks := fun _ _ => true
+    flow := fun _ _ => true
+    inheritBase := fun _ _ => true
+    breakPoints := calcBodyBreaks
+  }
+
+def calcStepRule : LineBreakRule :=
+  {
+    name := "calcStep"
+    useExistingBreaks := fun _ _ => true
+    flow := fun _ _ => true
+    inheritBase := fun _ _ => true
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index =>
+        index == 1 && (segment.child? index).any (·.singleToken?.isSome)
+    breakPoints := calcStepBreaks
+  }
+
+def calcRelationRule : LineBreakRule :=
+  {
+    name := "calcRelation"
+    useExistingBreaks := fun _ _ => true
+    inheritBase := fun _ _ => true
+    breakPoints := calcRelationBreaks
   }
 
 def tacticEliminationHeaderRule : LineBreakRule :=
@@ -3584,7 +3643,9 @@ def haveRule : LineBreakRule :=
     startAlignment := fun _ _ => .required
     inheritBase :=
       fun context _ =>
-        !parentIsInfixChain context && !parentIsRawKind context `Lean.Parser.Term.typeSpec
+        !parentIsInfixChain context
+        && !parentIsNodeKind context .lowPriorityInfixRhs
+        && !parentIsRawKind context `Lean.Parser.Term.typeSpec
     breakPoints := haveBreaks
   }
 
@@ -3966,6 +4027,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Tactic.location) _ => some defaultRule
   | .node (.raw `Lean.Parser.Tactic.locationHyp) _ => some defaultRule
   | .node (.raw `Lean.Parser.Tactic.exact) _ => some defaultRule
+  | .node (.raw `Lean.calcTactic) _ => some calcRule
   | .node (.raw `Lean.Parser.Tactic.cases) _ => some tacticLayoutOwnerRule
   | .node (.raw `Lean.Parser.Tactic.induction) _ => some tacticLayoutOwnerRule
   | .node (.tacticEliminationTargets _) _ => some matchDiscriminantsRule
@@ -4005,7 +4067,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Elab.Term.«termSort*») _ => some defaultRule
   | .node (.raw `coeNotation) _ => some defaultRule
   | .node (.raw `coeSortNotation) _ => some defaultRule
-  | .node (.raw `Lean.calc) _ => some defaultRule
+  | .node (.raw `Lean.calc) _ => some calcRule
   | .node (.raw `Lean.calcSteps) _ => some defaultRule
   | .node (.raw `Lean.calcFirstStep) _ => some defaultRule
   | .node (.raw `Lean.modCast) _ => some defaultRule
@@ -4290,6 +4352,10 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node .structureHeader _ => some structureHeaderRule
   | .node .structureConstructor _ => some structureConstructorRule
   | .node .structureDeriving _ => some structureDerivingRule
+  | .node .calcBody _ => some calcBodyRule
+  | .node .calcStep _ => some calcStepRule
+  | .node .calcRelation _ => some calcRelationRule
+  | .node .calcOperand _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.export) _ => some exportRule
   | .node .definition _ => some definitionRule
   | .node (.raw `Lean.Parser.Command.definition) _ => some rawDefinitionRule

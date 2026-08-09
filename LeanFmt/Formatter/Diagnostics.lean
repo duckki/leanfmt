@@ -463,12 +463,23 @@ def spanCovers (start stop : String.Pos.Raw) (span : SyntaxTree.Span) : Bool :=
   span.start <= start && stop <= span.stop
 
 def excludedOverflowLineEnders : List String :=
-  [")", "]", "}", "⟩", "⟫", ",", ";"]
+  [")", "]", "}", "⟩", "⟫", ",", ";", ":="]
 
 def tokensAreAdjacentAfter (position : String.Pos.Raw) : List SyntaxTree.Token → Bool
   | [] => true
   | token :: rest =>
       token.span.start == position && tokensAreAdjacentAfter token.span.stop rest
+
+def excludedLineEndersFollowSpan
+    (position : String.Pos.Raw) (tokens : List SyntaxTree.Token)
+    : Bool :=
+  if tokensAreAdjacentAfter position tokens then
+    true
+  else
+    match tokens.getLast? with
+    | some token =>
+        token.lexeme == ":=" && tokensAreAdjacentAfter position tokens.dropLast
+    | none => false
 
 def spanWithLineEndersCovers
     (tokens : List SyntaxTree.Token)
@@ -485,7 +496,7 @@ def spanWithLineEndersCovers
     match suffixTokens.getLast? with
     | none => false
     | some last =>
-        tokensAreAdjacentAfter span.stop suffixTokens
+        excludedLineEndersFollowSpan span.stop suffixTokens
         && (suffixTokens.all
               fun token =>
                 excludedOverflowLineEnders.contains token.lexeme)

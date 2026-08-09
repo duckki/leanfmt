@@ -11,36 +11,33 @@ code. The open items below are governing layout problems. Long indivisible lines
 and formatter-created too-many-lines warnings are not findings when the
 surrounding shape and starting indentation are correct.
 
-### Next release checkpoint
+### Checkpoint under validation
 
-Complete low-priority `<|` right-operand ownership. The existing
-`.lowPriorityInfixRhs` syntax node already groups the operator with its right
-operand, but the line-break rule still distinguishes `by`, `do`, `calc`, `let`,
-and `have` through token and raw-syntax checks. Make the grouped node establish
-one local operand base instead:
+Complete structural ownership for both term-level and tactic `calc` forms.
+The common regrouped shape must keep these invariants:
 
-1. Keep `<|` with the operand's first line whenever that line fits.
-2. When an unremovable source break separates the operand, indent it once from
-   the grouped operator base.
-3. Keep `let`, `have`, and `haveI` start-aligned consistently.
-4. Rebase protected proofs, records, quotations, and comment-forced operands
-   from the same operand base.
-5. Remove redundant syntax-specific `<|` handling instead of adding another
-   rule, renderer syntax check, exception, or rule API.
+1. A proof-bearing first row breaks after `calc`, with every row aligned under
+   the calc body.
+2. A proofless initial term stays attached to `calc` when possible and keeps
+   its internal projection or application layout intact.
+3. A relation owns its assignment marker, while the complete proof term follows
+   existing suffix policy for `by`, `do`, and nested `calc`.
+4. One-operator relations expose only their governing operator boundary;
+   multi-operator and generated relations remain opaque.
+5. Term and tactic parser wrappers produce the same logical children without
+   renderer syntax checks, specialized rules, or a new rule API.
 
-Start with `Mathlib/Topology/Sheaves/CommRingCat.lean:311` and cover inline and
-broken operators, line-breaking comments, proofs, `calc`, bindings,
-constructors, structures, quotations, and nested contexts. Mathlib currently
-has 50 lines containing only a standalone `<|`, which is a meaningful but
-reviewable visible surface. Stop if the change affects unrelated
-parenthesized, constructor, or delimiter layout.
+Focused tests now cover proofless tactic initials such as the Mathlib
+`Coeff.lean` projection case and moved singleton proof records. The complete
+local, GraphQL, quantum, and pristine Mathlib gates remain to be rerun with the
+final binary.
 
 ### Remaining issue queue
 
 | Family | Representative evidence | Intended owner | Risk | Order |
 | --- | --- | --- | --- | --- |
-| A standalone `<\|` does not establish the base of a protected or comment-forced operand | `Mathlib/Topology/Sheaves/CommRingCat.lean:311`; `Mathlib/CategoryTheory/Pseudoelements.lean:310` | Existing `.lowPriorityInfixRhs` grouping, line-break rules, and original-tree planning | High | Next checkpoint |
-| A moved `fun`, quotation, or parenthesized protected body without a usable parent boundary retains a stale column | `Mathlib/Analysis/BoxIntegral/Partition/Split.lean:155`; `Mathlib/AlgebraicGeometry/Gluing.lean:644`; `Mathlib/Data/Nat/Bitwise.lean:260`; `Mathlib/RingTheory/WittVector/Basic.lean:85`; `Mathlib/Tactic/MinImports.lean:170` | Syntax grouping and original-tree planning | High | After `<\|` ownership |
+| A line comment between a calc proof and the following row can move from the proof indentation to the row indentation | `Mathlib/Analysis/Normed/Field/Approximation.lean` | Generic source-comment ownership and original-tree emission | High | Separate checkpoint after release-candidate review |
+| A moved `fun`, quotation, or parenthesized protected body without a usable parent boundary retains a stale column | `Mathlib/Analysis/BoxIntegral/Partition/Split.lean:155`; `Mathlib/AlgebraicGeometry/Gluing.lean:644`; `Mathlib/Data/Nat/Bitwise.lean:260`; `Mathlib/RingTheory/WittVector/Basic.lean:85`; `Mathlib/Tactic/MinImports.lean:170` | Syntax grouping and original-tree planning | High | After the calc checkpoint |
 | Peer application, declaration-field, or `calc` continuations disagree on their shared base | `Mathlib/Geometry/Manifold/MFDeriv/SpecificFunctions.lean:277`; `Mathlib/Algebra/Order/Monoid/Defs.lean:28`; `Mathlib/Analysis/InnerProductSpace/Projection/Basic.lean:362` | Syntax grouping, line-break rules, and renderer continuation bases | High | Separate checkpoint |
 | A protected branch or source-preserved elimination body remains aligned with its header | `Mathlib/Algebra/BigOperators/Fin.lean:632`; `Mathlib/Data/ENat/Lattice.lean:139`; `Mathlib/Analysis/Meromorphic/Order.lean:198` | Tactic ownership and protected-body rebasing | High | Separate checkpoint |
 | A source-preserved line-comment continuation can detach from its first physical line | `Mathlib/Algebra/ContinuedFractions/Computation/Basic.lean:193` | Original-tree source slices and generic comment-boundary handling | Medium | Separate checkpoint |
@@ -50,15 +47,15 @@ parenthesized, constructor, or delimiter layout.
 
 ### Release TODO
 
-1. Implement the low-priority right-operand checkpoint as one governing
-   invariant, with focused preservation and idempotency coverage.
+1. Finish the structural calc checkpoint as one governing invariant, with
+   focused preservation and idempotency coverage.
 2. Validate in widening rings: the complete local gate, GraphQL, quantum, then
    exact Mathlib `v4.32.0` at width 100.
 3. Compare the exact Mathlib output with commit `202ec07`, review every true
    checkpoint delta, and use independent reviewers after the build passes.
 4. Commit only after the complete validation is clean, update this document,
    and freeze formatter behavior for a release-candidate audit.
-5. Do not combine another family from the queue with the `<|` checkpoint. A
+5. Do not combine another family from the queue with the calc checkpoint. A
    later issue should block release only when it is a correctness problem or a
    broad visual regression, not merely known imperfect output.
 

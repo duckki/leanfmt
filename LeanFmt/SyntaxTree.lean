@@ -76,6 +76,10 @@ inductive NodeKind where
   | structureHeader
   | structureConstructor
   | structureDeriving
+  | calcBody
+  | calcStep
+  | calcRelation
+  | calcOperand
   | matchDiscriminants
   | matchPatterns
   | doForHeader
@@ -112,6 +116,10 @@ def nodeKindName : NodeKind → String
   | .structureHeader => "LeanFmt.SyntaxTree.NodeKind.structureHeader"
   | .structureConstructor => "LeanFmt.SyntaxTree.NodeKind.structureConstructor"
   | .structureDeriving => "LeanFmt.SyntaxTree.NodeKind.structureDeriving"
+  | .calcBody => "LeanFmt.SyntaxTree.NodeKind.calcBody"
+  | .calcStep => "LeanFmt.SyntaxTree.NodeKind.calcStep"
+  | .calcRelation => "LeanFmt.SyntaxTree.NodeKind.calcRelation"
+  | .calcOperand => "LeanFmt.SyntaxTree.NodeKind.calcOperand"
   | .matchDiscriminants => "LeanFmt.SyntaxTree.NodeKind.matchDiscriminants"
   | .matchPatterns => "LeanFmt.SyntaxTree.NodeKind.matchPatterns"
   | .doForHeader => "LeanFmt.SyntaxTree.NodeKind.doForHeader"
@@ -1583,6 +1591,78 @@ partial def flattenDelimitedCollectionChildren (children : Array Tree) : Array T
       | _ => children
   | none => children
 
+private def calcRelationChildren? : Tree → Option (Array Tree)
+  | .node (.infixChain _) children =>
+      if children.size == 3 then some children else none
+  | .node (.indexedInfix _) children =>
+      if children.size == 5 then some children else none
+  | _ => none
+
+private def regroupCalcRelationRhs (rhs : Tree) : Tree :=
+  match rhs with
+  | .node .application _
+  | .node (.infixChain _) _ => rhs
+  | _ => .node .calcOperand #[rhs]
+
+private def regroupCalcStep? (children : Array Tree) : Option Tree := do
+  let relation ← children[0]?
+  let assignmentChildren :=
+    match children[1]? with
+    | some (Tree.node (NodeKind.raw `null) assignmentChildren) =>
+        assignmentChildren ++ childrenRange children 2 children.size
+    | _ => childrenRange children 1 children.size
+  let assignmentIndex ←
+    assignmentChildren.findIdx?
+      fun child => child.firstToken?.any fun token => token.lexeme == ":="
+  let assignment := childrenRange assignmentChildren 0 (assignmentIndex + 1)
+  let proof :=
+    childrenRange assignmentChildren (assignmentIndex + 1) assignmentChildren.size
+  if !(proof.any fun child => child.firstToken?.isSome) then
+    none
+  else
+    let decomposedRelation? : Option Tree := do
+      let relationChildren ← calcRelationChildren? relation
+      let lhs ← relationChildren[0]?
+      let rhsIndex := relationChildren.size - 1
+      let rhs ← relationChildren[rhsIndex]?
+      let operator := childrenRange relationChildren 1 rhsIndex
+      some
+      <| .node .calcRelation
+      <| #[
+        .node .calcOperand #[lhs],
+        .node .suffixGroup (operator ++ #[regroupCalcRelationRhs rhs] ++ assignment)
+      ]
+    let relation :=
+      decomposedRelation?.getD
+      <| .node .calcRelation
+      <| #[.node .suffixGroup (#[.node .calcOperand #[relation]] ++ assignment)]
+    some <| .node .calcStep <| #[relation] ++ proof
+
+private def regroupCalcBodyChildren (children : Array Tree) : Array Tree :=
+  children.foldl
+    (fun steps child =>
+      match child with
+      | Tree.node (NodeKind.raw `null) nested => steps ++ nested
+      | _ => steps.push child)
+    #[]
+
+private def regroupCalcChildren (children : Array Tree) : Array Tree :=
+  match children with
+  | #[keyword, Tree.node .calcBody steps] =>
+      match steps[0]? with
+      | some (Tree.node (NodeKind.raw `Lean.calcFirstStep) initialChildren) =>
+          let initial := Tree.node (NodeKind.raw `Lean.calcFirstStep) initialChildren
+          #[
+            .node .suffixGroup #[keyword, .node .calcOperand #[initial]],
+            .node .calcBody (childrenRange steps 1 steps.size)
+          ]
+      | _ => children
+  | _ => children
+
+private def regroupCalcOwnerTree : Tree → Tree
+  | .node kind children => .node kind (regroupCalcChildren children)
+  | tree => tree
+
 def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :=
   if kind == `Lean.Parser.Command.deriving then
     .node (.raw kind) (regroupDerivingCommandChildren children)
@@ -1613,6 +1693,12 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
     regroupCtor children
   else if kind == `Lean.Parser.Command.structure then
     regroupStructure children
+  else if kind == `Lean.calcSteps then
+    .node .calcBody (regroupCalcBodyChildren children)
+  else if kind == `Lean.calcFirstStep then
+    (regroupCalcStep? children).getD <| .node (.raw kind) children
+  else if kind == `Lean.calc then
+    .node (.raw kind) (regroupCalcChildren children)
   else if kind == `Lean.Parser.Term.fun
           && children.any
               fun child => rawKind? child == some `Lean.Parser.Term.matchAlts then
@@ -1913,6 +1999,8 @@ def regroupRawNode
     .node (.raw kind) (regroupCommandInWrapperChildren children)
   else if kind == `Lean.Parser.Term.binderTactic then
     .node (.infixChain kind) (regroupBinderTacticChildren children)
+  else if kind == `Lean.calcStep then
+    (regroupCalcStep? children).getD <| .node (.raw kind) children
   else if isIndexedInfixRawNode kind children then
     .node (.indexedInfix kind) children
   else if isBinaryInfixRawNode kind children then
@@ -1959,7 +2047,7 @@ partial def regroupTreeWithPrecedences (infixPrecedences : InfixPrecedenceMap)
         else
           regroupRawNode infixPrecedences kind
             (children.map (regroupTreeWithPrecedences infixPrecedences))
-      Tree.annotateTacticTree tree
+      regroupCalcOwnerTree <| Tree.annotateTacticTree tree
   | .node kind children =>
       .node kind (children.map (regroupTreeWithPrecedences infixPrecedences))
 
