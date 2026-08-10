@@ -749,11 +749,19 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     && usesPendingIndent
     && !originalLeadingHasLineStructure
     && SpaceRules.hasLineStructure leading
+  let multilineDelimitedProofBody :=
+    proof
+    && hasLineBreakTrivia
+    && request.lastToken?.any
+        fun token =>
+          LineBreakRules.suffixOpeningDelimiterLexeme token.lexeme
+          && request.currentLine.endsWith token.lexeme
   let inlineMultilineLayoutIsland :=
     retainsInlineRelativeLayout
     && hasLineBreakTrivia
     && (!originalLeadingHasLineStructure || proofLayout || quotationStartsOnLine)
     && !detachedInlineProofBody
+    && !multilineDelimitedProofBody
   let inlineContinuationColumns? :=
     if !inlineMultilineLayoutIsland then
       none
@@ -819,7 +827,8 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
   let layoutTargetColumn? :=
     if !retainsRelativeLayout
         || inlineMultilineLayoutIsland
-        || detachedInlineProofBody then
+        || detachedInlineProofBody
+        || multilineDelimitedProofBody then
       none
     else if usesPendingIndent then
       some leadingColumn
@@ -863,12 +872,27 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
                       some (request.outputLayoutBaseColumn + indentationSpaces)
     else
       none
+  let delimitedProofBodyTargetColumn? :=
+    if multilineDelimitedProofBody then
+      if SpaceRules.hasLineStructure leading then
+        some leadingColumn
+      else
+        some (request.outputLayoutBaseColumn + indentationSpaces)
+    else
+      none
   let targetColumn? :=
     match targetColumn?, proofBodyTargetColumn? with
     | some targetColumn, some proofBodyTargetColumn =>
         some (max targetColumn proofBodyTargetColumn)
     | some targetColumn, none => some targetColumn
     | none, some proofBodyTargetColumn => some proofBodyTargetColumn
+    | none, none => none
+  let targetColumn? :=
+    match targetColumn?, delimitedProofBodyTargetColumn? with
+    | some targetColumn, some detachedTargetColumn =>
+        some (max targetColumn detachedTargetColumn)
+    | some targetColumn, none => some targetColumn
+    | none, some detachedTargetColumn => some detachedTargetColumn
     | none, none => none
   let targetColumn? :=
     if proof && originalLeadingHasLineStructure then
@@ -886,15 +910,21 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     else
       targetColumn?
   let leading :=
-    match targetColumn? with
-    | some targetColumn =>
-        let sourceColumn :=
-          if request.formattedLeadingWhitespace?.isSome || usesPendingIndent then
-            leadingColumn
-          else
-            sourceColumn
-        rebaseTextIndent sourceColumn targetColumn leading
-    | none => leading
+    let rebased :=
+      match targetColumn? with
+      | some targetColumn =>
+          let sourceColumn :=
+            if request.formattedLeadingWhitespace?.isSome || usesPendingIndent then
+              leadingColumn
+            else
+              sourceColumn
+          rebaseTextIndent sourceColumn targetColumn leading
+      | none => leading
+    if multilineDelimitedProofBody && !SpaceRules.hasLineStructure rebased then
+      "\n"
+      ++ spaces (targetColumn?.getD (request.outputLayoutBaseColumn + indentationSpaces))
+    else
+      rebased
   let sourceTextRebase? :=
     match inlineContinuationColumns?,
           request.rebaseSourceTextTargetColumn? with

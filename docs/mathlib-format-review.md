@@ -11,38 +11,42 @@ code. The open items below are governing layout problems. Long indivisible lines
 and formatter-created too-many-lines warnings are not findings when the
 surrounding shape and starting indentation are correct.
 
-### Checkpoint under validation
+### Final initial-release checkpoint
 
-Complete structural ownership for both term-level and tactic `calc` forms. The
-implementation now keeps the parser's complete relation tree inside a calc-step
-header and separates only the proof body. The common shape has these invariants:
+**Status: implementation complete; one final validation remains.**
 
-1. Every calc row starts one level inside `calc`.
-2. The relation header has a two-level tail-indentation floor. Its RHS still
-   follows ordinary infix and application rules at zero additional levels.
-3. The proof body starts one level inside its row, so it remains shallower than
-   a broken relation operator.
-4. `by`, `do`, and nested `calc` remain suffixes of `:=`; their bodies are the
-   calc step's second logical child.
-5. A proofless initial term stays attached to `calc` when possible and retains
-   structural projection, application, infix, and delimiter layout.
-6. Term and tactic parser wrappers produce the same logical children without
-   renderer syntax checks, specialized calc relation rules, calc operand
-   islands, exceptions, or a new rule API.
+Commit `13e7968` is the structural calc baseline. The final candidate fixes the
+two blocker families found during its Mathlib review: source-tight generated
+notation such as `∂μ`, `∂.pi`, and `#{...}`, and delimited calc proofs whose
+opener, body, and closer must move coherently. The fixes use syntax regrouping,
+existing line-break rules, and original-tree ownership. They add no renderer
+syntax checks, specialized calc rule, token exception, or new rule API.
 
-The local gate and complete GraphQL, quantum, and Mathlib validations pass.
-Independent review found four candidate-only formatting errors, all at syntax
-that was previously hidden inside a calc operand island. The checkpoint is not
-ready to commit until these are resolved or deliberately deferred.
+That candidate passed the complete local, GraphQL, quantum, and exact Mathlib
+`v4.32.0` gates, including all 83 formatter batches and a complete post-format
+build. Independent review found no remaining blocker in either target family.
+It did find that an ordinary unary-prefix application had lost its operand's
+structural base: the unary-prefix fixture changed a wrapped argument from six
+spaces to four, and generated prefixes had the same latent problem. The current
+tree separates a source-tight generated prefix atom from an ordinary application
+operand, dispatches the existing unary-prefix rule, and folds the atom into the
+operand only for opening-delimited notation. The original unary-prefix fixture
+is restored, a user-defined `prefix:0` reproduction passes, `lake test` passes,
+and regenerating every fixture produces no diff against `HEAD`.
+
+Because this correction changes syntax regrouping and line-break dispatch after
+the last external run, the exact current tree is not release-ready until one
+last complete validation. Minor pre-existing visual imperfections may remain
+deferred; exceptions, non-idempotence, code changes, actionable overflow, build
+failures, performance regressions, and candidate-induced structural layout
+errors still block the initial release.
 
 ### Remaining issue queue
 
 | Family | Representative evidence | Intended owner | Risk | Order |
 | --- | --- | --- | --- | --- |
-| Generated term notation can split a source-tight literal from its argument after a calc relation becomes structural | `Mathlib/Analysis/FunctionalSpaces/SobolevInequality.lean:141` (`∂μ`); `Mathlib/MeasureTheory/Integral/Marginal.lean:148` (`∂.pi`); `Mathlib/Data/Nat/Totient.lean:98` (`#{`) | General generated-notation syntax grouping and existing suffix ownership | High | Blocks the structural calc checkpoint |
-| A delimited calc proof can detach `{` from a fitting `:= by` suffix without rebasing the tactic body or closing delimiter | `Mathlib/Logic/Equiv/Basic.lean:400` | Attached-proof syntax grouping and delimited proof ownership | High | Blocks the structural calc checkpoint |
-| A line comment between a calc proof and the following row can move from the proof indentation to the row indentation | `Mathlib/Analysis/Normed/Field/Approximation.lean` | Generic source-comment ownership and original-tree emission | High | Separate checkpoint after release-candidate review |
-| A moved `fun`, quotation, or parenthesized protected body without a usable parent boundary retains a stale column | `Mathlib/Analysis/BoxIntegral/Partition/Split.lean:155`; `Mathlib/AlgebraicGeometry/Gluing.lean:644`; `Mathlib/Data/Nat/Bitwise.lean:260`; `Mathlib/RingTheory/WittVector/Basic.lean:85`; `Mathlib/Tactic/MinImports.lean:170` | Syntax grouping and original-tree planning | High | After the calc checkpoint |
+| A line comment between a calc proof and the following row can move from the proof indentation to the row indentation | `Mathlib/Analysis/Normed/Field/Approximation.lean` | Generic source-comment ownership and original-tree emission | High | Defer unless the release audit finds a regression |
+| A moved `fun`, quotation, or parenthesized protected body without a usable parent boundary retains a stale column | `Mathlib/Analysis/BoxIntegral/Partition/Split.lean:155`; `Mathlib/AlgebraicGeometry/Gluing.lean:644`; `Mathlib/Data/Nat/Bitwise.lean:260`; `Mathlib/RingTheory/WittVector/Basic.lean:85`; `Mathlib/Tactic/MinImports.lean:170`; `Mathlib/MeasureTheory/Integral/CurveIntegral/Basic.lean:253`; `Mathlib/Probability/Kernel/IonescuTulcea/Traj.lean:746` | Syntax grouping and original-tree planning | High | Post-release checkpoint |
 | Peer application, declaration-field, or `calc` continuations disagree on their shared base | `Mathlib/Geometry/Manifold/MFDeriv/SpecificFunctions.lean:277`; `Mathlib/Algebra/Order/Monoid/Defs.lean:28`; `Mathlib/Analysis/InnerProductSpace/Projection/Basic.lean:362` | Syntax grouping, line-break rules, and renderer continuation bases | High | Separate checkpoint |
 | A protected branch or source-preserved elimination body remains aligned with its header | `Mathlib/Algebra/BigOperators/Fin.lean:632`; `Mathlib/Data/ENat/Lattice.lean:139`; `Mathlib/Analysis/Meromorphic/Order.lean:198` | Tactic ownership and protected-body rebasing | High | Separate checkpoint |
 | A source-preserved line-comment continuation can detach from its first physical line | `Mathlib/Algebra/ContinuedFractions/Computation/Basic.lean:193` | Original-tree source slices and generic comment-boundary handling | Medium | Separate checkpoint |
@@ -52,15 +56,20 @@ ready to commit until these are resolved or deliberately deferred.
 
 ### Release TODO
 
-1. Add local generated-notation reproductions for `∂μ`, `∂.pi`, and `#{...}`
-   plus a delimited `:= by { ... }` calc proof.
-2. Design one syntax-level ownership fix. Do not add token exceptions, a calc
-   relation rule, renderer syntax checks, or a new rule API.
-3. Re-run the focused suite and inspect self-formatting before repeating the
-   complete local, GraphQL, quantum, and exact Mathlib gates.
-4. Repeat the independent review against the verified v0.2.18 pristine output.
-5. Commit only after the four candidate-only findings are gone, then freeze
-   formatter behavior for the release-candidate audit.
+1. Run the complete local gate on the current generated-prefix correction,
+   including lint, self-formatting, all fixture checks, preservation, missing
+   rules, fallback, idempotency, and `git diff --check`.
+2. Validate fresh GraphQL and quantum outputs with automatic worker counts.
+   Review formatting changes and compare phase timings with the preceding run.
+3. Run all 83 formatter batches on exact Mathlib `v4.32.0` at width 100, only
+   `Mathlib`, using the Lake cache and no pre-format build. Run the complete
+   post-format build.
+4. Review the isolated final delta, with particular attention to ordinary and
+   generated unary prefixes, `∂μ`, `∂.pi`, `#{...}`, and delimited calc proofs.
+   Use independent reviewers after the clean build.
+5. Record the final timings, diff digest, and findings here. If no blocker or
+   performance regression appears, the candidate is ready for the initial
+   release commit and tag.
 
 ### Accepted output
 
@@ -148,6 +157,38 @@ Entries are ordered newest first. They record what changed and the validation
 evidence available at that checkpoint; open work is maintained only in the
 queue above.
 
+### 2026-08-09: Final blocker fixes awaiting one validation rerun
+
+The generated-notation fix keeps source-adjacent generated suffixes attached,
+gives opening-delimited prefixes one coherent base, and preserves ordinary
+prefix applications as structural operands. The delimited-proof fix keeps a
+fitting opener with `:= by` and rebases the complete tactic body and closer.
+Focused tests cover formatting, preservation, fallback, and idempotency for the
+Mathlib reproductions.
+
+Before the ordinary-prefix correction, the complete local gate passed. Fresh
+GraphQL formatting batches took 16, 10, and 6 seconds with a 33-second total and
+zero output delta. Quantum formatting took 13 seconds, its final build took one
+second, and its reviewed five-file output remained calc-only. Exact Mathlib
+`v4.32.0` formatting passed all 83 batches at width 100. The first complete run
+included a 3,572-second full build and took 6,029 seconds; after refining the
+delimiter ownership, all batches passed again and the complete incremental
+build took 6 seconds, for a 2,071-second rerun. No formatter-batch timing showed
+a performance-regression trend.
+
+The validated Mathlib tree changed 7,553 files by 336,410 insertions and 295,079
+deletions. Its diff had SHA-256 digest
+`14fc18f3704a0f99ad57ea59d320adee1b39ca8999fab3b744042c950e4d02b7`.
+Independent review accepted the generated notation and delimited proof output.
+Two reported hanging-lambda examples were byte-identical to the preceding
+formatted baseline and remain in the deferred stale-column family above.
+
+A final test audit then exposed the unary-prefix fixture regression and the
+missing user-defined generated-prefix application case. The generalized fix
+restores the fixture and passes the focused suite, but it postdates the timings,
+statistics, digest, and external review in this entry. Those values are retained
+as the comparison baseline for the one remaining validation run.
+
 ### 2026-08-09: Structural calc relation checkpoint under review
 
 This candidate removes `.calcRelation` and `.calcOperand`, the specialized calc
@@ -204,9 +245,13 @@ calc relation, proof indentation, proofless initial, nested sum/product,
 subtype, and delimiter changes were sound. Review found four candidate-only
 errors: generated notation splits `∂μ`, `∂.pi`, and `#{`, and one delimited
 proof detaches `{` from `:= by` without coherent body rebasing. These are the
-two blocking families at the top of this document. The formatter implementation
-is intentionally unchanged after review; the checkpoint is validated but not
-accepted or committed.
+two blocking families at the top of this document. A later GraphQL review also
+found that inherited suffix measurement could charge a declaration signature
+for `calc` after the proof had broken following `by`; the generic proof-body
+suffix boundary fixed that regression while preserving fitting `by classical`
+and `by calc` forms. The final local, GraphQL, and quantum gates passed, and the
+checkpoint was committed as `13e7968`. The two Mathlib blocker families are
+carried into the final initial-release checkpoint.
 
 ### 2026-08-07: Single-boundary infix ownership checkpoint
 

@@ -277,6 +277,10 @@ The main punctuation rules are:
 - compact `!value` remains compact when `!` and the following token were
   adjacent; otherwise `! value` retains a space.
 
+Source-tight edge pieces of generated notation remain structural units when
+the surrounding term wraps. This keeps forms such as `#{...}`, `∂μ`, and
+`∂.pi` from splitting at a boundary where the notation supplied no whitespace.
+
 Braces retain the source's tight or spaced style where adjacency makes that
 distinction safe:
 

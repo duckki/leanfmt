@@ -728,6 +728,96 @@ private partial def directLeafAtomToken? : Tree → Option Token
 def directLeafAtom? (tree : Tree) : Bool :=
   (directLeafAtomToken? tree).isSome
 
+def isGeneratedTermKind (kind : Lean.SyntaxNodeKind) : Bool :=
+  let name := toString kind
+  name.startsWith "«term"
+  || match name.splitOn ".«term" with
+      | [_] => false
+      | _ => true
+
+def lexemeEndsWithOpeningDelimiter (lexeme : String) : Bool :=
+  ["(", "[", "{", "⟨", "⟪", "‖"].any fun suffix => lexeme.endsWith suffix
+
+private def sourceTokensAreAdjacent (left right : Token) : Bool :=
+  left.span.start < left.span.stop
+  && right.span.start < right.span.stop
+  && left.span.stop == right.span.start
+
+private def generatedTightPiece?
+    (firstToken lastToken : Option Token) (allowLeading : Bool) (left right : Tree)
+    : Bool :=
+  match directLeafAtomToken? left, right.firstToken?, right.lastToken? with
+  | some left, some rightFirst, some rightLast =>
+      let leading :=
+        allowLeading
+        && firstToken.any (·.span.start == left.span.start)
+        && lexemeEndsWithOpeningDelimiter rightFirst.lexeme
+      let trailing := lastToken.any (·.span.stop == rightLast.span.stop)
+      sourceTokensAreAdjacent left rightFirst && (leading || trailing)
+  | _, _, _ => false
+
+private def generatedLeadingApplicationPiece?
+    (firstToken : Option Token) (left right : Tree)
+    : Bool :=
+  match directLeafAtomToken? left, right with
+  | some left, .node .application _ =>
+      firstToken.any (·.span.start == left.span.start)
+      && right.firstToken?.any fun rightFirst => sourceTokensAreAdjacent left rightFirst
+  | _, _ => false
+
+private def groupGeneratedTightPiece
+    (firstToken : Option Token) (allowLeading : Bool) (left right : Tree)
+    : Tree :=
+  let leading :=
+    allowLeading
+    && (directLeafAtomToken? left).any
+        fun token => firstToken.any (·.span.start == token.span.start)
+  if leading then
+    match right with
+    | .node kind children => .node kind (#[left] ++ children)
+    | _ => .node .suffixGroup #[left, right]
+  else
+    .node .suffixGroup #[left, right]
+
+private def splitGeneratedLeadingApplication? (children : Array Tree)
+    : Option (Array Tree) := do
+  let #[.node .application applicationChildren] :=
+    children.filter fun child => child.firstToken?.isSome | none
+  let prefixTree ← applicationChildren[0]?
+  let operandHead ← applicationChildren[1]?
+  let prefixToken ← directLeafAtomToken? prefixTree
+  let operandToken ← operandHead.firstToken?
+  if !sourceTokensAreAdjacent prefixToken operandToken then
+    none
+  let operandChildren := applicationChildren.extract 1 applicationChildren.size
+  let operand :=
+    if operandChildren.size == 1 then
+      operandHead
+    else
+      .node .application operandChildren
+  some #[prefixTree, operand]
+
+private def regroupGeneratedTightPieces (children : Array Tree) : Array Tree :=
+  let children := (splitGeneratedLeadingApplication? children).getD children
+  let tree := Tree.node (.raw `null) children
+  let firstToken := tree.firstToken?
+  let lastToken := tree.lastToken?
+  let allowLeading := (children.filter fun child => child.firstToken?.isSome).size == 2
+  let rec loop (remaining : List Tree) (result : Array Tree) : Array Tree :=
+    match remaining with
+    | left :: right :: rest =>
+        if generatedLeadingApplicationPiece? firstToken left right then
+          loop (right :: rest) <| result.push left
+        else if generatedTightPiece? firstToken lastToken allowLeading left right then
+          loop rest
+          <| result.push
+          <| groupGeneratedTightPiece firstToken allowLeading left right
+        else
+          loop (right :: rest) <| result.push left
+    | [last] => result.push last
+    | [] => result
+  loop children.toList #[]
+
 def isBinaryInfixRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Bool :=
   let hasLeftOperand := children[0]?.any fun child => child.firstToken?.isSome
   let hasRightOperand := children[2]?.any fun child => child.firstToken?.isSome
@@ -1588,12 +1678,41 @@ partial def flattenDelimitedCollectionChildren (children : Array Tree) : Array T
       | _ => children
   | none => children
 
+private def isDelimitedSequenceKind : NodeKind → Bool
+  | .raw kind | .tactic kind _ _ _ =>
+      kind == `Lean.Parser.Tactic.tacticSeqBracketed
+      || kind == `Lean.Parser.Term.doSeqBracketed
+  | _ => false
+
+private partial def splitLeadingDelimitedSequenceOpener? : Tree → Option (Tree × Tree)
+  | .node kind children =>
+      let contentIndexes :=
+        (List.range children.size).filter
+          fun index => children[index]?.bind Tree.firstToken? |>.isSome
+      if isDelimitedSequenceKind kind then do
+        let openerIndex ← contentIndexes.head?
+        let opener ← children[openerIndex]?
+        if opener.singleToken?.isSome then
+          some (opener, .node kind (children.set! openerIndex .missing))
+        else
+          none
+      else
+        match contentIndexes with
+        | [childIndex] => do
+            let child ← children[childIndex]?
+            let (opener, child) ← splitLeadingDelimitedSequenceOpener? child
+            some (opener, .node kind (children.set! childIndex child))
+        | _ => none
+  | _ => none
+
 private def splitCalcAttachedProof? : Tree → Option (Tree × Tree)
   | .node (.raw kind) #[keyword, body] =>
       if kind == `Lean.Parser.Term.byTactic
           || kind == `Lean.Parser.Term.do
           || kind == `Lean.calc then
-        some (keyword, body)
+        match splitLeadingDelimitedSequenceOpener? body with
+        | some (opener, body) => some (.node .suffixGroup #[keyword, opener], body)
+        | none => some (keyword, body)
       else
         none
   | _ => none
@@ -1785,7 +1904,11 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
               match splitLeadingDeclarationModifiers? tree with
               | some (modifiers, command) =>
                   .node .annotatedDeclaration #[modifiers, command]
-              | none => tree
+              | none =>
+                  if isGeneratedTermKind kind then
+                    .node (.raw kind) (regroupGeneratedTightPieces children)
+                  else
+                    tree
 
 private def nodeKindHasRawKind (expected : SyntaxNodeKind) : NodeKind → Bool
   | .raw kind | .tactic kind _ _ _ => kind == expected

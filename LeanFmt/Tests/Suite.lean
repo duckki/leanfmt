@@ -5535,6 +5535,154 @@ def assertGeneratedPostfixMarkersStayAttached (env : Lean.Environment) : IO Unit
   assertEq "generated parenthesized postfix marker formatting is idempotent"
     parenthesizedResult.formatted parenthesizedFormattedAgain
 
+def assertGeneratedTightNotationPiecesStayAttached (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "syntax:60 \"∫test \" ident \", \" term:60 \" ∂\" term:70 : term\n"
+    ++ "prefix:arg \"#\" => id\n"
+    ++ "prefix:0 \"@@@\" => id\n"
+    ++ "syntax:max \"test{\" term \"}\" : term\n"
+    ++ "syntax:max \"testSet{\" term \" | \" term \"}\" : term\n"
+    ++ "\n"
+    ++ "def tightIntegralSuffix := by\n"
+    ++ "  calc\n"
+    ++ "    left = ∫test x, longFunctionWithEnoughCharacters first second third ∂μ := proof\n"
+    ++ "\n"
+    ++ "def tightIntegralProjectionSuffix := by\n"
+    ++ "  calc\n"
+    ++ "    left = ∫test x, longFunctionWithEnoughCharacters first second third ∂.pi fun i : s => μ i := proof\n"
+    ++ "\n"
+    ++ "def tightGeneratedPrefix := by\n"
+    ++ "  calc\n"
+    ++ "    left = longFunctionWithEnoughCharacters first second third #test{valueWithEnoughCharacters} := proof\n"
+    ++ "\n"
+    ++ "def tightGeneratedApplicationPrefix := @@@longFunctionWithEnoughCharacters first second third fourth fifth sixth seventh\n"
+    ++ "\n"
+    ++ "def tightGeneratedDelimitedPrefix := by\n"
+    ++ "  calc\n"
+    ++ "    left = longFunctionWithEnoughCharacters first second third #testSet{firstValueWithEnoughCharacters |\n"
+    ++ "              secondValueWithEnoughCharacters thirdValueWithEnoughCharacters\n"
+    ++ "              fourthValueWithEnoughCharacters\n"
+    ++ "              } := proof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "generated-tight-notation-pieces.lean" { lineWidth := 70 }
+  assertTrue "generated tight notation does not fall back" (!result.fellBack)
+  assertTextContains "generated integral suffix stays attached" result.formatted "∂μ"
+  assertTextContains "generated projection suffix stays attached" result.formatted "∂.pi"
+  assertTextContains "generated prefix stays attached to its delimited operand"
+    result.formatted "#test{"
+  assertTextLacks "generated integral suffix does not split after its literal"
+    result.formatted "∂\n"
+  assertTextLacks "generated prefix does not split before its operand"
+    result.formatted "#\n"
+  assertTextContains "generated prefix preserves its operand application base"
+    result.formatted
+    ("def tightGeneratedApplicationPrefix :=\n"
+      ++ "  @@@longFunctionWithEnoughCharacters first second third fourth fifth\n"
+      ++ "      sixth seventh\n")
+  assertTextContains
+    "generated delimited prefix keeps its closing delimiter at the term base"
+    result.formatted
+    ("            #testSet{firstValueWithEnoughCharacters |\n"
+      ++ "              secondValueWithEnoughCharacters\n"
+      ++ "                thirdValueWithEnoughCharacters\n"
+      ++ "                fourthValueWithEnoughCharacters\n"
+      ++ "            } :=\n")
+  assertTrue "generated tight notation fits its configured width"
+    (Formatter.linesFit result.formatted 70)
+  assertTrue "generated tight notation preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "generated-tight-notation-pieces-formatted.lean" { lineWidth := 70 }
+  assertEq "generated tight notation formatting is idempotent"
+    result.formatted formattedAgain
+
+def assertDelimitedCalcProofKeepsAttachedOpener (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def delimitedCalcProof {α β : Type} (f : α → β) (p : α → Prop)\n"
+    ++ "    : (Σ y : β, { x : α // f x = y }) = (Σ y : β, { x : α // f x = y }) :=\n"
+    ++ "  calc\n"
+    ++ "    (Σ y : β, { x : α // f x = y })\n"
+    ++ "        = Σ y : β, { x : { x : α // p x } // veryLongFunctionName (f x) x.1 = y } := by\n"
+    ++ "      {\n"
+    ++ "          apply sigmaCongrRight\n"
+    ++ "          intro y\n"
+    ++ "          apply congrArg\n"
+    ++ "          refine veryLongProofFunctionName firstArgument secondArgument ?_\n"
+    ++ "          intro x\n"
+    ++ "          exact veryLongFinalProofTerm firstArgument secondArgument thirdArgument }\n"
+    ++ "    _ = (Σ y : β, { x : α // f x = y }) := finalProof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "delimited-calc-proof-opener.lean" { lineWidth := 100 }
+  assertTrue "delimited calc proof does not fall back" (!result.fellBack)
+  assertTextContains "delimited calc proof keeps its opener with by"
+    result.formatted ":= by {\n      apply sigmaCongrRight"
+  assertTextLacks "delimited calc proof does not detach its opener"
+    result.formatted ":= by\n      {"
+  assertTextLacks "delimited calc proof body does not retain its stale source column"
+    result.formatted "\n          apply sigmaCongrRight"
+  assertTrue "delimited calc proof fits its configured width"
+    (Formatter.linesFit result.formatted 100)
+  assertTrue "delimited calc proof preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "delimited-calc-proof-opener-formatted.lean" { lineWidth := 100 }
+  assertEq "delimited calc proof formatting is idempotent" result.formatted formattedAgain
+
+  let inlineSource :=
+    "theorem inlineDelimitedCalcProof (h : True) : True = True :=\n"
+    ++ "  calc\n"
+    ++ "    True = True := by\n"
+    ++ "      { refine veryLongProofFunctionName firstArgument secondArgument thirdArgument fourthArgument ?_\n"
+    ++ "        exact h }\n"
+  let inlineResult ←
+    Formatter.formatSourceWithEnvDetailed env inlineSource
+      "inline-delimited-calc-proof-opener.lean" { lineWidth := 100 }
+  assertTrue "inline delimited calc proof does not fall back" (!inlineResult.fellBack)
+  assertTextContains "inline delimited calc proof keeps sibling tactics aligned"
+    inlineResult.formatted ":= by {\n      refine veryLongProofFunctionName"
+  assertTextContains
+    "inline delimited calc proof keeps the following tactic at the body base"
+    inlineResult.formatted "\n      exact h }"
+  assertTrue "inline delimited calc proof fits its configured width"
+    (Formatter.linesFit inlineResult.formatted 100)
+  assertTrue "inline delimited calc proof preserves code"
+    (← codePreservedIgnoringWhitespace env inlineSource inlineResult.formatted)
+  let inlineFormattedAgain ←
+    Formatter.formatSourceWithEnv env inlineResult.formatted
+      "inline-delimited-calc-proof-opener-formatted.lean" { lineWidth := 100 }
+  assertEq "inline delimited calc proof formatting is idempotent"
+    inlineResult.formatted inlineFormattedAgain
+
+  let fittingInlineSource :=
+    "theorem fittingInlineDelimitedCalcProof (h : True) : True = True :=\n"
+    ++ "  calc\n"
+    ++ "    True = True := by\n"
+    ++ "      { refine shortProof ?_\n"
+    ++ "        · exact h\n"
+    ++ "        · exact h }\n"
+  let fittingInlineResult ←
+    Formatter.formatSourceWithEnvDetailed env fittingInlineSource
+      "fitting-inline-delimited-calc-proof-opener.lean" { lineWidth := 100 }
+  assertTrue "fitting inline delimited calc proof does not fall back"
+    (!fittingInlineResult.fellBack)
+  assertTextContains
+    "multiline delimited proof starts at its proof-body base even when the first tactic fits"
+    fittingInlineResult.formatted
+    ":= by {\n      refine shortProof ?_\n      · exact h\n      · exact h }"
+  assertTrue "fitting inline delimited calc proof preserves code"
+    (← codePreservedIgnoringWhitespace env fittingInlineSource
+        fittingInlineResult.formatted)
+  let fittingInlineFormattedAgain ←
+    Formatter.formatSourceWithEnv env fittingInlineResult.formatted
+      "fitting-inline-delimited-calc-proof-opener-formatted.lean" { lineWidth := 100 }
+  assertEq "fitting inline delimited calc proof formatting is idempotent"
+    fittingInlineResult.formatted fittingInlineFormattedAgain
+
 def assertNotExistsIdentifiersFlow (env : Lean.Environment) : IO Unit := do
   let source :=
     "assert_not_exists FirstLongDeclarationName SecondLongDeclarationName ThirdLongDeclarationName FourthLongDeclarationName FifthLongDeclarationName\n"
@@ -13282,6 +13430,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertCalcInfixRelationUsesStructuralLayout env
   assertBrokenCalcRelationKeepsProofBodyBase env
   assertLongCalcProofBreaksAfterAssignment env
+  assertDelimitedCalcProofKeepsAttachedOpener env
   assertDetachedCalcUsesRenderedIntroducerBase env
   assertLowPriorityPipeCalcKeepsIndentedOperand env
   assertLowPriorityPipeBoundaryPolicy env
@@ -13295,6 +13444,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertAbsoluteValueDelimitersStayAttached env
   assertSymmetricDelimitersStayAttachedAcrossPasses env
   assertGeneratedPostfixMarkersStayAttached env
+  assertGeneratedTightNotationPiecesStayAttached env
   assertNotExistsIdentifiersFlow env
   assertSignatureParametersUseLeadingSourceBreakAfterFlatFails env
   assertDefinitionSourceBreakAfterAssignOverridesFlat env

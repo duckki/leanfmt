@@ -461,7 +461,7 @@ def suffixKeywordLexeme (lexeme : String) : Bool :=
     ["by", "calc", "do", "from", "where", "with", "deriving", "then", "else"]
 
 def suffixOpeningDelimiterLexeme (lexeme : String) : Bool :=
-  SpaceRules.stringEndsWithAny lexeme ["(", "[", "{", "⟨", "⟪", "‖"]
+  SyntaxTree.lexemeEndsWithOpeningDelimiter lexeme
 
 def treeStartsWithOpeningDelimiter (tree : SyntaxTree.Tree) : Bool :=
   tree.firstToken?.any fun token => suffixOpeningDelimiterLexeme token.lexeme
@@ -2629,14 +2629,10 @@ def indexedTermRule : LineBreakRule :=
     breakPoints := indexedTermBreaks
   }
 
-def isGeneratedTermKind (kind : Lean.SyntaxNodeKind) : Bool :=
-  let name := toString kind
-  name.startsWith "«term" || SpaceRules.containsSubstring name ".«term"
-
 def isGeneratedIndexedPrefixTerm
     (kind : Lean.SyntaxNodeKind) (children : Array SyntaxTree.Tree)
     : Bool :=
-  if !isGeneratedTermKind kind then
+  if !SyntaxTree.isGeneratedTermKind kind then
     false
   else
     let segment := Segment.ofTree (.node (.raw kind) children)
@@ -2653,10 +2649,32 @@ def isGeneratedIndexedPrefixTerm
           | none => false
     | none => false
 
+def isGeneratedSetBuilderTerm
+    (kind : Lean.SyntaxNodeKind) (children : Array SyntaxTree.Tree)
+    : Bool :=
+  if !SyntaxTree.isGeneratedTermKind kind then
+    false
+  else
+    let segment := Segment.ofTree (.node (.raw kind) children)
+    match (nonemptyChildIndexes segment).find?
+            fun index => childAtomLexemeEndsWith segment index "{" with
+    | some openingIndex =>
+        match (nonemptyChildIndexes segment).find?
+                fun index =>
+                  openingIndex < index && childIsAtomLexeme segment index "}" with
+        | some closingIndex =>
+            (nonemptyChildIndexes segment).any
+              fun index =>
+                openingIndex < index
+                && index < closingIndex
+                && childIsAtomLexeme segment index "|"
+        | none => false
+    | none => false
+
 def isSymmetricDelimitedGeneratedTerm
     (kind : Lean.SyntaxNodeKind) (children : Array SyntaxTree.Tree)
     : Bool :=
-  if !isGeneratedTermKind kind then
+  if !SyntaxTree.isGeneratedTermKind kind then
     false
   else
     match (children.filter fun child => child.firstToken?.isSome).toList with
@@ -2671,11 +2689,20 @@ def isSymmetricDelimitedGeneratedTerm
 
 def isGeneratedPostfixTerm (kind : Lean.SyntaxNodeKind) (children : Array SyntaxTree.Tree)
     : Bool :=
-  if !isGeneratedTermKind kind then
+  if !SyntaxTree.isGeneratedTermKind kind then
     false
   else
     match (children.filter fun child => child.firstToken?.isSome).toList with
     | [_, .leaf token] => token.role == .atom
+    | _ => false
+
+def isGeneratedPrefixTerm (kind : Lean.SyntaxNodeKind) (children : Array SyntaxTree.Tree)
+    : Bool :=
+  if !SyntaxTree.isGeneratedTermKind kind then
+    false
+  else
+    match (children.filter fun child => child.firstToken?.isSome).toList with
+    | [prefixTree, _] => SyntaxTree.directLeafAtom? prefixTree
     | _ => false
 
 def isGeneratedLocalNotationKind (kind : Lean.SyntaxNodeKind) : Bool :=
@@ -4451,9 +4478,13 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw kind) children =>
       if isGeneratedIndexedPrefixTerm kind children then
         some indexedTermRule
+      else if isGeneratedSetBuilderTerm kind children then
+        some setBuilderRule
       else if isSymmetricDelimitedGeneratedTerm kind children
               || isGeneratedPostfixTerm kind children then
         some transparentRule
+      else if isGeneratedPrefixTerm kind children then
+        some unaryPrefixRule
       else if children.back?.any
                 fun child =>
                   match child with
