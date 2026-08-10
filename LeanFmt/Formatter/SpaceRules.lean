@@ -186,6 +186,69 @@ def reindentCommentLines (indent : String) : Nat → Nat → List String → Lis
       let blockSourceIndent := if blockCommentDepth == 0 then 0 else blockSourceIndent
       adjusted :: reindentCommentLines indent blockCommentDepth blockSourceIndent rest
 
+def reindentBoundaryCommentLines (commentIndent followingIndent : String)
+    : Nat → Nat → Nat → Bool → Bool → Bool → List String → List String
+  | _, _, _, _, _, _, [] => []
+  | blockCommentDepth,
+    blockSourceIndent,
+    blockTargetIndent,
+    useFollowingIndent,
+    seenComment,
+    sawBlank,
+    line :: rest =>
+      let stripped := stripLeadingHorizontalWhitespace line
+      if 0 < blockCommentDepth then
+        let adjusted := shiftCommentLineIndent blockSourceIndent blockTargetIndent line
+        let nextDepth := blockCommentDepthAfterLine blockCommentDepth line
+        adjusted
+        :: reindentBoundaryCommentLines commentIndent followingIndent nextDepth
+            blockSourceIndent blockTargetIndent useFollowingIndent seenComment sawBlank
+            rest
+      else
+        let startsComment := stripped.startsWith "--" || stripped.startsWith "/-"
+        let useFollowingIndent :=
+          useFollowingIndent || (startsComment && seenComment && sawBlank)
+        let indent := if useFollowingIndent then followingIndent else commentIndent
+        let adjusted :=
+          if rest.isEmpty && stripped.isEmpty then
+            indent
+          else
+            reindentCommentLine 0 line indent
+        let nextDepth := blockCommentDepthAfterLine 0 line
+        let blockSourceIndent :=
+          if startsComment && 0 < nextDepth then line.length - stripped.length else 0
+        let seenComment := seenComment || startsComment
+        let sawBlank :=
+          if stripped.isEmpty then
+            sawBlank || seenComment
+          else if startsComment then
+            false
+          else
+            sawBlank
+        adjusted
+        :: reindentBoundaryCommentLines commentIndent followingIndent nextDepth
+            blockSourceIndent indent.length useFollowingIndent seenComment sawBlank rest
+
+def reindentCommentTriviaWithFollowingGroup (text commentIndent followingIndent : String)
+    : String :=
+  match (cleanTrivia text).splitOn "\n" with
+  | [] => ""
+  | firstLine :: rest =>
+      let strippedFirst := stripLeadingHorizontalWhitespace firstLine
+      let firstStartsComment :=
+        strippedFirst.startsWith "--" || strippedFirst.startsWith "/-"
+      let firstBlockDepth := blockCommentDepthAfterLine 0 firstLine
+      let firstBlockSourceIndent :=
+        if firstStartsComment && 0 < firstBlockDepth then
+          firstLine.length - strippedFirst.length
+        else
+          0
+      String.intercalate "\n"
+      <| firstLine
+          :: reindentBoundaryCommentLines commentIndent followingIndent firstBlockDepth
+              firstBlockSourceIndent commentIndent.length false firstStartsComment false
+              rest
+
 def reindentCommentTrivia (text indent : String) : String :=
   match (cleanTrivia text).splitOn "\n" with
   | [] => ""
@@ -201,6 +264,25 @@ def reindentCommentTrivia (text indent : String) : String :=
           :: reindentCommentLines indent
               (blockCommentDepthAfterLine 0 firstLine)
               firstBlockSourceIndent rest
+
+def commentTriviaHasSeparatedGroups (text : String) : Bool :=
+  let rec loop (blockCommentDepth : Nat) (seenComment sawBlank : Bool)
+      : List String → Bool
+    | [] => false
+    | line :: rest =>
+        let stripped := stripLeadingHorizontalWhitespace line
+        let nextBlockCommentDepth := blockCommentDepthAfterLine blockCommentDepth line
+        if blockCommentDepth == 0 && stripped.isEmpty then
+          loop nextBlockCommentDepth seenComment (sawBlank || seenComment) rest
+        else if blockCommentDepth == 0
+                && (stripped.startsWith "--" || stripped.startsWith "/-") then
+          if seenComment && sawBlank then
+            true
+          else
+            loop nextBlockCommentDepth true false rest
+        else
+          loop nextBlockCommentDepth seenComment sawBlank rest
+  loop 0 false false <| (normalizeLineEndings text).splitOn "\n"
 
 def reindentableCommentWidth (text : String) : Nat :=
   let rec loop (blockCommentDepth maximum : Nat) : List String → Nat
@@ -262,7 +344,11 @@ def standaloneSourceCommentIndent? (text : String) : Option Nat :=
 
 def commentTriviaForBreakWithFollowingIndent (text commentIndent followingIndent : String)
     : String :=
-  let adjusted := reindentCommentTrivia text commentIndent
+  let adjusted :=
+    if commentIndent == followingIndent || !commentTriviaHasSeparatedGroups text then
+      reindentCommentTrivia text commentIndent
+    else
+      reindentCommentTriviaWithFollowingGroup text commentIndent followingIndent
   match (normalizeLineEndings adjusted).splitOn "\n" |>.reverse with
   | lastLine :: rest =>
       if (stripLeadingHorizontalWhitespace lastLine).isEmpty then

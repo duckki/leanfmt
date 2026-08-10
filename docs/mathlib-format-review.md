@@ -13,7 +13,8 @@ surrounding shape and starting indentation are correct.
 
 ### Final initial-release checkpoint
 
-**Status: implementation complete; one final validation remains.**
+**Status: the focused comment-ownership checkpoint passed the complete final
+validation; this candidate is ready for the initial release.**
 
 Commit `13e7968` is the structural calc baseline. The final candidate fixes the
 two blocker families found during its Mathlib review: source-tight generated
@@ -22,24 +23,24 @@ opener, body, and closer must move coherently. The fixes use syntax regrouping,
 existing line-break rules, and original-tree ownership. They add no renderer
 syntax checks, specialized calc rule, token exception, or new rule API.
 
-That candidate passed the complete local, GraphQL, quantum, and exact Mathlib
-`v4.32.0` gates, including all 83 formatter batches and a complete post-format
-build. Independent review found no remaining blocker in either target family.
-It did find that an ordinary unary-prefix application had lost its operand's
-structural base: the unary-prefix fixture changed a wrapped argument from six
-spaces to four, and generated prefixes had the same latent problem. The current
-tree separates a source-tight generated prefix atom from an ordinary application
-operand, dispatches the existing unary-prefix rule, and folds the atom into the
-operand only for opening-delimited notation. The original unary-prefix fixture
-is restored, a user-defined `prefix:0` reproduction passes, `lake test` passes,
-and regenerating every fixture produces no diff against `HEAD`.
+Commit `906e73b` is the preceding exact candidate. The focused release candidate
+adds generic source-comment ownership and boundary emission: comments at or
+shallower than the following source token follow that token; a trailing comment
+group ending before a blank stays with the preceding body; and blank-separated
+comment groups split ownership at the existing blank. The renderer uses those
+source boundaries without adding comments or breaks to the syntax tree, and the
+spacing layer rebases complete comment groups while preserving multiline block
+comment interiors. No syntax-specific comment exception or new rule API was
+added.
 
-Because this correction changes syntax regrouping and line-break dispatch after
-the last external run, the exact current tree is not release-ready until one
-last complete validation. Minor pre-existing visual imperfections may remain
-deferred; exceptions, non-idempotence, code changes, actionable overflow, build
-failures, performance regressions, and candidate-induced structural layout
-errors still block the initial release.
+The final candidate passed the complete local, GraphQL, quantum, and exact
+Mathlib `v4.32.0` gates. Relative to the preceding archived Mathlib tree, its
+17-file delta consists of the two already-approved `∏ᶜ fun` corrections and 15
+comment-ownership corrections. Independent review found every final hunk sound,
+including proof-, field-, branch-, notation-, and following-command ownership.
+Minor high-risk imperfections listed below remain deferred; exceptions,
+non-idempotence, code changes, actionable overflow, build failures, and
+performance regressions are all clear.
 
 ### Remaining issue queue
 
@@ -56,20 +57,20 @@ errors still block the initial release.
 
 ### Release TODO
 
-1. Run the complete local gate on the current generated-prefix correction,
-   including lint, self-formatting, all fixture checks, preservation, missing
-   rules, fallback, idempotency, and `git diff --check`.
-2. Validate fresh GraphQL and quantum outputs with automatic worker counts.
-   Review formatting changes and compare phase timings with the preceding run.
-3. Run all 83 formatter batches on exact Mathlib `v4.32.0` at width 100, only
-   `Mathlib`, using the Lake cache and no pre-format build. Run the complete
-   post-format build.
-4. Review the isolated final delta, with particular attention to ordinary and
-   generated unary prefixes, `∂μ`, `∂.pi`, `#{...}`, and delimited calc proofs.
-   Use independent reviewers after the clean build.
-5. Record the final timings, diff digest, and findings here. If no blocker or
-   performance regression appears, the candidate is ready for the initial
-   release commit and tag.
+1. Complete: the exact `906e73b` local gate passed lint, self-formatting, every
+   fixture check, preservation, missing rules, fallback, idempotency, and
+   `git diff --check`.
+2. Complete: fresh GraphQL and quantum validation passed with automatic worker
+   counts, clean diagnostics, reviewed output, and successful final builds.
+3. Complete: exact Mathlib `v4.32.0` passed all 83 width-100 `Mathlib` batches
+   using the Lake cache and passed the complete post-format build.
+4. Complete: independent reviewers checked generated prefixes, delimited proofs,
+   calc layout, comments, and broad external output. The intended final delta is
+   sound.
+5. Complete: focused reproductions cover trailing body comments, declaration-
+   leading comments, blank-separated ownership groups, declaration-result
+   continuations, multiline block comments, preservation, and idempotency. The
+   generalized fix uses existing APIs and passed another complete validation.
 
 ### Accepted output
 
@@ -156,6 +157,100 @@ the next bounded step here before committing.
 Entries are ordered newest first. They record what changed and the validation
 evidence available at that checkpoint; open work is maintained only in the
 queue above.
+
+### 2026-08-10: Focused comment ownership release checkpoint
+
+The final candidate generalizes source-comment ownership without changing the
+syntax tree or adding a rule API. A comment group ending before a blank remains
+owned by the preceding body; a later blank-separated group follows the next
+tree; comments moved beside a suffix use the following tree's source and output
+bases; and multiline block-comment interiors remain anchored to their opener.
+Focused tests cover trailing structure, proof, and command comments, split
+ownership groups, proof-step and declaration-body leading comments, long and
+multiline declaration-result comments, code preservation, fallback, and
+idempotency. One intermediate whole-corpus run exposed an over-broad blank-line
+placement; focused tests captured its governing shape, and the final generic
+boundary correction removed all four reviewed regressions.
+
+The complete local release gate passed: both builds and tests, the development
+linter, fixture regeneration and dry checking, self-formatting, code
+preservation, actionable overflow, missing-rule, fallback, idempotency, and
+`git diff --check` were clean. Fresh GraphQL and quantum runs used automatic
+workers and no `--jobs`. GraphQL's initial build, three formatter batches, and
+final build took 81, 16/11/6, and 0 seconds. Quantum restored its cache in 13
+seconds; its initial build, formatter batch, and final build took 36, 11, and 2
+seconds. The combined run took 259 seconds. Both formatted Lean trees were
+byte-identical to their preceding validated outputs.
+
+The definitive Mathlib run used exact `v4.32.0` commit
+`81a5d257c8e410db227a6665ed08f64fea08e997`, width 100, only the 8,264 tracked
+files under `Mathlib`, the Lake cache, and automatic formatter workers. Cache
+restoration took 28 seconds. All 83 batches passed preservation,
+actionable-overflow, missing-rule, fallback, and idempotency checks. The complete
+8,654-job post-format build passed in 3,215 seconds; total validation took 5,889
+seconds. This is slightly faster than the preceding 3,288/5,982-second full run,
+and the known heavy formatter batches stayed within their prior timing ranges.
+
+The final Mathlib tree changes 7,552 files by 336,385 insertions and 295,058
+deletions relative to pristine Mathlib. Relative to the archived preceding
+formatted tree, exactly 17 files change: two retain the approved `∏ᶜ fun`
+attachment and 15 correct generic comment ownership. Review confirmed trailing
+proof and structure comments stay in their bodies, blank-separated leading
+comments stay attached to following commands, branch comments use their branch
+bases, and no source-authored blank is duplicated. Formatter-created long-line
+and long-file warnings remain accepted only where the surrounding shape and
+starting indentation are sound. This checkpoint has no remaining initial-release
+blocker.
+
+### 2026-08-10: Exact final-candidate validation
+
+Commit `906e73b` (`Preserve generated notation and delimited proofs`) passed the
+complete local release gate. Builds, tests, the development linter, fixture
+regeneration and dry checking, self-formatting, code preservation, actionable
+overflow, missing-rule, fallback, idempotency, and `git diff --check` were all
+clean. The only self-format change was a mechanical wrap in
+`LeanFmt/SyntaxTree.lean`, folded into the candidate before the final gate.
+
+Fresh GraphQL and quantum runs used automatic formatter workers and no `--jobs`
+option. GraphQL's initial build, three formatter batches, and final build took
+96, 18/12/7, and 0 seconds, with no source delta. Quantum restored its cache in
+13 seconds; its initial build, formatter batch, and final build took 38, 12, and
+15 seconds. Its reviewed five-file delta remained the previously accepted calc
+alignment change. Every diagnostic and both final builds passed; the combined
+external run took 297 seconds.
+
+The definitive Mathlib run used exact `v4.32.0` commit
+`81a5d257c8e410db227a6665ed08f64fea08e997`, width 100, only the 8,264 tracked
+files under `Mathlib`, the Lake cache, and automatic formatter workers. Cache
+restoration took 30 seconds. All 83 formatter batches passed preservation,
+actionable-overflow, missing-rule, fallback, and idempotency checks. The full
+8,654-job post-format build passed in 3,206 seconds; total validation took 6,390
+seconds. Formatter-created long-line and long-file warnings were accepted only
+where the surrounding shape and starting indentation were sound.
+
+The final Mathlib tree changes 7,553 files by 336,406 insertions and 295,077
+deletions. Its 66,654,312-byte diff has SHA-256 digest
+`97485be2b6276807b513b39a92276885a6f771bee6f25e6a03e29d57035480da`.
+Relative to the immediately preceding validated tree, only
+`CategoryTheory/Sites/EqualizerSheafCondition.lean` and
+`CategoryTheory/Sites/Sheaf.lean` change: each replaces a premature break after
+`∏ᶜ` with the structurally correct `∏ᶜ fun` attachment.
+
+Loaded-run timing outliers in batches 13, 22, 47, 51, and 68 were replayed at
+77, 95, 96, 73, and 81 seconds, compared with 82, 102, 113, 84, and 94 seconds
+during the full run. A controlled same-files A/B for batch 13 took 77 seconds on
+`906e73b` and 77.47 seconds on parent `13e7968`. The final checkpoint therefore
+adds no measurable formatter cost; the wider variation is host scheduling and
+batch composition rather than a candidate-induced performance regression.
+
+Three independent read-only reviews found the generated notation, ordinary
+prefixes, delimited proof bodies, calc layout, GraphQL output, and quantum output
+sound. The broad review reconfirmed the high-risk deferred families already in
+the queue. A focused proof/comment review found the generic comment-ownership
+family now placed first in the queue: continuations after line comments and
+trailing comments inside bodies can lose their body indentation. The validated
+candidate is clean on diagnostics, builds, intended output, and performance,
+but the release tag waits for that one generalized consistency fix.
 
 ### 2026-08-09: Final blocker fixes awaiting one validation rerun
 

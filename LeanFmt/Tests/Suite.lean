@@ -638,11 +638,124 @@ def assertStandaloneCommentsFollowLayoutOwnership (env : Lean.Environment) : IO 
   assertEq "comments aligned with a following peer use that peer's indentation"
     peerExpected peerFormatted
 
+  let trailingStructureCommentSource :=
+    "class StructureWithTrailingComment where\n"
+    ++ "  value : Nat\n"
+    ++ "  -- This is mathematically equivalent to either of the coercions to functions being injective, but\n"
+    ++ "  -- the second hypothesis makes this easier to prove with a congruence lemma\n"
+    ++ "\n"
+    ++ "namespace StructureWithTrailingComment\n"
+    ++ "\n"
+    ++ "end StructureWithTrailingComment\n"
+  let trailingStructureCommentResult ←
+    Formatter.formatSourceWithEnvDetailed env trailingStructureCommentSource
+      "trailing-structure-comment.lean" { lineWidth := 100 }
+  assertTrue "a trailing structure comment does not fall back"
+    (!trailingStructureCommentResult.fellBack)
+  assertEq "a trailing structure comment keeps the structure body's indentation"
+    trailingStructureCommentSource trailingStructureCommentResult.formatted
+
+  let extensionProofCommentSource :=
+    "macro \"finish_true_before_comment\" : tactic => `(tactic| trivial)\n"
+    ++ "\n"
+    ++ "theorem extensionProofWithClosingComment : True := by\n"
+    ++ "  finish_true_before_comment\n"
+    ++ "      -- This comment remains inside the proof body.\n"
+    ++ "\n"
+    ++ "-- This comment introduces the following theorem.\n"
+    ++ "theorem afterExtensionProofComment : True := by\n"
+    ++ "  trivial\n"
+  let extensionProofCommentResult ←
+    Formatter.formatSourceWithEnvDetailed env extensionProofCommentSource
+      "extension-closing-proof-comment.lean"
+  assertTrue "a trailing extension proof comment does not fall back"
+    (!extensionProofCommentResult.fellBack)
+  assertTextContains
+    "a trailing extension proof comment uses the proof body's indentation"
+    extensionProofCommentResult.formatted
+    "  -- This comment remains inside the proof body.\n\n-- This comment introduces the following theorem.\n"
+  assertTextLacks "a trailing extension proof comment does not escape to the command base"
+    extensionProofCommentResult.formatted
+    "\n-- This comment remains inside the proof body.\n"
+  assertTextLacks "a following declaration comment stays attached to its declaration"
+    extensionProofCommentResult.formatted
+    "-- This comment introduces the following theorem.\n\ntheorem afterExtensionProofComment"
+  assertTrue "a trailing extension proof comment preserves code"
+    (← codePreservedIgnoringWhitespace env extensionProofCommentSource
+        extensionProofCommentResult.formatted)
+  let extensionProofCommentAgain ←
+    Formatter.formatSourceWithEnv env extensionProofCommentResult.formatted
+      "extension-closing-proof-comment-formatted.lean"
+  assertEq "a trailing extension proof comment is idempotent"
+    extensionProofCommentResult.formatted extensionProofCommentAgain
+
+  let trailingCommandCommentSource :=
+    "theorem commandWithTrailingComment : True := by\n"
+    ++ "  trivial\n"
+    ++ "-- This comment explains the preceding theorem.\n"
+    ++ "\n"
+    ++ "theorem afterTrailingCommandComment : True := by\n"
+    ++ "  trivial\n"
+  let trailingCommandCommentFormatted ←
+    Formatter.formatSourceWithEnv env trailingCommandCommentSource
+      "trailing-command-comment.lean"
+  assertEq "a command-level trailing comment keeps the following blank line"
+    trailingCommandCommentSource trailingCommandCommentFormatted
+
+  let leadingProofStepCommentSource :=
+    "def proofCommentOuter (_ : Nat) (f : Unit → True) : True := f ()\n"
+    ++ "\n"
+    ++ "theorem proofStepLeadingComment : True :=\n"
+    ++ "    proofCommentOuter 0 fun _ => by\n"
+    ++ "    let value := 0\n"
+    ++ "    -- This comment introduces the next proof step.\n"
+    ++ "    exact True.intro\n"
+  let leadingProofStepCommentExpected :=
+    "def proofCommentOuter (_ : Nat) (f : Unit → True) : True := f ()\n"
+    ++ "\n"
+    ++ "theorem proofStepLeadingComment : True :=\n"
+    ++ "  proofCommentOuter 0\n"
+    ++ "    fun _ => by\n"
+    ++ "      let value := 0\n"
+    ++ "      -- This comment introduces the next proof step.\n"
+    ++ "      exact True.intro\n"
+  let leadingProofStepCommentFormatted ←
+    Formatter.formatSourceWithEnv env leadingProofStepCommentSource
+      "proof-step-leading-comment.lean"
+  assertEq "a proof-step comment follows the next step's indentation"
+    leadingProofStepCommentExpected leadingProofStepCommentFormatted
+
+  let leadingDeclarationBodyCommentSource :=
+    "theorem declarationBodyLeadingComment : True :=\n"
+    ++ "  -- This comment introduces the declaration body.\n"
+    ++ "    by\n"
+    ++ "      trivial\n"
+  let leadingDeclarationBodyCommentExpected :=
+    "theorem declarationBodyLeadingComment : True :=\n"
+    ++ "  -- This comment introduces the declaration body.\n"
+    ++ "  by\n"
+    ++ "    trivial\n"
+  let leadingDeclarationBodyCommentFormatted ←
+    Formatter.formatSourceWithEnv env leadingDeclarationBodyCommentSource
+      "declaration-body-leading-comment.lean"
+  assertEq "a declaration-body comment follows the body indentation"
+    leadingDeclarationBodyCommentExpected leadingDeclarationBodyCommentFormatted
+
   for (name, source, formatted)
       in #[
         ("closing proof comment", proofCommentSource, proofCommentFormatted),
         ("leading declaration comment", nextDeclarationSource, nextDeclarationFormatted),
-        ("peer comments", peerSource, peerFormatted)
+        ("peer comments", peerSource, peerFormatted),
+        (
+          "trailing structure comment",
+          trailingStructureCommentSource,
+          trailingStructureCommentResult.formatted
+        ),
+        (
+          "trailing command comment",
+          trailingCommandCommentSource,
+          trailingCommandCommentFormatted
+        )
       ] do
     assertTrue s!"{name} preserves code"
       (← codePreservedIgnoringWhitespace env source formatted)
@@ -6627,6 +6740,85 @@ def assertDeclarationColonBeforeDetachedResultComment (env : Lean.Environment)
       "declaration-colon-continued-result-comment-formatted.lean"
   assertEq "continued declaration result comment is idempotent"
     continuedFormatted continuedAgain
+  let longContinuedSource :=
+    "theorem declarationColonWithLongContinuedResultComment\n"
+    ++ "    (argument : VeryLongArgumentTypeWithEnoughCharactersForLayoutTesting) :\n"
+    ++ "    -- First result comment with enough text to exercise the moved declaration boundary.\n"
+    ++ "            -- Authored continuation remains relative to the result body's base indentation.\n"
+    ++ "    True := by\n"
+    ++ "  trivial\n"
+  let longContinuedExpected :=
+    "theorem declarationColonWithLongContinuedResultComment\n"
+    ++ "    (argument : VeryLongArgumentTypeWithEnoughCharactersForLayoutTesting)\n"
+    ++ "    : -- First result comment with enough text to exercise the moved declaration boundary.\n"
+    ++ "              -- Authored continuation remains relative to the result body's base indentation.\n"
+    ++ "      True := by\n"
+    ++ "  trivial\n"
+  let longContinuedFormatted ←
+    Formatter.formatSourceWithEnv env longContinuedSource
+      "declaration-colon-long-continued-result-comment.lean" { lineWidth := 100 }
+  assertEq "long declaration result comment continuations keep the result body's base"
+    longContinuedExpected longContinuedFormatted
+  let longContinuedAgain ←
+    Formatter.formatSourceWithEnv env longContinuedFormatted
+      "declaration-colon-long-continued-result-comment-formatted.lean"
+      { lineWidth := 100 }
+  assertEq "long continued declaration result comment is idempotent"
+    longContinuedFormatted longContinuedAgain
+  let multilineBodySource :=
+    "theorem declarationColonWithMultilineBodyComment (h : True) :\n"
+    ++ "    -- First result comment before a multiline result body.\n"
+    ++ "            -- Authored continuation remains relative to the result body's base indentation.\n"
+    ++ "    haveI : Inhabited Nat := ⟨0⟩\n"
+    ++ "    veryLongFunctionNameForResultComment firstArgumentName secondArgumentName\n"
+    ++ "      = anotherVeryLongFunctionNameForResultComment firstArgumentName secondArgumentName := by\n"
+    ++ "  exact h\n"
+  let multilineBodyResult ←
+    Formatter.formatSourceWithEnvDetailed env multilineBodySource
+      "declaration-colon-multiline-body-comment.lean" { lineWidth := 100 }
+  assertTrue "a commented multiline declaration result does not fall back"
+    (!multilineBodyResult.fellBack)
+  assertTextContains "a multiline declaration result keeps the comment continuation base"
+    multilineBodyResult.formatted
+    "\n              -- Authored continuation remains relative to the result body's base indentation.\n"
+  assertTextLacks "a multiline declaration result comment does not escape to column one"
+    multilineBodyResult.formatted
+    "\n-- Authored continuation remains relative to the result body's base indentation.\n"
+  assertTrue "a commented multiline declaration result preserves code"
+    (← codePreservedIgnoringWhitespace env multilineBodySource
+        multilineBodyResult.formatted)
+  let multilineBodyAgain ←
+    Formatter.formatSourceWithEnv env multilineBodyResult.formatted
+      "declaration-colon-multiline-body-comment-formatted.lean" { lineWidth := 100 }
+  assertEq "a commented multiline declaration result is idempotent"
+    multilineBodyResult.formatted multilineBodyAgain
+  let wrappedResultSource :=
+    "theorem wrappedResultWithInlineComment\n"
+    ++ "    (firstArgument : VeryLongArgumentTypeWithEnoughCharactersForLayoutTesting)\n"
+    ++ "    (secondArgument : AnotherLongArgumentTypeWithEnoughCharactersForLayoutTesting) : -- First result comment attached after the distant colon.\n"
+    ++ "            -- Authored continuation remains relative to the result body's base indentation.\n"
+    ++ "    haveI : Inhabited Nat := ⟨0⟩\n"
+    ++ "    True := by\n"
+    ++ "  trivial\n"
+  let wrappedResult ←
+    Formatter.formatSourceWithEnvDetailed env wrappedResultSource
+      "declaration-colon-wrapped-multiline-result-comment.lean" { lineWidth := 100 }
+  assertTrue "a wrapped declaration result does not fall back" (!wrappedResult.fellBack)
+  assertTextContains
+    "a wrapped declaration result keeps the continued comment with its body"
+    wrappedResult.formatted
+    "\n              -- Authored continuation remains relative to the result body's base indentation.\n"
+  assertTextLacks "a wrapped declaration result comment does not escape to column one"
+    wrappedResult.formatted
+    "\n-- Authored continuation remains relative to the result body's base indentation.\n"
+  assertTrue "a wrapped declaration result preserves code"
+    (← codePreservedIgnoringWhitespace env wrappedResultSource wrappedResult.formatted)
+  let wrappedResultAgain ←
+    Formatter.formatSourceWithEnv env wrappedResult.formatted
+      "declaration-colon-wrapped-multiline-result-comment-formatted.lean"
+      { lineWidth := 100 }
+  assertEq "a wrapped declaration result is idempotent"
+    wrappedResult.formatted wrappedResultAgain
 
 def assertDeclarationColonKeepsAttachedResultComment (env : Lean.Environment)
     : IO Unit := do

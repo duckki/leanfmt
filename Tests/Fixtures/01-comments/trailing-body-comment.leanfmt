@@ -1,0 +1,19 @@
+class StructureWithTrailingComment where
+  value : Nat
+  -- This is mathematically equivalent to either of the coercions to functions being injective, but
+  -- the second hypothesis makes this easier to prove with a congruence lemma
+
+namespace StructureWithTrailingComment
+
+end StructureWithTrailingComment
+-----------------------------------------------------------------------------------------
+-- leanfmt: expected output below (DO NOT EDIT)
+-----------------------------------------------------------------------------------------
+class StructureWithTrailingComment where
+  value : Nat
+  -- This is mathematically equivalent to either of the coercions to functions being injective, but
+  -- the second hypothesis makes this easier to prove with a congruence lemma
+
+namespace StructureWithTrailingComment
+
+end StructureWithTrailingComment
