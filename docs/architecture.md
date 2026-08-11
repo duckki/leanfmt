@@ -702,7 +702,9 @@ Rules and regroupings should preserve these cross-syntax relationships:
   continuations by the difference between the comment opener's source and rendered
   columns, and separately applies the tree indentation to the token after the comment.
   A later comment aligned with that following token moves with the following tree;
-  an authored continuation aligned relative to the opening comment keeps that relation.
+  an authored continuation keeps that relation. A later line authored immediately one
+  column left of the opener is treated as aligned and clamped to the rendered opener;
+  a more distant line retains its distinct relative offset.
   A flow parent cannot flatten away this physical break.
 - Line comments force the token after the comment onto a new line, but may remain
   attached to preceding code while that complete line fits. Block comments force a
@@ -873,6 +875,10 @@ renderer state. When the renderer reaches a recognized proof or attribute node, 
 applies that plan. If the renderer has already formatted the boundary before an island,
 that boundary's output column is final; original-tree emission rebases only the island's
 source slice and must not apply the source-to-output shift to the boundary again.
+A following standalone comment at or above the next source token's indentation follows
+that token. When an island's policy preserves following-comment ownership, a comment
+deeper than the next token retains the same relative depth as both move; no blank-line
+exception is needed to establish that source nesting.
 A multiline syntax-owned module or declaration comment stores part of its text inside a
 token rather than trivia. Original-tree emission treats the complete comment source slice
 as one layout island. Its first physical line uses the formatted opening anchor. Later

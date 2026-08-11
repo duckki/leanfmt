@@ -250,6 +250,14 @@ the configured width. The formatter may break the surrounding construct at its
 ordinary structural boundaries, but it does not turn the comment into a
 standalone comment.
 
+Consecutive line comments attached to trailing code move as one comment group.
+Later lines retain their authored offset from the first comment opener. A line
+authored immediately one column left of that opener is treated as aligned and
+cannot rebase to its left; a more distant line keeps its distinct offset. A
+standalone comment after a protected proof body follows its source nesting: a
+comment deeper than the next peer remains in the proof body, while a comment at
+the peer's indentation follows the peer.
+
 Comment contents are not wrapped or rewritten. Module and declaration documentation
 comments retain their line shape and their exact internal whitespace relative to the
 opening delimiter.

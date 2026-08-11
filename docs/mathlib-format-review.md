@@ -14,7 +14,9 @@ surrounding shape and starting indentation are correct.
 ### Final initial-release checkpoint
 
 **Status: the focused comment-ownership checkpoint passed the complete final
-validation; this candidate is ready for the initial release.**
+validation; the follow-up source-comment rebasing checkpoint also passed the
+complete local and external gates. This candidate remains ready for the initial
+release.**
 
 Commit `13e7968` is the structural calc baseline. The final candidate fixes the
 two blocker families found during its Mathlib review: source-tight generated
@@ -44,16 +46,38 @@ performance regressions are all clear.
 
 ### Remaining issue queue
 
-| Family | Representative evidence | Intended owner | Risk | Order |
+The queue is grouped by the formatter boundary that should own a clean fix. Items
+inside one group may share investigation and validation, but they remain separate
+policies when one concerns ownership and another concerns rebasing.
+
+#### Protected original-layout rebasing
+
+**Next bounded checkpoint:** investigate protected islands that move without a
+usable parent boundary. First determine whether the `fun`, quotation, and
+parenthesized-body examples share one missing structural anchor. Fix only that
+anchor relation if it generalizes cleanly; keep protected branch nesting and
+`where` field bodies separate unless the same relation explains them. Stop for
+design review if the fix would require syntax recognition in the renderer, a
+new rule API, or token-specific exceptions.
+
+| Symptom | Representative evidence | Governing question | Risk | Order |
 | --- | --- | --- | --- | --- |
-| A line comment between a calc proof and the following row can move from the proof indentation to the row indentation | `Mathlib/Analysis/Normed/Field/Approximation.lean` | Generic source-comment ownership and original-tree emission | High | Defer unless the release audit finds a regression |
-| A moved `fun`, quotation, or parenthesized protected body without a usable parent boundary retains a stale column | `Mathlib/Analysis/BoxIntegral/Partition/Split.lean:155`; `Mathlib/AlgebraicGeometry/Gluing.lean:644`; `Mathlib/Data/Nat/Bitwise.lean:260`; `Mathlib/RingTheory/WittVector/Basic.lean:85`; `Mathlib/Tactic/MinImports.lean:170`; `Mathlib/MeasureTheory/Integral/CurveIntegral/Basic.lean:253`; `Mathlib/Probability/Kernel/IonescuTulcea/Traj.lean:746` | Syntax grouping and original-tree planning | High | Post-release checkpoint |
-| Peer application, declaration-field, or `calc` continuations disagree on their shared base | `Mathlib/Geometry/Manifold/MFDeriv/SpecificFunctions.lean:277`; `Mathlib/Algebra/Order/Monoid/Defs.lean:28`; `Mathlib/Analysis/InnerProductSpace/Projection/Basic.lean:362` | Syntax grouping, line-break rules, and renderer continuation bases | High | Separate checkpoint |
-| A protected branch or source-preserved elimination body remains aligned with its header | `Mathlib/Algebra/BigOperators/Fin.lean:632`; `Mathlib/Data/ENat/Lattice.lean:139`; `Mathlib/Analysis/Meromorphic/Order.lean:198` | Tactic ownership and protected-body rebasing | High | Separate checkpoint |
-| A source-preserved line-comment continuation can detach from its first physical line | `Mathlib/Algebra/ContinuedFractions/Computation/Basic.lean:193` | Original-tree source slices and generic comment-boundary handling | Medium | Separate checkpoint |
-| A proof-bearing structure-valued `where` can retain a stale leading boundary | `Mathlib/CategoryTheory/Abelian/Injective/Resolution.lean:327` | Original-tree classification and layout planning | Medium | Separate checkpoint |
-| Mathlib `lemma` equation arms in a `mutual` block can use the wrong command base | `Mathlib/AlgebraicGeometry/Morphisms/ChevalleyComplexity.lean:624` | Syntax grouping and original-tree ownership | High | Separate checkpoint |
-| Inline record and attribute children can inherit the opener's source column | `Mathlib/Lean/Meta/RefinedDiscrTree/Basic.lean:169`; `Mathlib/Algebra/Group/Submonoid/Membership.lean:553` | Syntax grouping and continuation-base planning | High | Separate checkpoint |
+| A moved `fun`, quotation, or parenthesized protected body without a usable parent boundary retains a stale column | `Mathlib/Analysis/BoxIntegral/Partition/Split.lean:155`; `Mathlib/AlgebraicGeometry/Gluing.lean:644`; `Mathlib/Data/Nat/Bitwise.lean:260`; `Mathlib/RingTheory/WittVector/Basic.lean:85`; `Mathlib/Tactic/MinImports.lean:170`; `Mathlib/MeasureTheory/Integral/CurveIntegral/Basic.lean:253`; `Mathlib/Probability/Kernel/IonescuTulcea/Traj.lean:746` | Which structural anchor a moved protected island inherits | High | Later checkpoint |
+| A protected branch or source-preserved elimination body remains aligned with its header | `Mathlib/Algebra/BigOperators/Fin.lean:632`; `Mathlib/Data/ENat/Lattice.lean:139`; `Mathlib/Analysis/Meromorphic/Order.lean:198` | Whether the protected body owns a nested base below its header | High | Later checkpoint |
+| A proof-bearing structure-valued `where` can retain a stale leading boundary | `Mathlib/CategoryTheory/Abelian/Injective/Resolution.lean:327` | Whether the `where` field body receives the declaration's moved layout anchor | Medium | Later checkpoint |
+
+#### Structural continuation bases
+
+| Symptom | Representative evidence | Governing question | Risk | Order |
+| --- | --- | --- | --- | --- |
+| Peer application, declaration-field, or `calc` continuations disagree on their shared base | `Mathlib/Geometry/Manifold/MFDeriv/SpecificFunctions.lean:277`; `Mathlib/Algebra/Order/Monoid/Defs.lean:28`; `Mathlib/Analysis/InnerProductSpace/Projection/Basic.lean:362` | How peer segments derive one structural continuation base | High | Later checkpoint |
+| Inline record and attribute children can inherit the opener's source column | `Mathlib/Lean/Meta/RefinedDiscrTree/Basic.lean:169`; `Mathlib/Algebra/Group/Submonoid/Membership.lean:553` | When a delimited child starts a new continuation base instead of retaining the opener column | High | Investigate with the peer-continuation checkpoint |
+
+#### Command and equation ownership
+
+| Symptom | Representative evidence | Governing question | Risk | Order |
+| --- | --- | --- | --- | --- |
+| Mathlib `lemma` equation arms in a `mutual` block can use the wrong command base | `Mathlib/AlgebraicGeometry/Morphisms/ChevalleyComplexity.lean:624` | Which regrouped command owns equation-arm indentation inside `mutual` | High | Separate checkpoint |
 
 ### Release TODO
 
@@ -157,6 +181,55 @@ the next bounded step here before committing.
 Entries are ordered newest first. They record what changed and the validation
 evidence available at that checkpoint; open work is maintained only in the
 queue above.
+
+### 2026-08-11: Source-comment boundary rebasing
+
+Starting from architecture checkpoint `02c3368`, this checkpoint closes the two
+source-comment issues at the head of the queue. Later physical lines in a
+line-comment group retain their authored offset from the attached opener; a
+line authored exactly one column left of that opener is treated as aligned and
+cannot move left when the opener is rebased. More distant standalone comments
+retain their distinct source offset. A standalone comment between a protected
+body and the following syntax remains owned by the body when its source nesting
+is deeper than the following token. The implementation uses existing source
+boundaries and rebase plans, adds no syntax-kind check to the renderer, and adds
+no rule API or syntax-tree comment node.
+
+Focused tests cover attached and distant line-comment continuations, comments
+between a calc proof and its following row, comments after separated protected
+expressions, code preservation, fallback, and idempotency. The complete local
+gate passed both builds and test runs, the development linter, fixture
+regeneration and dry checking, self-formatting, preservation, actionable
+overflow, missing rules, fallback, idempotency, and `git diff --check`. No
+fixture output changed.
+
+Fresh GraphQL and quantum validation used automatic formatter workers and no
+`--jobs`. GraphQL's initial build, three formatter batches, and final build took
+78, 17/11/6, and 2 seconds. Its sole formatted file is byte-identical to the
+preceding validated output. Quantum restored its cache in 12 seconds; its
+initial build, formatter batch, and final build took 34, 11, and 2 seconds and
+produced no diff. The combined run took 240 seconds, matching the preceding
+239-second run closely enough to show no performance regression.
+
+The definitive Mathlib run used exact `v4.32.0` commit
+`81a5d257c8e410db227a6665ed08f64fea08e997`, width 100, only the 8,264 tracked
+files under `Mathlib`, the Lake cache, and automatic formatter workers. All 83
+batches passed preservation, actionable-overflow, missing-rule, fallback, and
+idempotency checks. The complete 8,654-job post-format build passed in 3,197
+seconds; all external phases took 5,888 seconds. Heavy formatter batches stayed
+within their established ranges, with no sustained timing or memory-pressure
+trend.
+
+Against the archived `mathlib-release` formatted tree, the candidate changes
+five files by 11 insertions and 12 deletions. Three files are inherited from the
+architecture checkpoint. This checkpoint's isolated delta is exactly two
+files: the attached continuation in
+`Algebra/ContinuedFractions/Computation/Basic.lean` and the three proof-owned
+comments in `Analysis/Normed/Field/Approximation.lean`. Broader reproductions in
+`Probability/Kernel/Posterior.lean` and `Tactic/Linter/TextBased.lean` remain
+unchanged, confirming that distinctly indented comments are not captured by the
+attached-opener policy. The next bounded root-cause group is protected
+original-layout rebasing.
 
 ### 2026-08-10: Formatter architecture boundary migration
 

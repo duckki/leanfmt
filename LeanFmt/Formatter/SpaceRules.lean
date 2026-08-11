@@ -400,6 +400,9 @@ def alignCommentBoundaryLines
         let adjusted :=
           if belongsToFollowingTree then
             followingIndent ++ stripped
+          else if stripped.startsWith "--"
+                  && sourceIndent + 1 == attachedSourceIndent then
+            shiftCommentLineIndent sourceIndent attachedTargetIndent line
           else
             shiftCommentLineIndent attachedSourceIndent attachedTargetIndent line
         let blockSourceIndent :=

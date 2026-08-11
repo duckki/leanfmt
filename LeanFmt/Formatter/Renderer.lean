@@ -446,21 +446,17 @@ def WhitespaceState.defaultWhitespace (state : WhitespaceState) (token : SyntaxT
                   | none =>
                       boundary.forBreakWithFollowingIndent commentIndentation indentation
                 else
-                  let hasExplicitTrailingOwnership :=
-                    boundary.hasSeparatedCommentGroups || boundary.endsBeforeBlankLine
-                  if hasExplicitTrailingOwnership then
-                    let commentIndentation :=
-                      spaces (state.layoutAnchor.outputColumn + indentationSpaces)
-                    match state.pendingCommandBoundary? with
-                    | some spacing =>
-                        commentTriviaForBoundary boundary commentIndentation indentation
-                          spacing false
-                    | none =>
-                        boundary.forBreakWithFollowingIndent commentIndentation
-                          indentation
-                  else
-                    whitespaceForPendingBoundary boundary indentation
-                      state.pendingCommandBoundary?
+                  let commentIndentation :=
+                    spaces
+                    <| ({ sourceColumn := sourceFollowingIndent, outputColumn := indent }
+                        : Rebase.Anchor).shiftColumn
+                        sourceIndent
+                  match state.pendingCommandBoundary? with
+                  | some spacing =>
+                      commentTriviaForBoundary boundary commentIndentation indentation
+                        spacing false
+                  | none =>
+                      boundary.forBreakWithFollowingIndent commentIndentation indentation
           | none =>
               whitespaceForPendingBoundary boundary indentation
                 state.pendingCommandBoundary?
@@ -2545,8 +2541,21 @@ end
 def RenderState.finalTrivia (state : RenderState) : String :=
   match state.lastToken? with
   | some token =>
-      SpaceRules.cleanFinalTrivia
-      <| SyntaxTree.sourceText state.source token.span.stop state.source.endPos.offset
+      let boundary :=
+        SourceBoundary.ofText
+        <| SyntaxTree.sourceText state.source token.span.stop state.source.endPos.offset
+      if boundary.hasComment
+          && boundary.hasLineStructure
+          && !boundary.startsOnNewLine then
+        let cleanedBoundary := boundary.cleaned
+        let sourceCommentColumn :=
+          boundary.firstCommentColumn? (state.sourceMap.columnAt token.span.stop)
+        let targetCommentColumn :=
+          cleanedBoundary.firstCommentColumn? (lineWidth state.currentLine)
+        cleanedBoundary.forTreeBoundary
+          (sourceCommentColumn.getD 0) (targetCommentColumn.getD 0) 0 ""
+      else
+        SpaceRules.cleanFinalTrivia boundary.text
   | none =>
       SpaceRules.cleanFinalTrivia state.source
 

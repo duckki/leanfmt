@@ -780,6 +780,80 @@ def assertStandaloneCommentsFollowLayoutOwnership (env : Lean.Environment) : IO 
   assertEq "a declaration-body comment follows the body indentation"
     leadingDeclarationBodyCommentExpected leadingDeclarationBodyCommentFormatted
 
+  let calcProofCommentSource :=
+    "theorem calcProofTrailingComment : (1 : Nat) = 1 := by\n"
+    ++ "  calc\n"
+    ++ "  _ = 1 := by\n"
+    ++ "    rfl\n"
+    ++ "    -- This comment closes the preceding calc proof.\n"
+    ++ "    -- Its continuation has the same proof-body ownership.\n"
+    ++ "  _ = 1 := rfl\n"
+  let calcProofCommentExpected :=
+    "theorem calcProofTrailingComment : (1 : Nat) = 1 := by\n"
+    ++ "  calc\n"
+    ++ "    _ = 1 := by\n"
+    ++ "      rfl\n"
+    ++ "      -- This comment closes the preceding calc proof.\n"
+    ++ "      -- Its continuation has the same proof-body ownership.\n"
+    ++ "    _ = 1 := rfl\n"
+  let calcProofCommentResult ←
+    Formatter.formatSourceWithEnvDetailed env calcProofCommentSource
+      "calc-proof-trailing-comment.lean"
+  assertTrue "a trailing calc-proof comment does not fall back"
+    (!calcProofCommentResult.fellBack)
+  assertEq "a calc-proof comment retains its source ownership depth"
+    calcProofCommentExpected calcProofCommentResult.formatted
+  assertTrue "a trailing calc-proof comment preserves code"
+    (← codePreservedIgnoringWhitespace env calcProofCommentSource
+        calcProofCommentResult.formatted)
+  let calcProofCommentAgain ←
+    Formatter.formatSourceWithEnv env calcProofCommentResult.formatted
+      "calc-proof-trailing-comment-formatted.lean"
+  assertEq "a trailing calc-proof comment is idempotent"
+    calcProofCommentResult.formatted calcProofCommentAgain
+
+  let separatedProtectedCommentSource :=
+    "def separatedProtectedComment (values : Array Nat) : Array Nat :=\n"
+    ++ "  let changed :=\n"
+    ++ "    Array.ofFn\n"
+    ++ "      fun (i : Fin values.size) =>\n"
+    ++ "        if i = i then\n"
+    ++ "          values[i]\n"
+    ++ "        else\n"
+    ++ "          values[i]\n"
+    ++ "          -- This comment closes the protected expression.\n"
+    ++ "          -- Its continuation keeps the same ownership.\n"
+    ++ "\n"
+    ++ "  changed\n"
+  let separatedProtectedCommentExpected :=
+    "def separatedProtectedComment (values : Array Nat) : Array Nat :=\n"
+    ++ "  let changed :=\n"
+    ++ "    Array.ofFn\n"
+    ++ "      fun (i : Fin values.size) =>\n"
+    ++ "        if i = i then\n"
+    ++ "          values[i]\n"
+    ++ "        else\n"
+    ++ "          values[i]\n"
+    ++ "          -- This comment closes the protected expression.\n"
+    ++ "          -- Its continuation keeps the same ownership.\n"
+    ++ "\n"
+    ++ "  changed\n"
+  let separatedProtectedCommentResult ←
+    Formatter.formatSourceWithEnvDetailed env separatedProtectedCommentSource
+      "separated-protected-comment.lean"
+  assertTrue "a separated protected-expression comment does not fall back"
+    (!separatedProtectedCommentResult.fellBack)
+  assertEq "a separated protected-expression comment retains its island ownership"
+    separatedProtectedCommentExpected separatedProtectedCommentResult.formatted
+  assertTrue "a separated protected-expression comment preserves code"
+    (← codePreservedIgnoringWhitespace env separatedProtectedCommentSource
+        separatedProtectedCommentResult.formatted)
+  let separatedProtectedCommentAgain ←
+    Formatter.formatSourceWithEnv env separatedProtectedCommentResult.formatted
+      "separated-protected-comment-formatted.lean"
+  assertEq "a separated protected-expression comment is idempotent"
+    separatedProtectedCommentResult.formatted separatedProtectedCommentAgain
+
   for (name, source, formatted)
       in #[
         ("closing proof comment", proofCommentSource, proofCommentFormatted),
@@ -1853,6 +1927,49 @@ def assertTrailingLineCommentPreserved (env : Lean.Environment) : IO Unit := do
     Formatter.formatSourceWithEnv env longSource "long-trailing-line-comment.lean"
       { lineWidth := 50 }
   assertEq "overflowing trailing line comment remains attached" longExpected longFormatted
+  let continuedSource :=
+    "def attachedLineCommentContinuation : Nat × Nat :=\n"
+    ++ "  ⟨\n"
+    ++ "    1,\n"
+    ++ "    2\n"
+    ++ "  ⟩ -- This comment describes the completed anonymous constructor value.\n"
+    ++ "   -- Its continuation must not move left of the first comment line.\n"
+  let continuedExpected :=
+    "def attachedLineCommentContinuation : Nat × Nat :=\n"
+    ++ "  ⟨1, 2⟩ -- This comment describes the completed anonymous constructor value.\n"
+    ++ "         -- Its continuation must not move left of the first comment line.\n"
+  let continuedResult ←
+    Formatter.formatSourceWithEnvDetailed env continuedSource
+      "attached-line-comment-continuation.lean"
+  assertTrue "an attached line-comment continuation does not fall back"
+    (!continuedResult.fellBack)
+  assertEq "an attached line-comment continuation cannot move left of its opener"
+    continuedExpected continuedResult.formatted
+  assertTrue "an attached line-comment continuation preserves code"
+    (← codePreservedIgnoringWhitespace env continuedSource continuedResult.formatted)
+  let continuedAgain ←
+    Formatter.formatSourceWithEnv env continuedResult.formatted
+      "attached-line-comment-continuation-formatted.lean"
+  assertEq "an attached line-comment continuation is idempotent"
+    continuedResult.formatted continuedAgain
+  let independentSource :=
+    "def independentlyIndentedTrailingComment : Nat :=\n"
+    ++ "  0 -- This inline comment stays at its authored column.\n"
+    ++ "  -- This body-level comment is not aligned to the distant inline opener.\n"
+  let independentResult ←
+    Formatter.formatSourceWithEnvDetailed env independentSource
+      "independently-indented-trailing-comment.lean"
+  assertTrue "an independently indented trailing comment does not fall back"
+    (!independentResult.fellBack)
+  assertEq "an unmoved inline opener does not capture a distant trailing comment"
+    independentSource independentResult.formatted
+  assertTrue "an independently indented trailing comment preserves code"
+    (← codePreservedIgnoringWhitespace env independentSource independentResult.formatted)
+  let independentAgain ←
+    Formatter.formatSourceWithEnv env independentResult.formatted
+      "independently-indented-trailing-comment-formatted.lean"
+  assertEq "an independently indented trailing comment is idempotent"
+    independentResult.formatted independentAgain
 
 def assertCommentAfterOpeningDelimiterPreserved (env : Lean.Environment) : IO Unit := do
   let source :=
