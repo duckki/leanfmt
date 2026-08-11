@@ -158,6 +158,44 @@ Entries are ordered newest first. They record what changed and the validation
 evidence available at that checkpoint; open work is maintained only in the
 queue above.
 
+### 2026-08-10: Formatter architecture boundary migration
+
+Commit `e79aa66` introduced explicit `SourceBoundary`, `LayoutPlan`, and
+`Rebase` modules, made original-tree island policy explicit, and removed Lean
+syntax-kind decisions from the renderer. The follow-up cleanup removes the last
+two source-trivia reads from line-break rule callbacks. A new
+`.localDeclarationHeader` syntax group gives a local declaration's signature
+and value separate layout ownership: the header owns a possible break before
+its return type, while the outer declaration owns the value break. The
+`doLetRec` source-break behavior now composes existing flow and source-boundary
+policies without a specialized renderer path or a new rule API.
+
+The complete local gate passed, including both builds and tests, the development
+linter, fixture regeneration and dry checking, self-formatting, code
+preservation, actionable overflow, missing-rule, fallback, idempotency, and
+`git diff --check`. GraphQL passed three formatter batches in 20, 12, and 7
+seconds and its final build in 3 seconds; its only output change is the intended
+long local return-type layout. Quantum passed its formatter batch in 14 seconds
+and its final build in 2 seconds with no output change.
+
+Exact Mathlib `v4.32.0` passed all 83 width-100 `Mathlib` batches and the full
+8,654-job post-format build. The formatter batches took 2,456 seconds, the build
+took 3,498 seconds, and all external phases took 5,985 seconds under unusually
+high host load. The isolated checkpoint delta is 74 files, 202 insertions, and
+210 deletions. Every hunk is a local declaration signature: fitting signatures
+collapse, while long signatures break before `:` from the declaration base and
+retain separate value-body ownership. No exception, preservation failure,
+actionable overflow, missing rule, fallback, non-idempotence, or build failure
+occurred.
+
+A same-files A/B on Mathlib batch 13 compared committed/current wall times of
+50.02/46.75 seconds and then 44.58/40.21 seconds. Average user CPU fell from
+about 95 to 88 seconds, so the migration adds no measurable formatter cost.
+With component ownership now explicit and the source-trivia checks removed from
+line-break rules, the architecture migration is complete. The next bounded
+checkpoint returns to the remaining formatting queue, beginning with the
+source-preserved line-comment continuation case.
+
 ### 2026-08-10: Focused comment ownership release checkpoint
 
 The final candidate generalizes source-comment ownership without changing the

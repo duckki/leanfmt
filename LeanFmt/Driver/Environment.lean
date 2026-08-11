@@ -172,8 +172,7 @@ def EnvironmentLoader.environmentForSourceProfiled
     : IO Lean.Environment := do
   let (normalized, normalizeMs) ←
     timeIO <| pure <| Formatter.Internal.normalizeSource source
-  let loadFromHeader (defaultParse : String)
-      : IO Lean.Environment := do
+  let loadFromHeader (defaultParse : String) : IO Lean.Environment := do
     let (spec, headerMs) ← timeIO <| LeanEnvironment.specForSource normalized fileName
     let (result, environmentMs) ← timeIO <| loader.environmentForSpec spec
     profileLine options

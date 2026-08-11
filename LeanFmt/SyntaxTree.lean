@@ -72,6 +72,7 @@ inductive NodeKind where
   | patternLambda
   | definition
   | annotatedDeclaration
+  | localDeclarationHeader
   | signatureParameters
   | structureHeader
   | structureConstructor
@@ -110,6 +111,7 @@ def nodeKindName : NodeKind → String
   | .patternLambda => "LeanFmt.SyntaxTree.NodeKind.patternLambda"
   | .definition => "LeanFmt.SyntaxTree.NodeKind.definition"
   | .annotatedDeclaration => "LeanFmt.SyntaxTree.NodeKind.annotatedDeclaration"
+  | .localDeclarationHeader => "LeanFmt.SyntaxTree.NodeKind.localDeclarationHeader"
   | .signatureParameters => "LeanFmt.SyntaxTree.NodeKind.signatureParameters"
   | .structureHeader => "LeanFmt.SyntaxTree.NodeKind.structureHeader"
   | .structureConstructor => "LeanFmt.SyntaxTree.NodeKind.structureConstructor"
@@ -969,8 +971,7 @@ def appendApplicationArgumentContainers (children : Array Tree) (start : Nat)
 partial def structInstFieldParts? : Tree → Option (Array Tree)
   | .node (.raw `Lean.Parser.Term.structInstFieldDef) children => some children
   | .node _ children =>
-      let rec loop (index : Nat)
-          : Option (Array Tree) := do
+      let rec loop (index : Nat) : Option (Array Tree) := do
         let child ← children[index]?
         match structInstFieldParts? child with
         | some parts =>
@@ -998,15 +999,14 @@ def regroupDoForChildren (children : Array Tree) : Option (Array Tree) := do
   <| #[.node .doForHeader (#[keyword] ++ declarationChildren)]
       ++ childrenRange children 2 children.size
 
-def regroupLetEquationSignature (children : Array Tree) : Option (Array Tree) := do
+def regroupLocalDeclarationHeader (children : Array Tree) : Option (Array Tree) := do
   let name ← children[0]?
   let parameters ← children[1]?
   let typeSpec ← children[2]?
   some
   <| #[
-        name,
-        .node (.raw `Lean.Parser.Command.optDeclSig)
-          #[regroupSignatureParameters parameters, typeSpec]
+        .node .localDeclarationHeader
+          #[name, regroupSignatureParameters parameters, typeSpec]
       ]
       ++ childrenRange children 3 children.size
 
@@ -1822,13 +1822,12 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
   else if kind == `Lean.«command__Unif_hint____Where_|_-⊢__» then
     .node (.raw kind) (regroupUnifHintChildren children)
   else if kind == `Lean.Parser.Term.letEqnsDecl then
-    match regroupLetEquationSignature children with
+    match regroupLocalDeclarationHeader children with
     | some children => .node (.raw kind) children
     | none => .node (.raw kind) children
   else if kind == `Lean.Parser.Term.letIdDecl then
-    match children[1]? with
-    | some parameters =>
-        .node (.raw kind) <| children.set! 1 (regroupSignatureParameters parameters)
+    match regroupLocalDeclarationHeader children with
+    | some children => .node (.raw kind) children
     | none => .node (.raw kind) children
   else if kind == `Lean.Parser.Term.letRecDecl then
     match regroupLetRecDeclAnnotations children with

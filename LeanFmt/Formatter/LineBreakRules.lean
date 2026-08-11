@@ -1834,13 +1834,7 @@ def letRecBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint 
   | none => []
 
 def doLetRecBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
-  match segment.child? 1 >>= SyntaxTree.Tree.firstToken? with
-  | some token =>
-      if SpaceRules.hasLineStructure token.leading.text then
-        [boundaryBreak? segment 1 0].filterMap id
-      else
-        []
-  | none => []
+  [boundaryBreak? segment 1 0].filterMap id
 
 def letRecEquationBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   match firstChildRawKind? segment `Lean.Parser.Term.matchAlts with
@@ -1990,34 +1984,8 @@ def doElseIfChainBreaks (context : RuleContext) (segment : Segment) : List Break
   else
     []
 
-def letIdDeclBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
-  let hasIdentifier :=
-    match segment.child? 0 with
-    | some identifier => (treeFirstLexeme? identifier).isSome
-    | none => false
-  let valueBreak := declarationValueBreak? segment
-  let valueStartsOnSourceLine :=
-    match valueBreak with
-    | some breakPoint =>
-        match segment.child? breakPoint.index >>= SyntaxTree.Tree.firstToken? with
-        | some token => SpaceRules.hasLineStructure token.leading.text
-        | none => false
-    | none => false
-  let returnBreak :=
-    if valueStartsOnSourceLine then
-      none
-    else
-      match segment.child? 1 with
-      | some parameters =>
-          if treeHasContent parameters
-              || (hasIdentifier
-                  && (grandparentIsRawKind context `Lean.Parser.Term.have
-                      || grandparentIsRawKind context `Lean.Parser.Term.haveI)) then
-            breakBeforeLexeme? segment ":" 2
-          else
-            none
-      | none => none
-  [returnBreak, valueBreak].filterMap id
+def letIdDeclBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
+  [declarationValueBreak? segment].filterMap id
 
 def letPatternDeclBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   [breakAfterLexeme? segment ":=" 1].filterMap id
@@ -2139,7 +2107,9 @@ def letRecRule : LineBreakRule :=
 def doLetRecRule : LineBreakRule :=
   {
     name := "doLetRec"
-    mandatory := fun context segment => !(doLetRecBreaks context segment).isEmpty
+    keepPrefixWithChildFirstLine := fun _ _ index => index == 1
+    useExistingBreaks := fun _ _ => true
+    flow := fun _ _ => true
     inheritBase := fun _ _ => true
     breakPoints := doLetRecBreaks
   }
@@ -4393,6 +4363,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node .application _ => some applicationRule
   | .node (.indexedInfix _) _ => some indexedNotationRule
   | .node .patternLambda _ => some basicFunRule
+  | .node .localDeclarationHeader _ => some signatureRule
   | .node .signatureParameters _ => some signatureParametersRule
   | .node .matchPatterns _ => some matchPatternsRule
   | .node .matchDiscriminants _ => some matchDiscriminantsRule

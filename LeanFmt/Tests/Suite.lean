@@ -159,6 +159,44 @@ def assertUnifHintChildrenRegrouped : IO Unit := do
     (rule.breakPoints {} segment
       == [{ index := 1, indentLevels := 0 }, { index := 2, indentLevels := 0 }])
 
+def assertLocalDeclarationSignatureRegrouped (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def localDeclaration :=\n"
+    ++ "  let localFunction (value : Nat) : Nat := value\n"
+    ++ "  localFunction 0\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source
+      "local-declaration-signature-regrouping.lean"
+  let declaration ←
+    match findTreeNode? (.raw `Lean.Parser.Term.letIdDecl) moduleTree.tree with
+    | some declaration => pure declaration
+    | none => throw <| IO.userError "local declaration was not found"
+  let (declarationSegment, header) ←
+    match declaration with
+    | .node _ children =>
+        match children[0]? with
+        | some header@(SyntaxTree.Tree.node .localDeclarationHeader _) =>
+            pure (Formatter.LineBreakRules.Segment.ofTree declaration, header)
+        | _ => throw <| IO.userError "local declaration signature was not regrouped"
+    | _ => throw <| IO.userError "local declaration was not a node"
+  let declarationPlan := Formatter.LayoutPlan.resolve {} declarationSegment
+  let valueIndex ←
+    match Formatter.LineBreakRules.contentIndexAfterLexeme? declarationSegment ":=" with
+    | some index => pure index
+    | none => throw <| IO.userError "local declaration value was not found"
+  assertTrue "local declaration owns only its value boundary"
+    (declarationPlan.breakPoints == [{ index := valueIndex, indentLevels := 1 }])
+  let headerSegment := Formatter.LineBreakRules.Segment.ofTree header
+  let headerContext :=
+    ({} : Formatter.LineBreakRules.RuleContext).push declarationSegment 0
+  let signaturePlan := Formatter.LayoutPlan.resolve headerContext headerSegment
+  let returnIndex ←
+    match Formatter.LineBreakRules.breakBeforeLexeme? headerSegment ":" 2 with
+    | some breakPoint => pure breakPoint.index
+    | none => throw <| IO.userError "local declaration return type was not found"
+  assertTrue "local signature owns its return-type boundary"
+    (signaturePlan.breakPoints == [{ index := returnIndex, indentLevels := 2 }])
+
 def assertPreservationDetectsSyntaxChange (env : Lean.Environment) : IO Unit := do
   let source :=
     "def letAlt (x? : Option Nat) : Nat := do\n"
@@ -9424,8 +9462,7 @@ def assertMovedBodiesUseStructuralIndentation (env : Lean.Environment) : IO Unit
     ++ "  process 0 1 2\n"
   let localDoExpected :=
     "def localDoBodyAfterBrokenReturnType :=\n"
-    ++ "  let rec process (firstArgument secondArgument thirdArgument : Nat)\n"
-    ++ "      : Nat := do\n"
+    ++ "  let rec process (firstArgument secondArgument thirdArgument : Nat) : Nat := do\n"
     ++ "    match firstArgument with\n"
     ++ "    | 0 => pure secondArgument\n"
     ++ "    | _ => pure thirdArgument\n"
@@ -13452,6 +13489,7 @@ def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertSourcePositionMapColumns
   assertSyntaxTreeWhereRoundTrip env
   assertUnifHintChildrenRegrouped
+  assertLocalDeclarationSignatureRegrouped env
   assertPreservationDetectsSyntaxChange env
   assertOverlappingQuotationTokensRemoved env
   assertTacticQuotationAntiquotationPreserved env

@@ -589,8 +589,9 @@ where
   inner : Nat := 0
 ```
 
-For a nested declaration whose value already begins on the next source line,
-the assignment boundary is tried before splitting its fitting signature:
+Nested and local declarations give the signature and value separate layout ownership.
+The assignment boundary is therefore tried before splitting a fitting signature,
+independently of the source line on which the value begins:
 
 ```lean
 def outer : Nat := helper 0

@@ -34,6 +34,23 @@ def assertResolvedLayoutPlan : IO Unit := do
     (plan.breakPoints.all
       fun point => segment.start <= point.index && point.index < segment.stop)
 
+  let doLetRec :=
+    SyntaxTree.Tree.node (.raw `Lean.Parser.Term.doLetRec)
+      #[
+        .leaf (SyntaxTree.tokenOfNone .ident Lean.identKind "let rec"),
+        .leaf (SyntaxTree.tokenOfNone .ident Lean.identKind "declaration")
+      ]
+  let doLetRecPlan :=
+    Formatter.LayoutPlan.resolve {} (Formatter.LineBreakRules.Segment.ofTree doLetRec)
+  assertTrue "do-let-rec preserves its authored structural boundary"
+    doLetRecPlan.preservesSourceBreaks
+  assertTrue "do-let-rec exposes its boundary without reading source trivia"
+    (doLetRecPlan.breakPoints == [{ index := 1, indentLevels := 0 }])
+  assertTrue "do-let-rec lets its first declaration reflow under the prefix"
+    (doLetRecPlan.isFlow && doLetRecPlan.keepsPrefixWithChildFirstLine 1)
+  assertTrue "do-let-rec source preservation does not make every layout mandatory"
+    (!doLetRecPlan.isMandatory)
+
 def assertOriginalIslandPolicies : IO Unit := do
   let proof := Formatter.OriginalTree.planForKind .proof
   assertTrue "proof islands retain relative layout"
