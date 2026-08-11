@@ -205,6 +205,12 @@ lake build LeanFmt.Tests
 side-effectful tests. Syntax environments shared by multiple groups are loaded before
 the groups start, so tests do not repeat environment setup.
 
+`LeanFmt.Tests.LayoutArchitecture` contains stable contract tests for source-boundary
+classification, resolved layout plans, original-island policies, and source/output
+rebasing. Prefer adding intermediate tests there when changing component boundaries;
+keep final formatted-text and parser-preservation coverage in the broad suite and
+fixtures.
+
 Run fixture checks without rewriting fixture files:
 
 ```sh

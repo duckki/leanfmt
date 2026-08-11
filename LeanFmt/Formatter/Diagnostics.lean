@@ -410,8 +410,8 @@ partial def preservedOriginalSpans : SyntaxTree.Tree → List SyntaxTree.Span
 partial def unbreakableOriginalSpans : SyntaxTree.Tree → List SyntaxTree.Span
   | .missing | .leaf _ => []
   | tree@(.node _ children) =>
-      if (OriginalTree.classify? tree).any
-          OriginalTree.LayoutIslandKind.hasUnbreakableLineLayout then
+      if (OriginalTree.plan? tree).any
+          fun plan => plan.policy.firstLine == .unbreakable then
         treeSpan? tree |>.toList
       else
         children.toList.flatMap unbreakableOriginalSpans

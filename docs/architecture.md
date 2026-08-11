@@ -36,10 +36,13 @@ The implementation is split by responsibility:
 | Module | Responsibility |
 | --- | --- |
 | `LeanFmt.SyntaxTree` | Parse Lean source, keep token/trivia spans, build raw tree, regroup selected raw syntax into logical nodes. |
-| `LeanFmt.Formatter.SpaceRules` | Decide horizontal whitespace and trivia cleanup between adjacent emitted tokens. |
-| `LeanFmt.Formatter.LineBreakRules` | Define rule-facing segments, rule context, break points, node-kind dispatch, and syntax-specific break judgements. |
-| `LeanFmt.Formatter.OriginalTree` | Classify protected source-layout islands and plan their indentation-preserving source emission. |
-| `LeanFmt.Formatter.Renderer` | Carry render state, run fit checks, collect accepted source breaks, compute indentation, emit tokens. |
+| `LeanFmt.Formatter.SpaceRules` | Perform low-level token spacing and lossless trivia cleanup/reindentation. |
+| `LeanFmt.Formatter.SourceBoundary` | Represent source trivia between tokens and expose comment, forced-break, blank-group, and ownership facts. |
+| `LeanFmt.Formatter.LineBreakRules` | Define rule-facing segments, rule context, break points, node-kind dispatch, and syntax-specific rule authoring. |
+| `LeanFmt.Formatter.LayoutPlan` | Resolve one rule into a typed, normalized segment plan before rendering. |
+| `LeanFmt.Formatter.Rebase` | Represent one source/output layout anchor and translate source columns through it. |
+| `LeanFmt.Formatter.OriginalTree` | Classify protected source-layout islands, resolve explicit island policies, and plan indentation-preserving source emission. |
+| `LeanFmt.Formatter.Renderer` | Carry render state, choose among resolved layout alternatives, compute indentation, and emit tokens. |
 | `LeanFmt.Formatter.Trace` | Record and format renderer traces for debugging. |
 | `LeanFmt.Formatter.Diagnostics` | Analyze compact bang syntax, code preservation, overflow, and missing formatting rules. |
 | `LeanFmt.Formatter` | Public formatting API plus `Debug` and `Internal` namespaces for tracing, profiling, and shared pipeline phases. |
@@ -307,8 +310,9 @@ tokens, generated private names, custom term-notation names, and `stx` helper no
 
 ## Space rules
 
-`SpaceRules` is token-facing. It answers only: what whitespace belongs between two
-already-emitted adjacent tokens when the renderer has not scheduled a newline?
+`SpaceRules` is the low-level token/trivia transformer. It answers what horizontal
+whitespace belongs between adjacent code tokens and performs the mechanical cleanup or
+reindentation requested for a source-trivia slice.
 
 Its main entry point is:
 
@@ -329,9 +333,45 @@ Important behavior:
   requires it.
 - Insert a single space between ordinary adjacent code tokens.
 
-Space rules do not inspect `SyntaxTree.Tree`, line width, render state, or ancestors.
-When a syntax-aware spacing decision is needed, the syntax should be represented in tree
-shape or handled by a line-break rule that changes where tokens are emitted.
+Space rules do not inspect `SyntaxTree.Tree`, render state, or ancestors. Semantic facts
+about a complete token boundary belong to `SourceBoundary`; it determines whether trivia
+contains comments, forces a physical break, begins or ends at a blank group, and exposes
+source indentation evidence. Comments and source breaks remain outside the syntax tree.
+
+## Resolved layout plans
+
+`LineBreakRule` is the rule-authoring representation. `LayoutPlan.resolve` evaluates its
+context-dependent predicates exactly once for one segment, normalizes lexical break
+boundaries, and returns a renderer-facing `LayoutPlan.Plan`.
+
+The resolved plan uses closed policy types instead of independent renderer callbacks:
+
+```lean
+inductive Mode where
+  | atomic | mandatory | balanced | flow
+
+inductive BasePolicy where
+  | local | inherited | rounded | inheritedRounded
+
+structure ChildBoundaryPlan where
+  index : Nat
+  prefixPolicy : PrefixPolicy
+  originalLeading : LeadingBoundaryPolicy
+
+structure Plan where
+  name : String
+  mode : Mode
+  sourceBreaks : SourceBreakPolicy
+  base : BasePolicy
+  tail : TailPolicy
+  startAlignment : StartAlignment
+  breakPoints : List BreakPoint
+  children : List ChildBoundaryPlan
+```
+
+Breakpoint normalization also lives here. Tight postfix boundaries and trailing
+separators are syntax/token planning facts; the renderer receives only legal normalized
+breakpoints and does not inspect their spelling.
 
 ## Line-break rules
 
@@ -402,7 +442,7 @@ The rule module is organized by broad syntax families. Each family keeps its bre
 computations and `LineBreakRule` values together; generic wrapper rules and the complete
 dispatch table remain at the end.
 
-Rule methods mean:
+Rule-authoring methods compile into these plan properties:
 
 - `useExistingBreaks`: source breaks at this rule's break points are tried before flat
   layout and can override fitting flat output. For a non-flow rule, one accepted source
@@ -454,9 +494,11 @@ Rule methods mean:
   after the segment's physical start. Conditionals, delimited structures, tuples, arrays,
   and binding right-hand sides use this so contents remain one full level past an
   off-column head.
-- `breakPoints`: logical child boundaries. Rules must not read renderer state, token
-  text, comments, or source spacing. Syntax regrouping introduces a logical child when
-  the raw parser shape does not expose the boundary a rule needs.
+- `breakPoints`: logical child boundaries. Rules must not read renderer state or output
+  columns. Syntax regrouping introduces a logical child when the raw parser shape does
+  not expose the boundary a rule needs. Source-boundary-sensitive compatibility cases
+  should migrate into declarative plan/source-boundary composition rather than grow new
+  renderer branches.
 
 The default rule is deliberately shape-only. It distinguishes missing children, empty
 leaves, nonempty leaves, empty nodes, and nonempty nodes. A nonempty leaf between two
@@ -489,8 +531,7 @@ structure RenderState where
   pendingIndent? : Option Nat := none
   segmentBaseColumn : Nat := 0
   segmentIndentation : Nat := 0
-  sourceLayoutBaseColumn : Nat := 0
-  outputLayoutBaseColumn : Nat := 0
+  layoutAnchor : Rebase.Anchor := {}
   tailIndentation? : Option Nat := none
   tailIndentationStop? : Option Nat := none
   tailIndentationAnchors : List TailIndentationAnchor := []
@@ -511,10 +552,9 @@ Key fields:
   fits while retaining the boundary indentation for the token after the comment.
 - `segmentBaseColumn` and `segmentIndentation` are the current segment's physical and
   logical bases.
-- `sourceLayoutBaseColumn` and `outputLayoutBaseColumn` map the nearest enclosing
-  source-line layout base to its rendered column. Protected source regions use this
-  mapping to move with an enclosing declaration or alternative while retaining their
-  internal relative indentation.
+- `layoutAnchor` keeps the nearest enclosing source-line base and its rendered output
+  column as one value. Protected source regions move every source column through that
+  anchor, so the two sides cannot be updated independently.
 - `tailIndentation?` is the indentation floor inherited by continuation lines in the
   current segment. It is a single absolute indentation, not an infix depth counter.
   Child rendering restores the surrounding tail when it returns.
@@ -541,15 +581,15 @@ it cannot drift into a second whitespace policy.
 
 For each segment:
 
-1. Dispatch to `formattingRuleFor`.
+1. Resolve the segment's authoring rule into one `LayoutPlan.Plan`.
 2. Record a trace entry if tracing is enabled.
 3. Emit missing and leaf segments mechanically.
 4. Ask `OriginalTree` to plan protected source-island emission and apply the returned
    text and token-state update.
-5. If a rule is atomic, render all of its children flat as one measured unit.
-6. If a rule is mandatory, apply all returned breaks.
-7. If the rule has no break behavior, render children in source order.
-8. If `useExistingBreaks` is true, collect source breaks only at returned break points.
+5. If the plan is atomic, render all of its children flat as one measured unit.
+6. If the plan is mandatory, apply all resolved breaks.
+7. If the plan has no break behavior, render children in source order.
+8. If the plan preserves source breaks, collect them only at resolved break points.
    For non-flow rules, any accepted source break applies all rule breaks. For flow rules,
    try the accepted source-break candidate once before flat layout. If it does not fit,
    retain that rejection and continue to flat layout and computed wrapping without
@@ -559,10 +599,10 @@ For each segment:
 9. Try flat rendering when allowed.
 10. For rules that prefer child layouts, try the recursively rendered children when
     the rule-specific prefix remains flat and the complete child layout fits.
-11. For flow rules that did not already try source layout through `useExistingBreaks`,
+11. For flow plans that did not already try source layout through their source-break policy,
    try accepted source breaks after flat failure, then computed flow wrapping that
    retains those accepted source boundaries while adding any required breaks.
-12. For non-flow rules with break points, apply all returned breaks simultaneously.
+12. For non-flow plans with break points, apply all resolved breaks simultaneously.
 
 Fit measurement is speculative. The renderer emits into an empty probe while retaining
 the current line and pending boundary state, then records two facts from that one result:
@@ -812,9 +852,12 @@ same-line comment trivia preceding that boundary still contributes to the fit.
 ### Proof and original-source escape hatches
 
 Proof subtrees and extensible attribute payloads are not reformatted.
-`Formatter.OriginalTree` owns the protected-tree classification, source-slice rebasing,
-and emission plan. Classification produces one `LayoutIslandKind`; the renderer retains
-that result and passes it into emission instead of repeating the protected-tree scans.
+`Formatter.OriginalTree` owns protected-tree classification, source-slice rebasing, and
+emission planning. Classification still identifies a `LayoutIslandKind`, but rendering
+uses an `IslandPlan` containing an explicit `IslandPolicy`: content layout, multiline
+behavior, first-line breakability, relative-layout retention, pending-indent behavior,
+anchor choice, leading-boundary ownership, and following-comment ownership. The renderer
+retains that complete plan instead of repeatedly interpreting a classification tag.
 Mathlib `lemma` commands remain complete original-layout islands when their proofs have
 no structurally rendered tactic owner. When a proof contains a transparent owner such as
 `cases` or induction alternatives, the command exposes that owner just as an ordinary
@@ -1173,10 +1216,10 @@ rather than a rule-name or token-text special case.
 
 ### Why rule and renderer separation?
 
-Rules know syntax. The renderer knows columns. Keeping those concerns separate prevents
-renderer code from asking what token or tree kind it is rendering in order to choose an
-anchor. Anchors remain render-state facts, while rules expose small predicates such as
-`inheritBase`, `liftsTailIndentation`, and `roundUpBaseIndentation`.
+Rules know syntax. `SourceBoundary` knows authored trivia. `LayoutPlan` composes rule
+judgements into a stable renderer contract. The renderer knows columns and fit. Keeping
+those concerns separate prevents rendering from asking what token or tree kind it is
+handling, while `Rebase.Anchor` keeps source/output column translation coherent.
 
 ### Why preserve proofs?
 

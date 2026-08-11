@@ -1,4 +1,5 @@
 import LeanFmt.Formatter.LineBreakRules
+import LeanFmt.Formatter.Rebase
 import LeanFmt.Formatter.SpaceRules
 
 namespace LeanFmt
@@ -20,13 +21,6 @@ private def charsAfterLastNewline (text : String) : String :=
     | '\n' :: rest, _ => loop rest []
     | char :: rest, current => loop rest (char :: current)
   loop (SpaceRules.normalizeLineEndings text).toList []
-
-private def shiftColumnByAnchor (sourceAnchorColumn outputAnchorColumn sourceColumn : Nat)
-    : Nat :=
-  if sourceAnchorColumn <= outputAnchorColumn then
-    sourceColumn + (outputAnchorColumn - sourceAnchorColumn)
-  else
-    sourceColumn - min sourceColumn (sourceAnchorColumn - outputAnchorColumn)
 
 private def leadingWhitespace (line : String) : String :=
   (line.takeWhile SpaceRules.isHorizontalWhitespace).toString
@@ -594,67 +588,125 @@ def classify? (tree : SyntaxTree.Tree) : Option LayoutIslandKind :=
 def shouldEmit (tree : SyntaxTree.Tree) : Bool :=
   (classify? tree).isSome
 
-def LayoutIslandKind.preservesMultilineLayoutWithoutRuleBreaks : LayoutIslandKind → Bool
-  | .proof | .attributes => true
-  | _ => false
+inductive ContentLayout where
+  | ordinary
+  | proof
+  | proofLayout
+  | calc
+  | quotation
+deriving BEq, Repr
 
-def LayoutIslandKind.prefersParentRelativeColumn : LayoutIslandKind → Bool
-  | .proofWidgetsJsx => true
-  | _ => false
+inductive MultilineLayoutPolicy where
+  | structural
+  | preserveWithoutRuleBreaks
+deriving BEq, Repr
 
-def LayoutIslandKind.hasUnbreakableLineLayout : LayoutIslandKind → Bool
-  | .proof
-  | .proofLayout
-  | .calc
-  | .quotationLayout
-  | .quotation
-  | .proofWidgetsJsx
-  | .mathlibTactic => true
-  | _ => false
+inductive FirstLinePolicy where
+  | breakable
+  | unbreakable
+deriving BEq, Repr
 
-def LayoutIslandKind.isProof : LayoutIslandKind → Bool
-  | .proof => true
-  | _ => false
+inductive RelativeLayoutPolicy where
+  | structural
+  | retain
+deriving BEq, Repr
 
-def LayoutIslandKind.isQuotation : LayoutIslandKind → Bool
-  | .quotationLayout | .quotation => true
-  | _ => false
+inductive PendingIndentPolicy where
+  | ignore
+  | useWhenAvailable
+deriving BEq, Repr
 
-def LayoutIslandKind.isProofLayout : LayoutIslandKind → Bool
-  | .proofLayout => true
-  | _ => false
+inductive AnchorPolicy where
+  | layoutBase
+  | preferParentRelative
+deriving BEq, Repr
 
-def LayoutIslandKind.isCalc : LayoutIslandKind → Bool
-  | .calc => true
-  | _ => false
+inductive FollowingCommentPolicy where
+  | formatNormally
+  | preserveSourceIndent
+deriving BEq, Repr
 
-def LayoutIslandKind.retainsRelativeLayout : LayoutIslandKind → Bool
-  | .proof
-  | .quotationLayout
-  | .quotation
-  | .proofWidgetsJsx
-  | .mathlibTactic
-  | .layoutSensitiveCommand => true
-  | _ => false
+inductive LeadingBoundaryPolicy where
+  | preserveWithIsland
+  | formatStructurally
+deriving BEq, Repr
 
-def LayoutIslandKind.usesPendingIndent : LayoutIslandKind → Bool
-  | .proof
-  | .proofLemma
-  | .proofWidgetsJsx
-  | .quotationLayout
-  | .quotation
-  | .mathlibTactic
-  | .layoutSensitiveCommand
-  | .syntaxComment => true
-  | _ => false
+structure IslandPolicy where
+  content : ContentLayout := .ordinary
+  multiline : MultilineLayoutPolicy := .structural
+  firstLine : FirstLinePolicy := .breakable
+  relativeLayout : RelativeLayoutPolicy := .structural
+  pendingIndent : PendingIndentPolicy := .ignore
+  anchor : AnchorPolicy := .layoutBase
+  followingComment : FollowingCommentPolicy := .formatNormally
+  leadingBoundary : LeadingBoundaryPolicy := .preserveWithIsland
+deriving BEq, Repr
 
-def LayoutIslandKind.preservesFollowingCommentIndent : LayoutIslandKind → Bool
-  | .proof | .layoutSensitiveCommand => true
-  | _ => false
+structure IslandPlan where
+  kind : LayoutIslandKind
+  policy : IslandPolicy
+deriving BEq, Repr
 
-def LayoutIslandKind.formatsLeadingBoundary : LayoutIslandKind → Bool
-  | .calc => true
-  | _ => false
+def policyFor : LayoutIslandKind → IslandPolicy
+  | .proof =>
+      {
+        content := .proof
+        multiline := .preserveWithoutRuleBreaks
+        firstLine := .unbreakable
+        relativeLayout := .retain
+        pendingIndent := .useWhenAvailable
+        followingComment := .preserveSourceIndent
+      }
+  | .proofLayout => { content := .proofLayout, firstLine := .unbreakable }
+  | .proofLemma => { pendingIndent := .useWhenAvailable }
+  | .attributes => { multiline := .preserveWithoutRuleBreaks }
+  | .calc =>
+      {
+        content := .calc
+        firstLine := .unbreakable
+        leadingBoundary := .formatStructurally
+      }
+  | .quotationLayout | .quotation =>
+      {
+        content := .quotation
+        firstLine := .unbreakable
+        relativeLayout := .retain
+        pendingIndent := .useWhenAvailable
+      }
+  | .proofWidgetsJsx =>
+      {
+        firstLine := .unbreakable
+        relativeLayout := .retain
+        pendingIndent := .useWhenAvailable
+        anchor := .preferParentRelative
+      }
+  | .layoutSensitiveCommand =>
+      {
+        relativeLayout := .retain
+        pendingIndent := .useWhenAvailable
+        followingComment := .preserveSourceIndent
+      }
+  | .mathlibTactic =>
+      {
+        firstLine := .unbreakable
+        relativeLayout := .retain
+        pendingIndent := .useWhenAvailable
+      }
+  | .syntaxComment => { pendingIndent := .useWhenAvailable }
+  | .ignored
+  | .definitionQuotation
+  | .commentSensitiveMatch
+  | .qq
+  | .leanJson
+  | .batteriesLibraryNote
+  | .customBracedTerm
+  | .customSubalgebraAdjoin => {}
+
+def planForKind (kind : LayoutIslandKind) : IslandPlan :=
+  { kind, policy := policyFor kind }
+
+def plan? (tree : SyntaxTree.Tree) : Option IslandPlan :=
+  (classify? tree).map planForKind
 
 def canUseStructuralOverflowFallback : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _
@@ -695,8 +747,7 @@ structure EmissionRequest where
   formattedLeadingWhitespace? : Option String
   pendingLeadingWhitespace? : Option String
   segmentIndentation : Nat
-  sourceLayoutBaseColumn : Nat
-  outputLayoutBaseColumn : Nat
+  layoutAnchor : Rebase.Anchor
   lineWidth : Nat
   lineFitSuffixWidth : Nat
   respectPendingIndent : Bool := false
@@ -708,17 +759,18 @@ structure Emission where
   preserveNextStandaloneCommentIndent : Bool
 
 private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
-    (classification? : Option LayoutIslandKind)
+    (islandPlan? : Option IslandPlan)
     : Option Emission := do
   let firstToken ← SyntaxTree.Tree.firstToken? tree
   let lastToken ← SyntaxTree.Tree.lastToken? tree
-  let proof := classification?.any LayoutIslandKind.isProof
-  let proofLayout := classification?.any LayoutIslandKind.isProofLayout
-  let calcLayout := classification?.any LayoutIslandKind.isCalc
-  let quotation := classification?.any LayoutIslandKind.isQuotation
+  let content := islandPlan?.map (·.policy.content) |>.getD .ordinary
+  let proof := content == .proof
+  let proofLayout := content == .proofLayout
+  let calcLayout := content == .calc
+  let quotation := content == .quotation
   let usesPendingIndent :=
     (request.respectPendingIndent
-      || classification?.any LayoutIslandKind.usesPendingIndent)
+      || islandPlan?.any fun plan => plan.policy.pendingIndent == .useWhenAvailable)
     && request.pendingLeadingWhitespace?.isSome
   let originalLeading :=
     match request.lastToken? with
@@ -739,7 +791,8 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
   let sourceText :=
     SyntaxTree.sourceText request.source firstToken.span.start lastToken.span.stop
   let sourceColumn := request.sourceMap.columnAt firstToken.span.start
-  let retainsRelativeLayout := classification?.any LayoutIslandKind.retainsRelativeLayout
+  let retainsRelativeLayout :=
+    islandPlan?.any fun plan => plan.policy.relativeLayout == .retain
   let retainsInlineRelativeLayout := retainsRelativeLayout || proofLayout || calcLayout
   let hasLineBreakTrivia := retainsInlineRelativeLayout && treeHasLineBreakTrivia tree
   let originalLeadingHasLineStructure := SpaceRules.hasLineStructure originalLeading
@@ -770,13 +823,18 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
       | some sourceIndent, some leftToken =>
           let sourceAnchor := request.sourceMap.columnAt leftToken.span.start
           let outputAnchor := lineWidth request.currentLine - leftToken.lexeme.length
-          let movedIndent := shiftColumnByAnchor sourceAnchor outputAnchor sourceIndent
+          let movedIndent :=
+            ({ sourceColumn := sourceAnchor, outputColumn := outputAnchor }
+              : Rebase.Anchor).shiftColumn
+              sourceIndent
           let structuralIndent :=
             if proof then
               (request.segmentIndentation + 1) * indentationSpaces
             else if proofLayout then
               if originalLeadingHasLineStructure then
-                shiftColumnByAnchor sourceColumn leadingColumn sourceIndent
+                ({ sourceColumn, outputColumn := leadingColumn }
+                  : Rebase.Anchor).shiftColumn
+                  sourceIndent
               else if proofLayoutRebasesFromFirstToken tree then
                 sourceIndent
               else
@@ -821,9 +879,7 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
         else
           some (sourceIndent, targetIndent)
     | none => none
-  let sourceColumnRebasedFromLayoutBase :=
-    shiftColumnByAnchor request.sourceLayoutBaseColumn
-      request.outputLayoutBaseColumn sourceColumn
+  let sourceColumnRebasedFromLayoutBase := request.layoutAnchor.shiftColumn sourceColumn
   let layoutTargetColumn? :=
     if !retainsRelativeLayout
         || inlineMultilineLayoutIsland
@@ -852,7 +908,7 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
               bodyColumnAfterOpeningDelimiter? request.currentLine token
             match delimiterColumn? with
             | some delimiterColumn =>
-                if sourceColumn <= request.sourceLayoutBaseColumn
+                if sourceColumn <= request.layoutAnchor.sourceColumn
                     || request.sourceMap.columnAt token.span.start
                         == outputTokenColumn then
                   none
@@ -864,12 +920,12 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
                 else
                   match targetColumn? with
                   | some targetColumn =>
-                      if request.outputLayoutBaseColumn <= targetColumn then
+                      if request.layoutAnchor.outputColumn <= targetColumn then
                         none
                       else
-                        some (request.outputLayoutBaseColumn + indentationSpaces)
+                        some (request.layoutAnchor.outputColumn + indentationSpaces)
                   | none =>
-                      some (request.outputLayoutBaseColumn + indentationSpaces)
+                      some (request.layoutAnchor.outputColumn + indentationSpaces)
     else
       none
   let delimitedProofBodyTargetColumn? :=
@@ -877,7 +933,7 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
       if SpaceRules.hasLineStructure leading then
         some leadingColumn
       else
-        some (request.outputLayoutBaseColumn + indentationSpaces)
+        some (request.layoutAnchor.outputColumn + indentationSpaces)
     else
       none
   let targetColumn? :=
@@ -898,7 +954,7 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     if proof && originalLeadingHasLineStructure then
       targetColumn?.map
         fun targetColumn =>
-          max request.outputLayoutBaseColumn targetColumn
+          max request.layoutAnchor.outputColumn targetColumn
     else
       targetColumn?
   let targetColumn? :=
@@ -922,7 +978,8 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
       | none => leading
     if multilineDelimitedProofBody && !SpaceRules.hasLineStructure rebased then
       "\n"
-      ++ spaces (targetColumn?.getD (request.outputLayoutBaseColumn + indentationSpaces))
+      ++ spaces
+          (targetColumn?.getD (request.layoutAnchor.outputColumn + indentationSpaces))
     else
       rebased
   let sourceTextRebase? :=
@@ -960,7 +1017,7 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
             fun targetColumn =>
               (sourceColumn, targetColumn)
   let sourceText :=
-    match classification? with
+    match islandPlan?.map (·.kind) with
     | some .syntaxComment =>
         let outputColumn :=
           lineWidth <| currentLineAfterAppend request.currentLine leading
@@ -989,14 +1046,14 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
       text := leading ++ sourceText
       lastToken
       preserveNextStandaloneCommentIndent :=
-        classification?.any LayoutIslandKind.preservesFollowingCommentIndent
+        islandPlan?.any fun plan => plan.policy.followingComment == .preserveSourceIndent
     }
 
 @[inline]
 def emit? (request : EmissionRequest) (tree : SyntaxTree.Tree)
-    (classification? : Option LayoutIslandKind := none)
+    (islandPlan? : Option IslandPlan := none)
     : Option Emission :=
-  emitRebased? request tree classification?
+  emitRebased? request tree islandPlan?
 
 end OriginalTree
 end Formatter

@@ -2,6 +2,7 @@ import LeanFmt
 import LeanFmt.Cli
 import LeanFmt.Tests.Cli
 import LeanFmt.Tests.ExportedModuleSyntax
+import LeanFmt.Tests.LayoutArchitecture
 import LeanFmt.Tests.MetaImportRoot
 import LeanFmt.Tests.ProjectSyntax
 
@@ -544,12 +545,12 @@ def assertMovedStandaloneCommentsKeepSiblingIndent (env : Lean.Environment)
         formattedLeadingWhitespace? := some "\n  "
         pendingLeadingWhitespace? := none
         segmentIndentation := 0
-        sourceLayoutBaseColumn := 0
-        outputLayoutBaseColumn := 0
+        layoutAnchor := {}
         lineWidth := Formatter.maxLineWidth
         lineFitSuffixWidth := 0
       }
-      protectedDeclaration (some .definitionQuotation)
+      protectedDeclaration
+      (some <| Formatter.OriginalTree.planForKind .definitionQuotation)
   let protectedEmission ←
     match protectedEmission? with
     | some emission => pure emission
@@ -1028,7 +1029,7 @@ def assertCustomNotationBracketSpacing : IO Unit := do
     <| .node (.raw `null)
         #[.leaf (syntheticAtomTokenAt "]" 0 1), .leaf (syntheticAtomTokenAt "!" 1 2)]
   assertTrue "source-adjacent postfix bang rejects an intervening break"
-    (!Formatter.breakPointPreservesTightTokenBoundary postfixBangSegment { index := 1 })
+    (!Formatter.LayoutPlan.preservesTightTokenBoundary postfixBangSegment { index := 1 })
   assertTrue "prefixed opening delimiters allow structural breaks after the opener"
     (Formatter.LineBreakRules.suffixOpeningDelimiterLexeme "#[")
   let prefixedOpeningSegment :=
@@ -1036,7 +1037,7 @@ def assertCustomNotationBracketSpacing : IO Unit := do
     <| .node (.raw `null)
         #[.leaf (syntheticAtomTokenAt "#[" 0 2), .leaf (syntheticAtomTokenAt "(" 2 3)]
   assertTrue "prefixed openers permit a break before a tight child opener"
-    (Formatter.breakPointPreservesTightTokenBoundary prefixedOpeningSegment
+    (Formatter.LayoutPlan.preservesTightTokenBoundary prefixedOpeningSegment
       { index := 1 })
   assertEq "source-spaced modifier notation keeps its boundary" " "
     (Formatter.SpaceRules.interTokenWhitespace "f ⁻¹ᵁ"
@@ -11955,11 +11956,10 @@ def assertFormatterArchitecture : IO Unit := do
   let application := SyntaxTree.Tree.node .application #[]
   let segment := Formatter.LineBreakRules.Segment.ofTree application
   let context : Formatter.LineBreakRules.RuleContext := {}
-  let rule := Formatter.LineBreakRules.formattingRuleFor application
-  assertTrue "application dispatch selects a flow rule" (rule.flow context segment)
-  assertTrue "application rule is renderer-independent"
-    (!(rule.breakPoints context segment).any
-        fun breakPoint => breakPoint.index > segment.stop)
+  let plan := Formatter.LayoutPlan.resolve context segment
+  assertTrue "application dispatch resolves a flow plan" plan.isFlow
+  assertTrue "application plan is renderer-independent"
+    (!plan.breakPoints.any fun breakPoint => breakPoint.index > segment.stop)
   let left := SyntaxTree.tokenOfNone .ident Lean.identKind "left"
   let right := SyntaxTree.tokenOfNone .ident Lean.identKind "right"
   assertEq "space rules own ordinary token spacing" " "
@@ -12036,11 +12036,10 @@ def assertFormatterArchitecture : IO Unit := do
     (regroupedCustomDeclaration.containsNodeKind .annotatedDeclaration)
   let customDeclarationSegment :=
     Formatter.LineBreakRules.Segment.ofTree regroupedCustomDeclaration
-  let customDeclarationRule :=
-    Formatter.LineBreakRules.formattingRuleFor regroupedCustomDeclaration
+  let customDeclarationPlan :=
+    Formatter.LayoutPlan.resolve context customDeclarationSegment
   assertTrue "extended declaration modifiers stay with the command first line"
-    (customDeclarationRule.keepPrefixWithChildFirstLine
-      context customDeclarationSegment 1)
+    (customDeclarationPlan.keepsPrefixWithChildFirstLine 1)
   let unsuppressWrapper :=
     SyntaxTree.Tree.node (.raw `commandUnsuppress_compilationIn_)
       #[
@@ -12049,18 +12048,16 @@ def assertFormatterArchitecture : IO Unit := do
       ]
   let regroupedUnsuppress := SyntaxTree.regroupTree unsuppressWrapper
   let unsuppressSegment := Formatter.LineBreakRules.Segment.ofTree regroupedUnsuppress
-  let unsuppressRule := Formatter.LineBreakRules.formattingRuleFor regroupedUnsuppress
+  let unsuppressPlan := Formatter.LayoutPlan.resolve context unsuppressSegment
   assertTrue "command in wrapper flattens its optional payload"
     (unsuppressSegment.size == 3)
   assertTrue "command in wrapper breaks after in"
-    (unsuppressRule.breakPoints context unsuppressSegment
-      |>.any fun breakPoint => breakPoint.index == 2)
+    (unsuppressPlan.breakPoints |>.any fun breakPoint => breakPoint.index == 2)
   let annotatedTheorem := SyntaxTree.regroupTopLevelCommandAnnotations extendedTheorem
   let annotatedSegment := Formatter.LineBreakRules.Segment.ofTree annotatedTheorem
-  let annotatedRule := Formatter.LineBreakRules.formattingRuleFor annotatedTheorem
+  let annotatedPlan := Formatter.LayoutPlan.resolve context annotatedSegment
   assertTrue "extended top-level commands break after leading annotations"
-    (annotatedRule.breakPoints context annotatedSegment
-      |>.any fun breakPoint => breakPoint.index == 1)
+    (annotatedPlan.breakPoints |>.any fun breakPoint => breakPoint.index == 1)
   let docComment :=
     SyntaxTree.Tree.node (.raw `Lean.Parser.Command.docComment)
       #[.leaf (syntheticAtomToken "/-- Documented custom command. -/")]
@@ -12075,13 +12072,11 @@ def assertFormatterArchitecture : IO Unit := do
     SyntaxTree.regroupTopLevelCommandAnnotations documentedCustomCommand
   let customCommandSegment :=
     Formatter.LineBreakRules.Segment.ofTree annotatedCustomCommand
-  let customCommandRule :=
-    Formatter.LineBreakRules.formattingRuleFor annotatedCustomCommand
+  let customCommandPlan := Formatter.LayoutPlan.resolve context customCommandSegment
   assertTrue "top-level custom command doc comments regroup as annotations"
     (annotatedCustomCommand.containsNodeKind .annotatedDeclaration)
   assertTrue "top-level custom commands break after doc comments"
-    (customCommandRule.breakPoints context customCommandSegment
-      |>.any fun breakPoint => breakPoint.index == 1)
+    (customCommandPlan.breakPoints |>.any fun breakPoint => breakPoint.index == 1)
   let allowUnusedIdentifiers :=
     SyntaxTree.Tree.node (.raw `null)
       #[
@@ -12101,30 +12096,27 @@ def assertFormatterArchitecture : IO Unit := do
   let allowUnusedContext :=
     context.push (Formatter.LineBreakRules.Segment.ofTree allowUnusedCommand) 4
   let allowUnusedSegment := Formatter.LineBreakRules.Segment.ofTree allowUnusedIdentifiers
-  let allowUnusedRule := Formatter.LineBreakRules.formattingRuleFor allowUnusedIdentifiers
+  let allowUnusedPlan :=
+    Formatter.LayoutPlan.resolve allowUnusedContext allowUnusedSegment
   assertTrue "allow-unused-tactic identifiers inherit the command base"
-    (allowUnusedRule.inheritBase allowUnusedContext allowUnusedSegment)
-  assertTrue "allow-unused-tactic identifiers flow"
-    (allowUnusedRule.flow allowUnusedContext allowUnusedSegment)
+    allowUnusedPlan.inheritsBase
+  assertTrue "allow-unused-tactic identifiers flow" allowUnusedPlan.isFlow
   assertTrue "allow-unused-tactic identifiers break before and between names"
-    (allowUnusedRule.breakPoints allowUnusedContext allowUnusedSegment
+    (allowUnusedPlan.breakPoints
       == [{ index := 0, indentLevels := 0 }, { index := 1, indentLevels := 0 }])
 
 def assertDeclarationRuleTransparent : IO Unit := do
   let tree :=
     SyntaxTree.Tree.node (SyntaxTree.NodeKind.raw `Lean.Parser.Command.declaration) #[]
   let segment := Formatter.LineBreakRules.Segment.ofTree tree
-  let rule ←
-    match Formatter.LineBreakRules.ruleFor tree with
-    | some rule => pure rule
-    | none => throw <| IO.userError "declaration rule missing"
+  assertTrue "declaration rule is registered"
+    (Formatter.LineBreakRules.ruleFor tree).isSome
   let context : Formatter.LineBreakRules.RuleContext := {}
-  assertTrue "declaration rule has no source-break policy"
-    (!rule.useExistingBreaks context segment)
-  assertTrue "declaration rule is not mandatory" (!rule.mandatory context segment)
-  assertTrue "declaration rule is not flow" (!rule.flow context segment)
-  assertTrue "declaration rule has no break points"
-    (rule.breakPoints context segment == [])
+  let plan := Formatter.LayoutPlan.resolve context segment
+  assertTrue "declaration rule has no source-break policy" (!plan.preservesSourceBreaks)
+  assertTrue "declaration rule is not mandatory" (!plan.isMandatory)
+  assertTrue "declaration rule is not flow" (!plan.isFlow)
+  assertTrue "declaration rule has no break points" (plan.breakPoints == [])
 
 def assertRecursiveCommandArgumentsShareBase : IO Unit := do
   let argumentKind := `Aesop.Frontend.Parser.rule_expr___
@@ -12242,7 +12234,8 @@ def assertBracketedNotationRulesKeepDelimitersAttached : IO Unit := do
     (separatedBreaks
       == [{ index := 1, indentLevels := 1 }, { index := 4, indentLevels := 1 }])
   assertTrue "indexed term breakpoint normalization cannot target the closing delimiter"
-    (Formatter.normalizeBreakPoints separatedSegment separatedBreaks == separatedBreaks)
+    (Formatter.LayoutPlan.normalizeBreakPoints separatedSegment separatedBreaks
+      == separatedBreaks)
   let generatedIndexedWithNonAtomSeparator :=
     SyntaxTree.Tree.node (.raw `Example.«termIndexed[_,]_»)
       #[
@@ -12262,7 +12255,8 @@ def assertBracketedNotationRulesKeepDelimitersAttached : IO Unit := do
     (nonAtomSeparatorBreaks
       == [{ index := 1, indentLevels := 1 }, { index := 4, indentLevels := 1 }])
   assertTrue "non-atom separators cannot move indexed breaks onto the closing delimiter"
-    (Formatter.normalizeBreakPoints nonAtomSeparatorSegment nonAtomSeparatorBreaks
+    (Formatter.LayoutPlan.normalizeBreakPoints nonAtomSeparatorSegment
+        nonAtomSeparatorBreaks
       == nonAtomSeparatorBreaks)
   let generatedDelimitedWrapper :=
     SyntaxTree.Tree.node (.raw `Example.«termIndexed[_]»)
@@ -13849,6 +13843,7 @@ def runTestGroups (env : Lean.Environment) : IO Unit := do
   let groups :=
     #[
       ("syntax-tree", runSyntaxTreeTests env),
+      ("layout-architecture", LayoutArchitecture.run),
       ("basic-formatting", runBasicFormattingTests env),
       ("expression-renderer", runExpressionAndRendererTests projectSyntaxEnv),
       ("control-flow", runControlFlowTests projectSyntaxEnv),
