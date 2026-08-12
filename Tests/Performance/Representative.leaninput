@@ -1,0 +1,80 @@
+import Lean
+
+namespace LeanFmtPerformance
+
+structure Request where
+  source : String
+  depth : Nat
+  enabled : Bool
+
+structure Result where
+  values : Array Nat
+  selected : Option Nat
+
+def collect (request : Request) : Result := let base := request.depth + 1; let doubled := base * 2; let shifted := doubled + request.source.length; let values := #[base, doubled, shifted]; match request.enabled with | true => { values, selected := some shifted } | false => { values, selected := none }
+
+def evaluate (request : Request) : Nat :=
+  let first := request.depth + 1
+  let second := first + request.source.length
+  let third := second * 2
+  let fourth := third + first
+  let fifth := fourth + second
+  let sixth := fifth + third
+  let seventh := sixth + fourth
+  let eighth := seventh + fifth
+  let ninth := eighth + sixth
+  let tenth := ninth + seventh
+  if request.enabled then tenth else ninth
+
+def select (request : Request) : Option Nat :=
+  match collect request with
+  | { values := #[first, second, third], selected := some selected } =>
+      some (first + second + third + selected)
+  | { selected := selected, .. } => selected
+
+theorem evaluate_nonnegative (request : Request) : 0 ≤ evaluate request := by
+  unfold evaluate
+  split
+  · omega
+  · omega
+
+def calculate (request : Request) : Nat := by
+  calc
+    evaluate request = evaluate request := by rfl
+    _ = (let value := evaluate request; value) := by rfl
+    _ = evaluate request := by rfl
+
+def render (requests : List Request) : List Result :=
+  requests.map
+    fun request =>
+      let result := collect request
+      if request.enabled then
+        { result with selected := result.selected.map (fun value => value + request.depth) }
+      else
+        result
+
+def quotedCommand :=
+  `(command|
+    def generatedValue (input : Nat) : Nat :=
+      let first := input + 1
+      let second := first * 2
+      second)
+
+def commentedLayout :=
+  some
+    (/- This block comment intentionally spans lines while its containing application
+        participates in structural layout and original-source rebasing. -/
+      fun value =>
+        match value with
+        | 0 => 1
+        | next + 1 => next)
+
+def nestedApplications (request : Request) :=
+  some
+    (List.map
+      (fun value => value + request.depth)
+      (List.filter
+        (fun value => value % 2 = 0)
+        [evaluate request, request.depth, request.source.length]))
+
+end LeanFmtPerformance

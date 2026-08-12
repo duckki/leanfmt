@@ -2370,15 +2370,21 @@ structure LetBodyParserFact where
   bodyCanStartApplicationArgument : Bool
 deriving BEq, Repr
 
-def letBodyParserFact? (facts : Array LetBodyParserFact) (start : String.Pos.Raw)
-    : Option LetBodyParserFact :=
-  facts.find? fun fact => fact.letStart == start
+private abbrev LetBodyParserFactIndex := Std.HashMap String.Pos.Raw Bool
 
-partial def annotateLetExpressions (facts : Array LetBodyParserFact) : Tree → Tree
+private def indexLetBodyParserFacts (facts : Array LetBodyParserFact)
+    : LetBodyParserFactIndex :=
+  facts.foldl
+    (fun index fact =>
+      index.insertIfNew fact.letStart fact.bodyCanStartApplicationArgument)
+    {}
+
+private partial def annotateLetExpressionsWithIndex (facts : LetBodyParserFactIndex)
+    : Tree → Tree
   | .missing => .missing
   | .leaf token => .leaf token
   | .node kind children =>
-      let children := children.map (annotateLetExpressions facts)
+      let children := children.map (annotateLetExpressionsWithIndex facts)
       match kind with
       | .raw rawKind =>
           if rawKind == `Lean.Parser.Term.let
@@ -2386,15 +2392,15 @@ partial def annotateLetExpressions (facts : Array LetBodyParserFact) : Tree → 
               || rawKind == `Lean.Parser.Term.letrec then
             let bodyCanStartApplicationArgument :=
               match Tree.firstToken? (.node kind children) with
-              | some token =>
-                  (letBodyParserFact? facts token.span.start
-                    |>.map (·.bodyCanStartApplicationArgument)).getD
-                    true
+              | some token => facts[token.span.start]?.getD true
               | none => true
             .node (.letExpression rawKind bodyCanStartApplicationArgument) children
           else
             .node kind children
       | _ => .node kind children
+
+def annotateLetExpressions (facts : Array LetBodyParserFact) (tree : Tree) : Tree :=
+  annotateLetExpressionsWithIndex (indexLetBodyParserFacts facts) tree
 
 def extractTree
     (source : String) (stx : Syntax)

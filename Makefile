@@ -1,4 +1,4 @@
-.PHONY: all build test lint fixtures check shellcheck
+.PHONY: all build test lint fixtures profile check shellcheck
 
 all: check
 
@@ -16,6 +16,9 @@ fixtures:
 
 shellcheck:
 	shellcheck --severity=warning scripts/*.sh
+
+profile:
+	time scripts/profile-baseline.sh
 
 check: build test lint fixtures
 	time lake exe fmt --check --check-exception --check-idempotent -r LeanFmt

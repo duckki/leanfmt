@@ -7,9 +7,15 @@ conditions.
 
 ## Known issues
 
-- No reproduced release-blocking external-corpus shape is open. Fresh GraphQL,
-  quantum, and exact Mathlib validation passed at checkpoint 2; later formatter
-  changes must repeat the affected corpus checks before release.
+- Calc continuation rows can detach a placeholder `_` from its relation even
+  though placeholder-relation attachment is already the intended policy.
+- Multiline match arms, ordinary lambda bodies, proof comments, and block
+  closers can inherit a shallower physical base than their structural owner.
+- Fitting `by` and `do` suffixes can detach from `:=` or `=>`, while nested
+  infix and `<|` chains can accumulate indentation instead of sharing their
+  expression base.
+- Long quotation operands and nested named binders can put a closing delimiter
+  or `:` on a line whose indentation does not follow its containing structure.
 - Unknown generated syntax with multiple meaningful children intentionally
   reports a missing rule unless regrouping can prove a standard application,
   delimiter, infix, or declaration shape. Broadly treating such nodes as
@@ -24,9 +30,9 @@ conditions.
 - Long indivisible lines are accepted when they start at the correct logical
   indentation. Formatter-created too-many-lines warnings are accepted when the
   surrounding formatting shape is sound.
-- Performance checks are currently manual. Profiling exists, but the repository
-  has no stable representative baseline that detects a material regression in
-  syntax-tree construction, rendering, or convergence.
+- The local profiling guard is a same-machine comparison, so release review must
+  still consider full external-validation timings when concurrency, import
+  environments, or corpus size may dominate formatter cost.
 
 ## Checkpoint 1: layout ownership
 
@@ -71,7 +77,7 @@ formatting issue remains, and elapsed and CPU timings show no material regressio
 
 ## Checkpoint 3: performance and test hardening
 
-Status: next.
+Status: complete.
 
 - Record a small representative profiling baseline that exercises syntax-tree
   regrouping, original-layout emission, layout search, and convergence without
@@ -87,6 +93,40 @@ Status: next.
 Acceptance: the profiling baseline is documented and repeatable, test coverage
 represents all accepted corpus fixes, all release gates pass, and the v0.4
 candidate has no known exception, build, or performance blocker.
+
+## Checkpoint 4: structural attachment consistency
+
+Status: next.
+
+- Keep a calc placeholder attached to its relation without specializing the
+  rule to a particular relation token.
+- Apply the existing suffix mechanism consistently to fitting `by` and `do`
+  introducers after `:=`, `=>`, and equivalent value boundaries.
+- Make paired delimiters return to their structural opener and keep nested
+  binder punctuation on the binder's established continuation base.
+- Add focused reproductions before changing regrouping or line-break behavior;
+  do not add syntax-specific renderer conditions.
+
+Acceptance: focused tests cover each attachment invariant, self-formatting has
+no regression, GraphQL and quantum pass, and the affected Mathlib files format
+and build cleanly.
+
+## Checkpoint 5: structural base propagation
+
+Status: planned.
+
+- Give multiline match-arm and ordinary lambda bodies the indentation owned by
+  their structural parent.
+- Rebase proof comments and multiline block-comment continuations with the
+  proof statement they annotate.
+- Keep sibling infix and low-priority-pipe continuations on one expression base
+  instead of carrying an inline child column into the next operator.
+- Prefer one correction to base propagation over separate rules for each
+  observed syntax kind.
+
+Acceptance: focused tests and fixtures establish the shared base invariants,
+the complete local gate passes, and fresh GraphQL, quantum, and exact Mathlib
+validation has no release-blocking formatting finding.
 
 ## Validation standard
 

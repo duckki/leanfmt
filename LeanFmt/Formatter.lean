@@ -275,10 +275,13 @@ def formatSourceProfiledWithEnv
     <| SyntaxTree.parseModuleSyntaxWithEnvCoreDetailed env normalizedSource fileName
         (updateParserState := true)
   let (moduleTree, syntaxTreeMs) ←
-    timeIO
-    <| pure
-    <| Internal.buildModule normalizedSource parsedSyntax.rawSyntax
-        parsedSyntax.letBodyParserFacts parsedSyntax.infixPrecedences
+    timeIO do
+      let moduleTree :=
+        Internal.buildModule normalizedSource parsedSyntax.rawSyntax
+          parsedSyntax.letBodyParserFacts parsedSyntax.infixPrecedences
+      let tokenCount := moduleTree.tokens.size
+      IO.eprintln s!"leanfmt profile: {fileName}: tokens: {tokenCount}"
+      pure moduleTree
   let (formatted, renderMs) ←
     timeIO <| do
       let firstPass ← formatModuleWithEnv env moduleTree options

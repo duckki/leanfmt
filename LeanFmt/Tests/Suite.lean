@@ -107,6 +107,28 @@ def assertSourcePositionMapColumns : IO Unit := do
   assertTrue "source position map starts columns after a newline"
     (sourceMap.columnAt (String.Pos.Raw.mk 7) == 2)
 
+def assertDuplicateLetBodyParserFactsKeepFirstMatch (env : Lean.Environment)
+    : IO Unit := do
+  let source := "def indexedLet := let value := 0; value\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "let-body-parser-fact-index.lean"
+  let letTree ←
+    match findTreeNode? (.letExpression `Lean.Parser.Term.let true) moduleTree.tree with
+    | some tree => pure tree
+    | none => throw <| IO.userError "let expression was not annotated"
+  let start ←
+    match letTree.firstToken? with
+    | some token => pure token.span.start
+    | none => throw <| IO.userError "let expression had no first token"
+  let facts : Array SyntaxTree.LetBodyParserFact :=
+    #[
+      { letStart := start, bodyCanStartApplicationArgument := false },
+      { letStart := start, bodyCanStartApplicationArgument := true }
+    ]
+  let tree := SyntaxTree.extractTree source moduleTree.rawSyntax facts
+  assertTrue "duplicate let-body parser facts keep first-match semantics"
+    (findTreeNode? (.letExpression `Lean.Parser.Term.let false) tree).isSome
+
 def assertSyntaxTreeWhereRoundTrip (env : Lean.Environment) : IO Unit := do
   let source :=
     "def outer : Nat :=\n" ++ "  inner\n" ++ "where\n" ++ "  inner : Nat := 0\n"
@@ -5058,6 +5080,10 @@ def assertInitializeUsesStructuralDeclarationHeader (env : Lean.Environment)
     doSource doResult.formatted
   assertTrue "initialize do-sequence formatting preserves code"
     (← codePreservedIgnoringWhitespace env doSource doResult.formatted)
+  let doAgain ←
+    Formatter.formatSourceWithEnv env doResult.formatted
+      "initialize-do-sequence-base-formatted.lean" { lineWidth := 100 }
+  assertEq "initialize do-sequence formatting is idempotent" doResult.formatted doAgain
 
   let implicitDoSource :=
     "initialize implicitSequence : Nat ←\n"
@@ -5073,6 +5099,11 @@ def assertInitializeUsesStructuralDeclarationHeader (env : Lean.Environment)
     implicitDoSource implicitDoResult.formatted
   assertTrue "implicit initialize do-sequence formatting preserves code"
     (← codePreservedIgnoringWhitespace env implicitDoSource implicitDoResult.formatted)
+  let implicitDoAgain ←
+    Formatter.formatSourceWithEnv env implicitDoResult.formatted
+      "initialize-implicit-do-sequence-formatted.lean" { lineWidth := 100 }
+  assertEq "implicit initialize do-sequence formatting is idempotent"
+    implicitDoResult.formatted implicitDoAgain
 
 def assertDeclarationSignatureFitStopsBeforeBrokenByBody (env : Lean.Environment)
     : IO Unit := do
@@ -14398,6 +14429,7 @@ def assertCslibStyleCoreSyntaxHasRules (env : Lean.Environment) : IO Unit := do
 def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertSyntaxTreeRoundTrip env
   assertSourcePositionMapColumns
+  assertDuplicateLetBodyParserFactsKeepFirstMatch env
   assertSyntaxTreeWhereRoundTrip env
   assertUnifHintChildrenRegrouped
   assertLocalDeclarationSignatureRegrouped env

@@ -294,6 +294,20 @@ lake exe fmt-test --profile --check path/to/File.lean
 Profile output includes normalize, parse, syntax-tree construction, render, and total
 format time.
 
+The repository also includes a stable local workload that covers regrouping,
+original-layout emission, layout search, and convergence. Record a baseline before an
+optimization and compare the new implementation on the same machine:
+
+```sh
+scripts/profile-baseline.sh --record /tmp/leanfmt-before.profile
+scripts/profile-baseline.sh --compare /tmp/leanfmt-before.profile
+```
+
+The script runs one warmup followed by five timed samples and compares median phase
+timings. It allows a 25 percent increase with a 10ms absolute floor by default; the
+sample count and tolerances can be changed through the environment variables shown by
+`scripts/profile-baseline.sh --help`. Do not compare baseline files across machines.
+
 For larger runs, redirect ordinary formatter output and time the command externally:
 
 ```sh
