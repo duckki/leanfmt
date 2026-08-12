@@ -63,7 +63,7 @@ issue set, and review of all fixture and self-format deltas.
 Status: complete.
 
 - Validate fresh GraphQL and quantum clones with automatic formatter workers.
-- Validate exact Mathlib `v4.32.0` at width 100, formatting only `Mathlib` and
+- Validate exact Mathlib `v4.33.0` at width 100, formatting only `Mathlib` and
   using the Lake cache.
 - Review every candidate-only formatting delta for missing or wrong line breaks,
   incorrect indentation, fallback, non-idempotence, preservation failures, and

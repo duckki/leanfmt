@@ -9,7 +9,7 @@ path = "../.."
 [[require]]
 name = "batteries"
 scope = "leanprover-community"
-rev = "v4.32.0"
+rev = "v4.33.0"
 
 [[lean_exe]]
 name = "runLinter"
