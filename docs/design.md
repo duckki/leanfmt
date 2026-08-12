@@ -28,6 +28,7 @@ def parenthesizedConjunctionChain (schema : Schema) : Prop :=
 into a layout where each leading `∧` connects a peer operand and indentation
 shows the structure inside each operand:
 
+<!-- leanfmt-test -->
 ```lean
 def parenthesizedConjunctionChain (schema : Schema) : Prop :=
   namesAreUnique (schema.allTypes.map TypeDefinition.name)
@@ -81,11 +82,12 @@ def result :=
 For infix expressions, a leading operator indicates continuation without adding
 another logical nesting level:
 
+<!-- leanfmt-test -->
 ```lean
-def result : Prop :=
-  firstCondition
-  ∧ secondCondition
-  ∧ finalCondition
+def propositionContinuation : Prop :=
+  sourceSelectionSetIsWellFormed
+  ∧ normalizedSelectionSetPreservesResponseKeys
+  ∧ fragmentExpansionPreservesRuntimeSemantics
 ```
 
 leanfmt generally breaks before operators for this reason. Bodies after `:=`,
@@ -433,11 +435,13 @@ structure Point where
 
 For example, a declaration that wraps because of width moves below its attribute:
 
+<!-- leanfmt-test -->
 ```lean
 @[simp]
-theorem theoremNameWithEnoughCharactersToRequireAnAttributeHeaderBreak
-    (value : VeryLongInputTypeName)
-    : VeryLongOutputTypeName := proof
+theorem normalizedSelectionSetExecutionPreservesFieldResponseOrdering
+    (value : NormalizedSelectionSet)
+    : SelectionSetExecutionResult :=
+  proof
 ```
 
 Keyword modifiers remain on the declaration header:
@@ -464,11 +468,13 @@ A declaration name normally stays with its command keyword and modifiers. If tha
 prefix makes the name overflow, the name moves to the ordinary four-space declaration
 continuation. Parameters and the return type then keep using the same declaration base:
 
+<!-- leanfmt-test -->
 ```lean
 private theorem
-    theoremNameThatCannotShareThePrivateTheoremHeader
+    normalizedSelectionSetPreservesDirectiveEvaluationAcrossFragmentExpansion
     (value : InputType)
-    : OutputType := proof
+    : OutputType :=
+  proof
 ```
 
 This name flow is shared by definitions, theorems, structures, inductives, and other
@@ -480,9 +486,11 @@ Declaration parameters flow at binder boundaries. leanfmt keeps as many
 binders as fit and places later binders on continuation lines indented four
 spaces from the declaration base.
 
+<!-- leanfmt-test -->
 ```lean
-def lookupObject (schema : Schema) (typeName : Name)
-    (fallback : ObjectType) : Option ObjectType :=
+def lookupObject (schema : Schema) (requestedTypeName : Name)
+    (fallbackObjectType : ObjectType)
+    : Option ObjectType :=
   body
 ```
 
@@ -509,11 +517,12 @@ def compareSelections
 
 If one binder is too long, it may break before its type annotation:
 
+<!-- leanfmt-test -->
 ```lean
-def example
+def binderExample
     (hknown
       : ∀ name value,
-          predicate name value) :=
+          everyReferencedObjectValueBelongsToTheDeclaredCompositeSchemaType name value) :=
   body
 ```
 
@@ -534,11 +543,12 @@ comment between the colon and result type moves beside the colon when the
 complete `: -- comment` line fits. The comment's own newline then establishes
 the indented result continuation:
 
+<!-- leanfmt-test -->
 ```lean
 theorem projective_of_lifting_property (h : LiftingProperty P)
     : -- The lifting property makes `P` projective.
       Projective R P := by
-  ...
+  exact proof
 ```
 
 Comments immediately inside a delimiter follow the same boundary behavior. A
@@ -601,11 +611,13 @@ Nested and local declarations give the signature and value separate layout owner
 The assignment boundary is therefore tried before splitting a fitting signature,
 independently of the source line on which the value begins:
 
+<!-- leanfmt-test -->
 ```lean
-def outer : Nat := helper 0
+def outer : Nat :=
+  helper 0
 where
   helper (n : Nat) : Nat → Nat :=
-    computeLongResult n anotherArgument
+    computeNormalizedRecursiveSelectionResultWithAccumulatedErrors n anotherArgument
 ```
 
 Termination clauses follow the same ownership rule. `termination_by` and
@@ -661,12 +673,16 @@ Declarations inside `mutual` remain peers at the mutual-body indentation even
 when a preceding declaration ends with a termination clause. A declaration's
 documentation comment shares that same base:
 
+<!-- leanfmt-test -->
 ```lean
 mutual
-  def first (n : Nat) : Nat := second n
+  def first (n : Nat) : Nat :=
+    second n
   termination_by n
+
   /-- Calls `first`. -/
-  def second (n : Nat) : Nat := first n
+  def second (n : Nat) : Nat :=
+    first n
   termination_by n
 end
 ```
@@ -746,11 +762,12 @@ structure MultipleParentStructure (A : Type)
 Long field types use the same binder/type continuation principles as other
 declarations.
 
+<!-- leanfmt-test -->
 ```lean
-structure ResolverFixture where
+structure ResolverFixture (ObjectRef : Type := PUnit) where
   resolve
-    : Name -> Name -> List Argument
-      -> Option ResponseValue
+    : Name -> Name -> List Argument -> ResolverValue ObjectRef
+      -> Option (ResolverValue ObjectRef)
 ```
 
 Inductive constructors also start on separate lines:
@@ -1018,11 +1035,12 @@ context:
 - arrows in theorem statements, `Prop` definition bodies, quantifier bodies,
   and logical operands break as a balanced logical group.
 
+<!-- leanfmt-test -->
 ```lean
 theorem valid
-    : FirstCondition
-      -> SecondCondition
-      -> FinalCondition := by
+    : SourceSelectionSetIsWellFormed
+      -> NormalizedSelectionSetPreservesResponseKeys
+      -> FragmentExpansionPreservesExecutionSemantics := by
   exact proof
 ```
 
@@ -1059,11 +1077,12 @@ def parenthesizedDisjunctionChain (schema : Schema) (implementation expected : N
 A quantifier stays flat when it fits. Otherwise its body begins after the comma
 and is indented one level.
 
+<!-- leanfmt-test -->
 ```lean
-def mixedAdjacentQuantifiers : Prop :=
+def mixedAdjacentQuantifiersLong : Prop :=
   ∃ objectType,
     ∀ typeCondition,
-      typeCondition ∈ typeConditions
+      typeCondition ∈ declaredCompositeTypeConditionsForCurrentSelection
       -> objectType ∈ schema.getPossibleTypes typeCondition
 ```
 
@@ -1077,11 +1096,12 @@ def adjacentQuantifiers : Prop :=
 
 Different quantifiers add a level when their bodies wrap:
 
+<!-- leanfmt-test -->
 ```lean
-def mixedAdjacentQuantifiers : Prop :=
+def mixedQuantifierPredicate : Prop :=
   ∃ objectType,
     ∀ typeCondition,
-      predicate objectType typeCondition
+      selectedObjectSatisfiesTheDeclaredCompositeTypeCondition objectType typeCondition
 ```
 
 Long binder sequences can flow between binders and between names belonging to
@@ -1197,9 +1217,10 @@ When `have` is the right operand of a broken low-priority pipe, it uses the same
 mandatory start alignment as `let`. The operator stays with the first line of
 the `have` expression, and the expression and its body share one aligned base:
 
+<!-- leanfmt-test -->
 ```lean
 def pipeHave :=
-  longFunctionNameWithEnoughCharactersToForceLowPriorityPipeBreak
+  resolveSelectionSetWithAccumulatedFragmentAndDirectiveContext
   <|  have value := 0
       value
 ```
@@ -1371,8 +1392,9 @@ configured width after moving to that column.
 align with the tactic, and a multiline alternative body is indented two levels
 beneath it:
 
+<!-- leanfmt-test -->
 ```lean
-theorem example (value : Nat) : True := by
+theorem casesExample (value : Nat) : True := by
   cases value with
   | zero =>
       exact True.intro
@@ -1632,13 +1654,16 @@ it was present in the source; leanfmt does not add one.
 Anonymous constructors use the same balanced shape. Single-field constructors
 remain flat when they fit.
 
+<!-- leanfmt-test -->
 ```lean
 def setoidWitness :=
   ⟨
-    fun a b => related a b,
-    fun a => ⟨refl a⟩,
-    fun h => h.symm,
-    fun h₁ h₂ => h₁.trans h₂
+    fun firstExpression secondExpression =>
+      expressionsAreDefinitionallyEquivalent firstExpression secondExpression,
+    fun expression => ⟨definitionallyEquivalentRefl expression⟩,
+    fun equivalenceProof => equivalenceProof.symm,
+    fun firstEquivalenceProof secondEquivalenceProof =>
+      firstEquivalenceProof.trans secondEquivalenceProof
   ⟩
 ```
 

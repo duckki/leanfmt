@@ -1,6 +1,7 @@
 import LeanFmt
 import LeanFmt.Cli
 import LeanFmt.Tests.Cli
+import LeanFmt.Tests.DocumentedExamples
 import LeanFmt.Tests.ExportedModuleSyntax
 import LeanFmt.Tests.LayoutArchitecture
 import LeanFmt.Tests.MetaImportRoot
@@ -13998,6 +13999,7 @@ def runTestGroups (env : Lean.Environment) : IO Unit := do
   let groups :=
     #[
       ("syntax-tree", runSyntaxTreeTests env),
+      ("documented-examples", DocumentedExamples.run env),
       ("layout-architecture", LayoutArchitecture.run),
       ("basic-formatting", runBasicFormattingTests env),
       ("expression-renderer", runExpressionAndRendererTests projectSyntaxEnv),

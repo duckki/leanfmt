@@ -211,6 +211,15 @@ rebasing. Prefer adding intermediate tests there when changing component boundar
 keep final formatted-text and parser-preservation coverage in the broad suite and
 fixtures.
 
+`LeanFmt.Tests.DocumentedExamples` keeps canonical examples in `docs/design.md`
+synchronized with the formatter. Put `<!-- leanfmt-test -->` immediately before a
+standalone Lean fence whose contents represent formatted output. The test formats each
+marked fence, rejects formatter fallback, and requires the result to equal the documented
+source. Update its expected example count whenever intentionally adding or removing a
+marked example; the count prevents an accidentally removed marker from silently dropping
+coverage. Do not mark deliberately unformatted input, partial syntax, or examples that
+require a syntax environment other than the suite's default Lean environment.
+
 Run fixture checks without rewriting fixture files:
 
 ```sh
