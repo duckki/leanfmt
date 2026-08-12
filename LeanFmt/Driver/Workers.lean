@@ -241,7 +241,7 @@ def Options.workerArgs
     args
 
 def expectedLeanToolchain : String :=
-  s!"leanprover/lean4:v{Lean.versionStringCore}"
+  s!"leanprover/lean4:v{Lean.versionString}"
 
 def checkWorkerToolchain (cwd? : Option FilePath) : IO Bool := do
   match cwd? with

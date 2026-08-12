@@ -11735,6 +11735,9 @@ def assertImportFilesGroupByHeader : IO Unit := do
         (toString [[second], [first, third]]) (toString (groups.map (·.files)))
 
 def assertRecursiveWorkerChecksTargetToolchain : IO Unit := do
+  assertEq "worker toolchain preserves the full Lean version"
+    s!"leanprover/lean4:v{Lean.versionString}"
+    LeanFmt.Driver.expectedLeanToolchain
   IO.FS.withTempDir
     fun root => do
       let matching := root / "matching"
