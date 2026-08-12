@@ -87,6 +87,7 @@ end Segment
 def Segment.rawKind? (segment : Segment) : Option Lean.SyntaxNodeKind :=
   match segment.parent with
   | .node (.raw kind) _ => some kind
+  | .node (.command kind) _ => some kind
   | .node (.tactic kind _ _ _) _ => some kind
   | .node (.letExpression kind _) _ => some kind
   | _ => none
@@ -100,6 +101,7 @@ def RuleContext.parentRawKind? (context : RuleContext) : Option Lean.SyntaxNodeK
   | some frame =>
       match frame.segment.parent with
       | .node (.raw kind) _ => some kind
+      | .node (.command kind) _ => some kind
       | .node (.tactic kind _ _ _) _ => some kind
       | _ => none
   | none => none
@@ -107,6 +109,7 @@ def RuleContext.parentRawKind? (context : RuleContext) : Option Lean.SyntaxNodeK
 def Frame.rawKind? (frame : Frame) : Option Lean.SyntaxNodeKind :=
   match frame.segment.parent with
   | .node (.raw kind) _ => some kind
+  | .node (.command kind) _ => some kind
   | .node (.tactic kind _ _ _) _ => some kind
   | .node (.letExpression kind _) _ => some kind
   | _ => none
@@ -115,6 +118,9 @@ def Frame.nodeKind? (frame : Frame) : Option SyntaxTree.NodeKind :=
   match frame.segment.parent with
   | .node kind _ => some kind
   | _ => none
+
+def Frame.childIsLast (frame : Frame) : Bool :=
+  frame.childIndex + 1 == frame.segment.stop
 
 def RuleContext.parentIsSingletonArrayItemWrapper (context : RuleContext) : Bool :=
   match context.ancestors with
@@ -139,7 +145,7 @@ def RuleContext.parentIsStructureFieldDefaultValue (context : RuleContext) : Boo
   match context.ancestors with
   | parent :: _ =>
       parent.rawKind? == some `Lean.Parser.Command.structSimpleBinder
-      && parent.childIndex == 3
+      && parent.childIsLast
   | _ => false
 
 def RuleContext.parentWrapsStructureFieldDefaultValue (context : RuleContext) : Bool :=
@@ -147,12 +153,21 @@ def RuleContext.parentWrapsStructureFieldDefaultValue (context : RuleContext) : 
   | parent :: grandparent :: _ =>
       parent.rawKind? == some `null
       && grandparent.rawKind? == some `Lean.Parser.Command.structSimpleBinder
-      && grandparent.childIndex == 3
+      && grandparent.childIsLast
   | _ => false
 
 def RuleContext.parentIsAnnotatedDeclaration (context : RuleContext) : Bool :=
   match context.ancestors with
   | parent :: _ => parent.nodeKind? == some .annotatedDeclaration
+  | _ => false
+
+def RuleContext.parentIsIndexedInfixRhs (context : RuleContext) : Bool :=
+  match context.ancestors with
+  | parent :: _ =>
+      (match parent.nodeKind? with
+        | some (.indexedInfix _) => true
+        | _ => false)
+      && parent.childIsLast
   | _ => false
 
 def defaultInheritBase (context : RuleContext) (segment : Segment) : Bool :=
@@ -164,7 +179,8 @@ def defaultInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   || (segment.rawKind? == some `Lean.Parser.Term.binderDefault
       && context.parentWrapsStructureFieldDefaultValue)
   || (segment.rawKind? == some `null
-      && context.parentRawKind? == some `Lean.Parser.Term.doReturn)
+      && (context.parentRawKind? == some `Lean.Parser.Term.doReturn
+          || context.parentRawKind? == some `Lean.Parser.Term.termReturn))
 
 def parentIsSignatureParameters (context : RuleContext) : Bool :=
   match context.ancestors with
@@ -237,6 +253,7 @@ def childIsRawKind (segment : Segment) (index : Nat) (kind : Lean.SyntaxNodeKind
     : Bool :=
   match segment.child? index with
   | some (.node (.raw childKind) _) => childKind == kind
+  | some (.node (.command childKind) _) => childKind == kind
   | some (.node (.tactic childKind _ _ _) _) => childKind == kind
   | _ => false
 
@@ -253,6 +270,7 @@ partial def treeIsRawKindThroughNullWrappers
         && content[0]?.any fun child => treeIsRawKindThroughNullWrappers child kind
       else
         false
+  | .node (.command childKind) _ => childKind == kind
   | .node (.tactic childKind _ _ _) _ => childKind == kind
   | _ => false
 
@@ -264,14 +282,18 @@ def childIsRawKindThroughNullWrappers
 def firstChildRawKind? (segment : Segment) (kind : Lean.SyntaxNodeKind) : Option Nat :=
   segment.indexes.find? fun index => childIsRawKind segment index kind
 
-def treeHasContent : SyntaxTree.Tree → Bool
+partial def treeHasContent : SyntaxTree.Tree → Bool
   | .missing => false
   | .leaf token => !token.lexeme.isEmpty
-  | .node _ children => !children.isEmpty
+  | .node _ children => children.any treeHasContent
+
+def hasAtMostOneContentChild (children : Array SyntaxTree.Tree) : Bool :=
+  (children.filter treeHasContent).size <= 1
 
 def treeIsRawKind (tree : SyntaxTree.Tree) (kind : Lean.SyntaxNodeKind) : Bool :=
   match tree with
   | .node (.raw treeKind) _ => treeKind == kind
+  | .node (.command treeKind) _ => treeKind == kind
   | .node (.tactic treeKind _ _ _) _ => treeKind == kind
   | _ => false
 
@@ -302,6 +324,8 @@ partial def treeContainsRawKind (kind : Lean.SyntaxNodeKind) : SyntaxTree.Tree �
   | .missing
   | .leaf _ => false
   | .node (.raw treeKind) children =>
+      treeKind == kind || children.any (treeContainsRawKind kind)
+  | .node (.command treeKind) children =>
       treeKind == kind || children.any (treeContainsRawKind kind)
   | .node (.tactic treeKind _ _ _) children =>
       treeKind == kind || children.any (treeContainsRawKind kind)
@@ -578,10 +602,8 @@ def childStartsWithSuffixKeywordToken (segment : Segment) (index : Nat) : Bool :
 -- Default Rule
 -----------------------------------------------------------------------------------------
 
-def defaultChildPresent : SyntaxTree.Tree → Bool
-  | .missing => false
-  | .leaf token => !token.lexeme.isEmpty
-  | .node _ children => !children.isEmpty
+def defaultChildPresent (tree : SyntaxTree.Tree) : Bool :=
+  treeHasContent tree
 
 def defaultChildIsNonemptyLeaf : SyntaxTree.Tree → Bool
   | .leaf token => !token.lexeme.isEmpty
@@ -891,7 +913,9 @@ def delimiterValueBreak? (segment : Segment) (delimiter : String)
     boundaryBreak? segment valueIndex 1
 
 def declarationValueBreak? (segment : Segment) : Option BreakPoint :=
-  delimiterValueBreak? segment ":="
+  (delimiterValueBreak? segment ":=").orElse
+    fun _ =>
+      delimiterValueBreak? segment "←"
 
 def declarationValueBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
@@ -899,8 +923,8 @@ def declarationValueBreaks (_context : RuleContext) (segment : Segment)
   ++ segment.indexes.filterMap
       fun index =>
         if segment.start < index
-            && (childIsRawKindThroughNullWrappers
-                  segment index `Lean.Parser.Term.whereDecls
+            && (childIsRawKindThroughNullWrappers segment index
+                  `Lean.Parser.Term.whereDecls
                 || (childIsRawKind segment index `Lean.Parser.Termination.suffix
                     && (segment.child? index).any treeHasContent)) then
           boundaryBreak? segment index 0
@@ -3260,6 +3284,11 @@ def setOptionRule : LineBreakRule :=
 def transparentRule : LineBreakRule :=
   {
     name := "transparent"
+    inheritBase :=
+      fun context segment =>
+        (segment.rawKind? == some `Lean.Parser.Term.fun
+          && context.parentIsIndexedInfixRhs)
+        || segment.rawKind? == some `Lean.Parser.Command.structSimpleBinder
     formatOriginalChildLeadingBoundary :=
       fun _ segment index =>
         segment.indexes.any
@@ -3787,6 +3816,8 @@ def isGeneratedMathlibCrossRefKind (kind : Lean.SyntaxNodeKind) : Bool :=
 partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .missing => some defaultRule
   | .leaf _ => some defaultRule
+  | .node (.command kind) children =>
+      ruleFor (.node (.raw kind) children) |>.orElse fun _ => some defaultRule
   | .node (.tactic kind _ _ _) children => ruleFor (.node (.raw kind) children)
   -- Module and declaration wrappers with generic layout.
   | .node (.raw `null) _ => some nullRule
@@ -3987,6 +4018,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.matchExprPat) _ => some defaultRule
   | .node (.raw `Lean.Parser.Term.binderDefault) _ => some binderDefaultRule
   | .node (.raw `Lean.Parser.Term.namedArgument) _ => some namedArgumentRule
+  | .node (.raw `Lean.Parser.Term.dependentParam) _ => some transparentRule
   | .node (.raw `Lean.Parser.Term.strictImplicitBinder) _ => some defaultRule
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _ => some anonymousCtorRule
   | .node (.raw `Lean.Parser.Term.local) _ => some defaultRule
@@ -4363,7 +4395,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node .application _ => some applicationRule
   | .node (.indexedInfix _) _ => some indexedNotationRule
   | .node .patternLambda _ => some basicFunRule
-  | .node .localDeclarationHeader _ => some signatureRule
+  | .node .declarationHeader _ => some signatureRule
   | .node .signatureParameters _ => some signatureParametersRule
   | .node .matchPatterns _ => some matchPatternsRule
   | .node .matchDiscriminants _ => some matchDiscriminantsRule
@@ -4447,7 +4479,9 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.matchAltsWhereDecls) _ => some matchAltsWhereDeclsRule
   | .node (.raw `Lean.Parser.Term.matchAlts) _ => some matchAltsRule
   | .node (.raw kind) children =>
-      if isGeneratedIndexedPrefixTerm kind children then
+      if hasAtMostOneContentChild children then
+        some transparentRule
+      else if isGeneratedIndexedPrefixTerm kind children then
         some indexedTermRule
       else if isGeneratedSetBuilderTerm kind children then
         some setBuilderRule

@@ -2,6 +2,7 @@ import Lean
 
 syntax (name := projectSyntax) "project_syntax" : term
 syntax (name := contextClassifiedTactic) "context_classified_tactic " ident ident : tactic
+syntax (name := projectPrefixedDeclaration) "project_haveI' " letDecl : doElem
 elab (name := projectNoteCommand) "#project_note " (docComment)? : command =>
   pure ()
 
@@ -19,3 +20,17 @@ end BigOperators
 
 syntax (name := projectIndexedSup) "⨆ " ident " : " term ", " term : term
 syntax (name := projectModifiedForall) "∀ᵉ " ident " ∈ " term ", " term : term
+
+namespace ProjectGenerated
+
+scoped elab:max "TestScopedHead%" ppSpace first:term:arg ppSpace _second:term:arg ppSpace
+    _third:term:arg : term =>
+  Lean.Elab.Term.elabTerm first none
+
+end ProjectGenerated
+
+namespace Qq
+
+scoped syntax (name := «termQ(__)») "q(" term (" : " term)? ")" : term
+
+end Qq

@@ -674,8 +674,11 @@ def RenderState.withCommentBoundaryIndent
     (state : RenderState) (indent : Nat) (moveCommentAfterToken : Bool)
     : RenderState :=
   {
-    state.withPendingIndent indent with
+    state with
+      pendingIndent? := some indent
+      pendingCommandBoundary? := none
       movePendingCommentAfterToken := moveCommentAfterToken
+      tailIndentation? := none
   }
 
 def breakIndent (baseColumn baseIndentation : Nat)

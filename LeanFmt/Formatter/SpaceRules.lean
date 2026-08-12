@@ -461,7 +461,7 @@ def hasCommentStart (text : String) : Bool :=
   containsSubstring text "--" || containsSubstring text "/-"
 
 def isCommentLexeme (text : String) : Bool :=
-  text.startsWith "--" || text.startsWith "/-" || containsSubstring text "-/"
+  text.startsWith "--" || text.startsWith "/-" || text.endsWith "-/"
 
 def hasOnlyHorizontalTrivia (text : String) : Bool :=
   !text.isEmpty && !hasLineStructure text && !hasCommentStart text
@@ -567,6 +567,8 @@ def interTokenWhitespace
     cleanTrivia trivia
   else if trivia.isEmpty then
     ""
+  else if left.lexeme == "." && hasOnlyHorizontalTrivia trivia then
+    " "
   else if preservesSourceSpaceBeforeClosingToken left right then
     " "
   else

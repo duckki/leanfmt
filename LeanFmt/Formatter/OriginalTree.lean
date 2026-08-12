@@ -95,11 +95,30 @@ private def rebaseMultilineSourceSlice (targetColumn : Nat) (text : String) : St
       String.intercalate "\n"
       <| first :: rebaseLines sourceContinuationColumn targetColumn rest
 
-private def rebaseTokenLexeme (sourceColumn targetColumn : Nat) (token : SyntaxTree.Token)
+private def floorLineIndent (minimum : Nat) (line : String) : String :=
+  if line.isEmpty then
+    line
+  else
+    let indentation := (leadingWhitespace line).length
+    if minimum <= indentation then line else spaces (minimum - indentation) ++ line
+
+private def floorContinuationIndent (minimum : Nat) (text : String) : String :=
+  match (SpaceRules.normalizeLineEndings text).splitOn "\n" with
+  | [] => ""
+  | first :: rest =>
+      String.intercalate "\n" <| first :: rest.map (floorLineIndent minimum)
+
+private def rebaseTokenLexeme
+    (treeSourceColumn treeTargetColumn sourceColumn targetColumn : Nat)
+    (token : SyntaxTree.Token)
     : String :=
   if SpaceRules.isCommentLexeme token.lexeme
       && SpaceRules.hasLineStructure token.lexeme then
-    SpaceRules.reindentCommentLexeme token.lexeme sourceColumn targetColumn
+    let rebased := SpaceRules.reindentCommentLexeme token.lexeme sourceColumn targetColumn
+    if (sourceContinuationIndent? token.lexeme).any (· < treeSourceColumn) then
+      floorContinuationIndent treeTargetColumn rebased
+    else
+      rebased
   else
     token.lexeme
 
@@ -151,13 +170,19 @@ private def rebaseTreeText
         let text :=
           match unit with
           | .sourceToken token =>
-              rebaseTokenLexeme (sourceMap.columnAt token.span.start) outputColumn token
+              rebaseTokenLexeme sourceColumn targetColumn
+                (sourceMap.columnAt token.span.start) outputColumn token
           | .syntaxComment span =>
               let comment := SyntaxTree.sourceText source span.start span.stop
-              if SpaceRules.hasLineStructure trivia then
-                rebaseMultilineSourceSlice outputColumn comment
+              let rebased :=
+                if SpaceRules.hasLineStructure trivia then
+                  rebaseMultilineSourceSlice outputColumn comment
+                else
+                  rebaseTextIndent (sourceMap.columnAt span.start) outputColumn comment
+              if (sourceContinuationIndent? comment).any (· < sourceColumn) then
+                floorContinuationIndent targetColumn rebased
               else
-                rebaseTextIndent (sourceMap.columnAt span.start) outputColumn comment
+                rebased
         loop span.stop (columnAfterAppend outputColumn text) (text :: trivia :: parts)
           rest
   match rebaseUnits tree.tokens.toList tree.syntaxCommentSpans with
@@ -239,13 +264,13 @@ private def proofBodyContainsTacticLayoutOwner : SyntaxTree.Tree → Bool
 private def isQuotationTree : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Term.quot) _ => true
   | .node (.raw `Lean.Parser.Term.precheckedQuot) _ => true
+  | .node (.raw `Lean.Parser.Term.dynamicQuot) _ => true
   | .node (.raw `Lean.Parser.Command.quot) _ => true
   | .node (.raw `Lean.Parser.Tactic.quot) _ => true
   | .node (.raw `Lean.Parser.Tactic.quotSeq) _ => true
   | .node (.tactic `Lean.Parser.Tactic.quot _ _ _) _ => true
   | .node (.tactic `Lean.Parser.Tactic.quotSeq _ _ _) _ => true
   | .node (.raw `token_antiquot) _ => true
-  | .node (.raw `Qq.«termQ(__)») _ => true
   | .node kind _ =>
       let kindName := SyntaxTree.nodeKindName kind
       kindName == "antiquotName" || SpaceRules.containsSubstring kindName ".antiquot"
@@ -256,15 +281,6 @@ private partial def containsQuotationTree : SyntaxTree.Tree → Bool
   | .leaf _ => false
   | tree@(.node _ children) =>
       isQuotationTree tree || children.any containsQuotationTree
-
-private partial def containsQuotationOutsideProofTree : SyntaxTree.Tree → Bool
-  | .missing => false
-  | .leaf _ => false
-  | tree@(.node _ children) =>
-      if isProofBodyTree tree then
-        false
-      else
-        isQuotationTree tree || children.any containsQuotationOutsideProofTree
 
 private def isQqSyntaxTree : SyntaxTree.Tree → Bool
   | .node (.raw `Qq.«termQ(__)») _ => true
@@ -344,9 +360,6 @@ private def isStructuredCalcTree : SyntaxTree.Tree → Bool
         | _ => false
   | _ => false
 
-private def isTacticKindName (kindName : String) : Bool :=
-  coreTacticKindName kindName || SyntaxTree.isExtensionTacticKindName kindName
-
 private def isProtectedTacticTree : SyntaxTree.Tree → Bool
   | .node (.raw `Mathlib.Tactic.dsimpPercent) _ => false
   | .node (.tactic `Mathlib.Tactic.dsimpPercent _ _ _) _ => false
@@ -358,7 +371,7 @@ private def isProtectedTacticTree : SyntaxTree.Tree → Bool
         match kind with
         | .tactic rawKind _ isOwner _ => !isTacticSequenceKind rawKind && !isOwner
         | .raw rawKind =>
-            isTacticKindName kindName
+            coreTacticKindName kindName
             && !isTacticSequenceKind rawKind
             && !SyntaxTree.Tree.isTacticLayoutOwner tree
         | _ => false
@@ -433,17 +446,6 @@ private partial def containsProofTree : SyntaxTree.Tree → Bool
 private def isProofLambdaTree (tree : SyntaxTree.Tree) : Bool :=
   LineBreakRules.treeFirstLexeme? tree == some "fun" && containsProofTree tree
 
-private def isDefinitionContainingQuotation (tree : SyntaxTree.Tree) : Bool :=
-  match tree with
-  | .node .definition _ => containsQuotationOutsideProofTree tree
-  | .node (.raw `Lean.Parser.Command.definition) _ =>
-      containsQuotationOutsideProofTree tree
-  | .node (.raw `Lean.Parser.Command.abbrev) _ =>
-      containsQuotationOutsideProofTree tree
-  | .node (.raw `Lean.Parser.Command.declaration) _ =>
-      containsQuotationOutsideProofTree tree
-  | _ => false
-
 private def isQuotationLayoutIsland (tree : SyntaxTree.Tree) : Bool :=
   match tree with
   | .node (.raw `Lean.Parser.Term.set_option) _ =>
@@ -485,27 +487,11 @@ private def proofLayoutRebasesFromFirstToken : SyntaxTree.Tree → Bool
   | .node (.raw `«term{_}») _ => true
   | _ => false
 
-private def isProofLemmaCommand (tree : SyntaxTree.Tree) : Bool :=
-  match tree with
-  | .node (.raw `lemma) _ =>
-      LineBreakRules.treeFirstLexeme? tree == some "lemma" && containsProofTree tree
-  | .node (.raw `group) _ =>
-      LineBreakRules.treeFirstLexeme? tree == some "lemma" && containsProofTree tree
-  | _ => false
-
-private partial def containsTransparentTacticLayoutOwner : SyntaxTree.Tree → Bool
-  | .node kind children =>
-      let tree := SyntaxTree.Tree.node kind children
-      if isCalcTree tree || isProtectedTacticTree tree then
-        false
-      else
-        tree.isTacticLayoutOwner || children.any containsTransparentTacticLayoutOwner
-  | _ => false
-
 private def isAttributeModifierBlock (tree : SyntaxTree.Tree) : Bool :=
   match tree with
   | .node (.raw `Lean.Parser.Command.declModifiers) _ =>
       LineBreakRules.treeContainsLexeme "@[" tree
+  | .node (.raw `Lean.Parser.Term.attrInstance) _ => true
   | .node (.raw `Lean.Parser.Term.attributes) _ => true
   | _ => false
 
@@ -524,9 +510,7 @@ inductive LayoutIslandKind where
   | ignored
   | proof
   | proofLayout
-  | proofLemma
   | attributes
-  | definitionQuotation
   | calc
   | commentSensitiveMatch
   | quotationLayout
@@ -543,6 +527,10 @@ inductive LayoutIslandKind where
 deriving BEq, Repr
 
 def classify? (tree : SyntaxTree.Tree) : Option LayoutIslandKind :=
+  let tree :=
+    match tree with
+    | .node (.command kind) children => .node (.raw kind) children
+    | tree => tree
   if isIgnoreNextTarget tree then
     some .ignored
   else if isProofBodyTree tree && !proofBodyContainsTacticLayoutOwner tree then
@@ -551,12 +539,8 @@ def classify? (tree : SyntaxTree.Tree) : Option LayoutIslandKind :=
     some .mathlibTactic
   else if isProofLayoutIsland tree then
     some .proofLayout
-  else if isProofLemmaCommand tree && !containsTransparentTacticLayoutOwner tree then
-    some .proofLemma
   else if isAttributeModifierBlock tree then
     some .attributes
-  else if isDefinitionContainingQuotation tree then
-    some .definitionQuotation
   else if isCalcTree tree && !isStructuredCalcTree tree then
     some .calc
   else if isCommentSensitiveMatchExpr tree then
@@ -658,8 +642,12 @@ def policyFor : LayoutIslandKind → IslandPolicy
         followingComment := .preserveSourceIndent
       }
   | .proofLayout => { content := .proofLayout, firstLine := .unbreakable }
-  | .proofLemma => { pendingIndent := .useWhenAvailable }
-  | .attributes => { multiline := .preserveWithoutRuleBreaks }
+  | .attributes =>
+      {
+        multiline := .preserveWithoutRuleBreaks
+        relativeLayout := .retain
+        pendingIndent := .useWhenAvailable
+      }
   | .calc =>
       {
         content := .calc
@@ -693,10 +681,13 @@ def policyFor : LayoutIslandKind → IslandPolicy
         pendingIndent := .useWhenAvailable
       }
   | .syntaxComment => { pendingIndent := .useWhenAvailable }
+  | .qq =>
+      {
+        firstLine := .unbreakable
+        leadingBoundary := .formatStructurally
+      }
   | .ignored
-  | .definitionQuotation
   | .commentSensitiveMatch
-  | .qq
   | .leanJson
   | .batteriesLibraryNote
   | .customBracedTerm
@@ -827,6 +818,13 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
             ({ sourceColumn := sourceAnchor, outputColumn := outputAnchor }
               : Rebase.Anchor).shiftColumn
               sourceIndent
+          let movedIndent :=
+            if quotationStartsOnLine then
+              ({ sourceColumn, outputColumn := leadingColumn }
+                : Rebase.Anchor).shiftColumn
+                sourceIndent
+            else
+              movedIndent
           let structuralIndent :=
             if proof then
               (request.segmentIndentation + 1) * indentationSpaces
@@ -843,6 +841,8 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
               (leadingColumn / indentationSpaces + 1) * indentationSpaces
             else if quotationStartsOnLine then
               (leadingColumn / indentationSpaces + 1) * indentationSpaces
+            else if quotation then
+              request.currentIndent + indentationSpaces
             else if usesPendingIndent then
               leadingColumn
             else
@@ -938,10 +938,8 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
       none
   let targetColumn? :=
     match targetColumn?, proofBodyTargetColumn? with
-    | some targetColumn, some proofBodyTargetColumn =>
-        some (max targetColumn proofBodyTargetColumn)
+    | _, some proofBodyTargetColumn => some proofBodyTargetColumn
     | some targetColumn, none => some targetColumn
-    | none, some proofBodyTargetColumn => some proofBodyTargetColumn
     | none, none => none
   let targetColumn? :=
     match targetColumn?, delimitedProofBodyTargetColumn? with
@@ -954,7 +952,8 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     if proof && originalLeadingHasLineStructure then
       targetColumn?.map
         fun targetColumn =>
-          max request.layoutAnchor.outputColumn targetColumn
+          max (max (request.segmentIndentation * indentationSpaces) indentationSpaces)
+            targetColumn
     else
       targetColumn?
   let targetColumn? :=
@@ -1041,6 +1040,16 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
             else
               rebaseTreeText request.source request.sourceMap tree sourceColumn
                 outputColumn (rebaseTrivia := false)
+  let isQq : Bool :=
+    match islandPlan? with
+    | some plan => plan.kind == .qq
+    | none => false
+  let sourceText :=
+    if isQq then
+      let outputColumn := lineWidth <| currentLineAfterAppend request.currentLine leading
+      floorContinuationIndent outputColumn sourceText
+    else
+      sourceText
   some
     {
       text := leading ++ sourceText

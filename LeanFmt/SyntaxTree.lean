@@ -58,6 +58,7 @@ end Token
 
 inductive NodeKind where
   | raw (kind : SyntaxNodeKind)
+  | command (kind : SyntaxNodeKind)
   | tactic (kind : SyntaxNodeKind) (containsSequence isOwner containsOwner : Bool)
   | letExpression (kind : SyntaxNodeKind) (bodyCanStartApplicationArgument : Bool)
   | application
@@ -72,7 +73,7 @@ inductive NodeKind where
   | patternLambda
   | definition
   | annotatedDeclaration
-  | localDeclarationHeader
+  | declarationHeader
   | signatureParameters
   | structureHeader
   | structureConstructor
@@ -94,6 +95,7 @@ deriving BEq, Inhabited, Repr
 
 def nodeKindName : NodeKind → String
   | .raw kind => toString kind
+  | .command kind => s!"LeanFmt.SyntaxTree.NodeKind.command {kind}"
   | .tactic kind _ _ _ => toString kind
   | .letExpression kind bodyCanStartApplicationArgument =>
       s!"LeanFmt.SyntaxTree.NodeKind.letExpression {kind} {bodyCanStartApplicationArgument}"
@@ -111,7 +113,7 @@ def nodeKindName : NodeKind → String
   | .patternLambda => "LeanFmt.SyntaxTree.NodeKind.patternLambda"
   | .definition => "LeanFmt.SyntaxTree.NodeKind.definition"
   | .annotatedDeclaration => "LeanFmt.SyntaxTree.NodeKind.annotatedDeclaration"
-  | .localDeclarationHeader => "LeanFmt.SyntaxTree.NodeKind.localDeclarationHeader"
+  | .declarationHeader => "LeanFmt.SyntaxTree.NodeKind.declarationHeader"
   | .signatureParameters => "LeanFmt.SyntaxTree.NodeKind.signatureParameters"
   | .structureHeader => "LeanFmt.SyntaxTree.NodeKind.structureHeader"
   | .structureConstructor => "LeanFmt.SyntaxTree.NodeKind.structureConstructor"
@@ -352,6 +354,11 @@ private partial def annotateTacticSequenceEntry : Tree → Tree
             | none => result.push child)
           #[]
       .node (.raw `null) children
+  | .node kind@(.infixChain _) children =>
+      .node kind
+      <| children.mapIdx
+          fun index child =>
+            if index % 2 == 0 then annotateTacticSequenceEntry child else child
   | .node (.raw kind) children => annotateTacticNode kind children
   | tree => tree
 
@@ -360,7 +367,7 @@ def annotateTacticTree : Tree → Tree
       let kindName := nodeKindName (.raw kind)
       if isTacticSequenceKind kind then
         annotateTacticNode kind (children.map annotateTacticSequenceEntry)
-      else if isCoreTacticKindName kindName || isExtensionTacticKindName kindName then
+      else if isCoreTacticKindName kindName then
         annotateTacticNode kind children
       else
         tree
@@ -465,6 +472,13 @@ def firstInfixChainChildCount? (kind : SyntaxNodeKind) (tree : Tree) : Option Na
 partial def syntaxCommentSpans : Tree → List Span
   | .missing | .leaf _ => []
   | tree@(.node (.raw kind) children) =>
+      if isSyntaxCommentKind kind then
+        match tree.firstToken?, tree.lastToken? with
+        | some first, some last => [{ start := first.span.start, stop := last.span.stop }]
+        | _, _ => []
+      else
+        children.toList.flatMap syntaxCommentSpans
+  | tree@(.node (.command kind) children) =>
       if isSyntaxCommentKind kind then
         match tree.firstToken?, tree.lastToken? with
         | some first, some last => [{ start := first.span.start, stop := last.span.stop }]
@@ -637,6 +651,7 @@ def removeOverlappingSourceTokens (source : String) (tree : Tree) : Tree :=
 
 def rawKind? : Tree → Option SyntaxNodeKind
   | .node (.raw kind) _ => some kind
+  | .node (.command kind) _ => some kind
   | .node (.letExpression kind _) _ => some kind
   | _ => none
 
@@ -727,6 +742,14 @@ private partial def directLeafAtomToken? : Tree → Option Token
       | _ => none
   | _ => none
 
+private partial def directLeafIdentToken? : Tree → Option Token
+  | .leaf token => if token.role == .ident then some token else none
+  | .node (.raw `null) children =>
+      match children.toList with
+      | [child] => directLeafIdentToken? child
+      | _ => none
+  | _ => none
+
 def directLeafAtom? (tree : Tree) : Bool :=
   (directLeafAtomToken? tree).isSome
 
@@ -734,6 +757,14 @@ def isGeneratedTermKind (kind : Lean.SyntaxNodeKind) : Bool :=
   let name := toString kind
   name.startsWith "«term"
   || match name.splitOn ".«term" with
+      | [_] => false
+      | _ => true
+
+def isGeneratedCommandKind (kind : Lean.SyntaxNodeKind) : Bool :=
+  let name := toString kind
+  name.startsWith "«command"
+  || (name.splitOn ".").getLast?.any (fun segment => segment.startsWith "command")
+  || match name.splitOn ".«command" with
       | [_] => false
       | _ => true
 
@@ -819,6 +850,76 @@ private def regroupGeneratedTightPieces (children : Array Tree) : Array Tree :=
     | [last] => result.push last
     | [] => result
   loop children.toList #[]
+
+private def regroupGeneratedSuffixApplication?
+    (kind : SyntaxNodeKind) (children : Array Tree)
+    : Option Tree := do
+  if !isGeneratedTermKind kind then
+    none
+  let head ← children[0]?
+  let suffix ← children[1]?
+  let arguments ← children[2]?
+  if children.size != 3 then
+    none
+  let headToken ← directLeafIdentToken? head
+  let suffixToken ← directLeafAtomToken? suffix
+  if !sourceTokensAreAdjacent headToken suffixToken then
+    none
+  let .node .application argumentChildren := arguments | none
+  if argumentChildren.size < 2 then
+    none
+  some <| .node .application (#[.node .suffixGroup #[head, suffix]] ++ argumentChildren)
+
+private def regroupGeneratedSpacedApplication?
+    (kind : SyntaxNodeKind) (children : Array Tree)
+    : Option Tree := do
+  if !isGeneratedTermKind kind then
+    none
+  let contentIndexes :=
+    (List.range children.size).filter
+      fun index => children[index]?.bind Tree.firstToken? |>.isSome
+  if contentIndexes.length < 3 || contentIndexes.head? != some 0 then
+    none
+  let head ← children[0]?
+  if !directLeafAtom? head then
+    none
+  let rec separatorsAreGeneratedSpaces : List Nat → Bool
+    | left :: right :: rest =>
+        right == left + 2
+        && (children[left + 1]?).any
+            fun separator =>
+              rawKind? separator == some `group
+              && separator.firstToken?.isNone
+              && separatorsAreGeneratedSpaces (right :: rest)
+    | _ => true
+  if !separatorsAreGeneratedSpaces contentIndexes then
+    none
+  let arguments := contentIndexes.drop 1 |>.filterMap fun index => children[index]?
+  if arguments.any directLeafAtom? then
+    none
+  some <| .node .application (#[head] ++ arguments.toArray)
+
+private def regroupPrefixedDeclaration? (children : Array Tree) : Option Tree := do
+  if children.size != 2 then
+    none
+  let prefixTree ← children[0]?
+  let declaration ← children[1]?
+  let _ ← directLeafAtomToken? prefixTree
+  if rawKind? declaration != some `Lean.Parser.Term.letDecl then
+    none
+  some <| .node .suffixGroup #[prefixTree, declaration]
+
+private def regroupPrefixedApplication? (children : Array Tree)
+    : Option (Array Tree) := do
+  let #[prefixTree, .node (.raw `null) #[.node .application applicationChildren]] :=
+    children | none
+  let head ← applicationChildren[0]?
+  let prefixedHead := .node .suffixGroup #[prefixTree, head]
+  some
+    #[
+      .node .application
+        (#[prefixedHead] ++ applicationChildren.extract 1 applicationChildren.size)
+    ]
 
 def isBinaryInfixRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Bool :=
   let hasLeftOperand := children[0]?.any fun child => child.firstToken?.isSome
@@ -999,16 +1100,49 @@ def regroupDoForChildren (children : Array Tree) : Option (Array Tree) := do
   <| #[.node .doForHeader (#[keyword] ++ declarationChildren)]
       ++ childrenRange children 2 children.size
 
-def regroupLocalDeclarationHeader (children : Array Tree) : Option (Array Tree) := do
+def regroupDeclarationHeader (children : Array Tree) : Option (Array Tree) := do
   let name ← children[0]?
   let parameters ← children[1]?
   let typeSpec ← children[2]?
   some
   <| #[
-        .node .localDeclarationHeader
-          #[name, regroupSignatureParameters parameters, typeSpec]
+        .node .declarationHeader #[name, regroupSignatureParameters parameters, typeSpec]
       ]
       ++ childrenRange children 3 children.size
+
+def singleContentChild? (children : Array Tree) : Option Tree :=
+  let content := children.filter fun child => child.firstToken?.isSome
+  if content.size == 1 then content[0]? else none
+
+partial def attachedDoTree? : Tree → Option Tree
+  | tree@(.node (.raw `Lean.Parser.Term.doNested) _) => some tree
+  | .node (.raw kind) children =>
+      if kind == `Lean.Parser.Term.doSeqIndent
+          || kind == `Lean.Parser.Term.doSeqItem
+          || kind == `null then
+        singleContentChild? children >>= attachedDoTree?
+      else
+        none
+  | _ => none
+
+def regroupInitialize? (children : Array Tree) : Option Tree := do
+  let modifiers ← children[0]?
+  let keyword ← children[1]?
+  let .node (.raw `null) headerAndAssignment ← children[2]? | none
+  let body ← children[3]?
+  let body := (attachedDoTree? body).getD body
+  let assignmentIndex ←
+    headerAndAssignment.findIdx?
+      fun child => child.firstToken?.any fun token => token.lexeme == "←"
+  if assignmentIndex == 0 then
+    none
+  let assignment ← headerAndAssignment[assignmentIndex]?
+  let header :=
+    .node .declarationHeader (childrenRange headerAndAssignment 0 assignmentIndex)
+  let definition := .node .definition #[keyword, header, assignment, body]
+  some
+  <| .node (.raw `Lean.Parser.Command.initialize)
+      (#[modifiers, definition] ++ childrenRange children 4 children.size)
 
 partial def isDocCommentContainer : Tree → Bool
   | .node (.raw `Lean.Parser.Command.docComment) _ => true
@@ -1296,7 +1430,9 @@ def splitDirectCommandDocComment? : Tree → Option (Tree × Tree)
           fun child =>
             child.firstToken?.isSome
       let annotation ← children[annotationIndex]?
-      if isDocCommentContainer annotation then
+      let firstToken ← annotation.firstToken?
+      if isDocCommentContainer annotation
+          && (firstToken.lexeme.startsWith "/-" || firstToken.lexeme.startsWith "--") then
         some (annotation, .node kind (children.set! annotationIndex .missing))
       else
         none
@@ -1612,21 +1748,6 @@ def regroupBinderTacticChildren (children : Array Tree) : Array Tree :=
       #[assignment, byKeyword, proofBodyTree <| childrenRange children 2 children.size]
   | _, _ => children
 
-def singleContentChild? (children : Array Tree) : Option Tree :=
-  let content := children.filter fun child => child.firstToken?.isSome
-  if content.size == 1 then content[0]? else none
-
-partial def attachedDoTree? : Tree → Option Tree
-  | tree@(.node (.raw `Lean.Parser.Term.doNested) _) => some tree
-  | .node (.raw kind) children =>
-      if kind == `Lean.Parser.Term.doSeqIndent
-          || kind == `Lean.Parser.Term.doSeqItem
-          || kind == `null then
-        singleContentChild? children >>= attachedDoTree?
-      else
-        none
-  | _ => none
-
 def regroupAttachedDoRhs (children : Array Tree) : Array Tree :=
   match children[3]? >>= attachedDoTree? with
   | some body => children.set! 3 body
@@ -1822,11 +1943,11 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
   else if kind == `Lean.«command__Unif_hint____Where_|_-⊢__» then
     .node (.raw kind) (regroupUnifHintChildren children)
   else if kind == `Lean.Parser.Term.letEqnsDecl then
-    match regroupLocalDeclarationHeader children with
+    match regroupDeclarationHeader children with
     | some children => .node (.raw kind) children
     | none => .node (.raw kind) children
   else if kind == `Lean.Parser.Term.letIdDecl then
-    match regroupLocalDeclarationHeader children with
+    match regroupDeclarationHeader children with
     | some children => .node (.raw kind) children
     | none => .node (.raw kind) children
   else if kind == `Lean.Parser.Term.letRecDecl then
@@ -1886,28 +2007,24 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
     .node (.raw kind) (regroupWhereDeclsChildren children)
   else if kind == `Lean.Parser.Command.declModifiers then
     .node (.raw kind) children
+  else if isGeneratedTermKind kind then
+    .node (.raw kind) (regroupGeneratedTightPieces children)
   else
     let tree := .node (.raw kind) children
-    if tree.firstToken?.map (fun token => token.lexeme) == some "@["
-        && tree.lastToken?.map (fun token => token.lexeme) == some "]" then
-      tree
-    else
-      match splitDeclarationAnnotations? tree with
-      | some (annotations, command) =>
-          annotatedDeclarationTreeForCommand annotations command
-      | none =>
-          match splitDirectCommandDocComment? tree with
-          | some (annotations, command) =>
-              annotatedDeclarationTreeForCommand annotations command
-          | none =>
-              match splitLeadingDeclarationModifiers? tree with
-              | some (modifiers, command) =>
-                  .node .annotatedDeclaration #[modifiers, command]
-              | none =>
-                  if isGeneratedTermKind kind then
-                    .node (.raw kind) (regroupGeneratedTightPieces children)
-                  else
-                    tree
+    let documentedCommand? :=
+      if isGeneratedCommandKind kind then splitDirectCommandDocComment? tree else none
+    match documentedCommand? with
+    | some (annotations, command) =>
+        annotatedDeclarationTreeForCommand annotations command
+    | none =>
+        match splitDeclarationAnnotations? tree with
+        | some (annotations, command) =>
+            annotatedDeclarationTreeForCommand annotations command
+        | none =>
+            match splitLeadingDeclarationModifiers? tree with
+            | some (modifiers, command) =>
+                .node .annotatedDeclaration #[modifiers, command]
+            | none => tree
 
 private def nodeKindHasRawKind (expected : SyntaxNodeKind) : NodeKind → Bool
   | .raw kind | .tactic kind _ _ _ => kind == expected
@@ -2071,6 +2188,8 @@ def regroupRawNode
     : Tree :=
   if kind == `null then
     (regroupDerivingClause? children).getD <| .node (.raw kind) children
+  else if kind == `Lean.Parser.Command.initialize then
+    (regroupInitialize? children).getD <| .node (.raw kind) children
   else if kind == `Lean.Parser.Tactic.elimTarget then
     (regroupNamedDiscriminant? children).getD <| .node (.raw kind) children
   else if kind == `Lean.Parser.Tactic.cases then
@@ -2092,6 +2211,8 @@ def regroupRawNode
           (headAndArgs ++ appendApplicationArgumentChildren argumentContainer)
     | _, _ =>
         .node (.raw kind) children
+  else if kind == `Lean.Parser.Term.doReturn || kind == `Lean.Parser.Term.termReturn then
+    .node (.raw kind) ((regroupPrefixedApplication? children).getD children)
   else if kind == `Lean.Parser.Term.pipeProj && 2 < children.size then
     match children[0]?, children[1]?, children[2]? with
     | some receiver, some operator, some head =>
@@ -2115,37 +2236,46 @@ def regroupRawNode
     .node (.infixChain kind) (regroupBinderTacticChildren children)
   else if kind == `Lean.calcStep then
     (regroupCalcStep? children).getD <| .node (.raw kind) children
-  else if isIndexedInfixRawNode kind children then
-    .node (.indexedInfix kind) children
-  else if isBinaryInfixRawNode kind children then
-    match children[0]?, children[1]?, children[2]? with
-    | some left, some operator, some right =>
-        let parts := appendInfixParts infixPrecedences kind #[] left
-        let parts := parts.push operator
-        let parts := appendInfixParts infixPrecedences kind parts right
-        let parts :=
-          if kind == `«term_<|_» then
-            regroupLowPriorityInfixRhs <| flattenLowPriorityInfixParts parts
-          else
-            parts
-        .node (.infixChain kind) parts
-    | _, _, _ =>
-        .node (.raw kind) children
-  else if kind == `Lean.Parser.Command.classAbbrev then
-    .node .definition children
-  else if kind == `Lean.Parser.Command.definition
-          || kind == `Lean.Parser.Command.abbrev then
-    let children := regroupEquationTrailingClauseChildren children
-    match regroupDefinitionChildren children with
-    | some definitionChildren => .node .definition definitionChildren
-    | none => .node (.raw kind) children
-  else if declarationValueCommandKind kind then
-    regroupDeclarationValueCommand kind children
   else
-    match flattenSimpleDeclarationValueChildren? children with
-    | some flattened =>
-        .node .definition <| regroupFlattenedDefinitionChildren flattened
-    | none => regroupOtherRawNode kind children
+    if let some declaration := regroupPrefixedDeclaration? children then
+      declaration
+    else
+      if let some application := regroupGeneratedSpacedApplication? kind children then
+        application
+      else
+        if let some application := regroupGeneratedSuffixApplication? kind children then
+          application
+        else
+          if isIndexedInfixRawNode kind children then
+            .node (.indexedInfix kind) children
+          else if isBinaryInfixRawNode kind children then
+            match children[0]?, children[1]?, children[2]? with
+            | some left, some operator, some right =>
+                let parts := appendInfixParts infixPrecedences kind #[] left
+                let parts := parts.push operator
+                let parts := appendInfixParts infixPrecedences kind parts right
+                let parts :=
+                  if kind == `«term_<|_» then
+                    regroupLowPriorityInfixRhs <| flattenLowPriorityInfixParts parts
+                  else
+                    parts
+                .node (.infixChain kind) parts
+            | _, _, _ =>
+                .node (.raw kind) children
+          else if kind == `Lean.Parser.Command.classAbbrev then
+            .node .definition children
+          else if kind == `Lean.Parser.Command.definition
+                  || kind == `Lean.Parser.Command.abbrev then
+            let children := regroupEquationTrailingClauseChildren children
+            match regroupDefinitionChildren children with
+            | some definitionChildren => .node .definition definitionChildren
+            | none => .node (.raw kind) children
+          else if declarationValueCommandKind kind then
+            regroupDeclarationValueCommand kind children
+          else
+            match regroupDefinitionChildren children with
+            | some definitionChildren => .node .definition definitionChildren
+            | none => regroupOtherRawNode kind children
 
 partial def regroupTreeWithPrecedences (infixPrecedences : InfixPrecedenceMap)
     : Tree → Tree
@@ -2181,13 +2311,57 @@ def regroupTopLevelCommandAnnotations (tree : Tree) : Tree :=
               annotatedDeclarationTreeForCommand annotations command
           | none => tree
 
+private partial def annotateCommandContext : Tree → Tree
+  | .node (.raw kind) children =>
+      let nestedCommandIndex? : Option Nat := do
+        let inIndex ←
+          (List.range children.size).foldl
+            (fun found index =>
+              let firstLexeme := (children[index]?.bind Tree.firstToken?).map (·.lexeme)
+              let lastLexeme := (children[index]?.bind Tree.lastToken?).map (·.lexeme)
+              if firstLexeme == some "in" && lastLexeme == some "in" then
+                some index
+              else
+                found)
+            none
+        let nestedIndex ←
+          (List.range' (inIndex + 1) (children.size - (inIndex + 1))).find?
+            fun index => children[index]?.bind Tree.firstToken? |>.isSome
+        let lastIndex ← previousContentIndex? children children.size
+        if nestedIndex == lastIndex then
+          some nestedIndex
+        else
+          none
+      let children :=
+        match nestedCommandIndex? with
+        | some index =>
+            match children[index]? with
+            | some nested => children.set! index (annotateCommandContext nested)
+            | none => children
+        | none => children
+      .node (.command kind) children
+  | tree => tree
+
+private def annotateTopLevelCommand : Tree → Tree
+  | .node .annotatedDeclaration children =>
+      match children.back? with
+      | some command@(.node (.raw _) _) =>
+          .node .annotatedDeclaration
+            (children.set! (children.size - 1) (annotateCommandContext command))
+      | _ => .node .annotatedDeclaration children
+  | command@(.node (.raw _) _) => annotateCommandContext command
+  | tree => tree
+
 def regroupTopLevelAnnotations : Tree → Tree
   | .node (.raw `Lean.Parser.Module.module) children =>
       match children[1]? with
       | some (Tree.node (.raw `null) commands) =>
           Tree.node (.raw `Lean.Parser.Module.module)
           <| children.set! 1
-          <| Tree.node (.raw `null) (commands.map regroupTopLevelCommandAnnotations)
+          <| Tree.node (.raw `null)
+          <| commands.map
+              fun command =>
+                annotateTopLevelCommand <| regroupTopLevelCommandAnnotations command
       | _ => Tree.node (.raw `Lean.Parser.Module.module) children
   | tree => tree
 
