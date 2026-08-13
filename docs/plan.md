@@ -50,11 +50,6 @@ preservation, formatting, convergence, overflow, or build problem.
   reports a missing rule unless regrouping can prove a standard application,
   delimiter, infix, or declaration shape. Broadly treating such nodes as
   transparent would hide extension-owned layout.
-- Three tracked Hex benchmark adapters require CompPoly modules that are not in
-  Hex's Lake environment. The pinned CompPoly consumer setup also fails to build
-  two upstream modules under Hex's current toolchain, so these
-  files need an explicit compatible companion environment rather than inclusion
-  in Hex's ordinary all-file batch.
 - Source-authored calc text that Lean does not expose as parsed calc rows remains
   an original-layout island. Reindenting malformed or ambiguous rows without a
   structural owner risks changing syntax.
@@ -69,15 +64,18 @@ preservation, formatting, convergence, overflow, or build problem.
   still consider full external-validation timings when concurrency, import
   environments, or corpus size may dominate formatter cost.
 
-Current Hex evidence is diagnostically clean for 886 of 889 tracked Lean files:
-all native formatter batches pass preservation, overflow, fallback, and
-idempotency checks at width 100, and the complete post-format build passes.
-Missing-rule reports are informational for this corpus. Formatting review found
-the suffix, separator, fallback, and horizontal-spacing issues listed above, so
-Hex corpus closure is not complete. The remaining three unformatted files are
-the external CompPoly adapters described above. On the latest run, checking and
-rewriting the 886 files took about 10 minutes 12 seconds; the complete
-post-format build took 13 minutes 39 seconds.
+Current Hex evidence is diagnostically complete for all 889 tracked Lean files.
+The 886 native files pass preservation, overflow, fallback, and idempotency
+checks at width 100, and the complete post-format Hex build passes. The three
+CompPoly adapters pass the same formatter checks in a pinned Lean `v4.32.2`
+companion environment, where their current blobs match the last compatible Hex
+source revision exactly; both consumer equivalence targets and the comparator
+target rebuild after formatting. Missing-rule reports are informational for
+this corpus. Formatting review still finds the suffix, separator, fallback, and
+horizontal-spacing issues listed above, including detached `where` and `{` in
+the comparator's generated benchmark commands, so style closure is not
+complete. Checking and rewriting the 886 native files took about 10 minutes 12
+seconds; their complete post-format build took 13 minutes 39 seconds.
 
 Current exact Mathlib evidence is complete: all 84 formatter batches covering
 8,311 tracked files under `Mathlib` pass preservation, overflow, missing-rule,
@@ -194,7 +192,7 @@ affect acceptance.
 
 ## Checkpoint 5: external-environment validation
 
-Status: in progress.
+Status: complete.
 
 - Select or build a formatter binary compatible with each target project's Lean
   toolchain instead of loading a release-toolchain binary into an incompatible

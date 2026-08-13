@@ -23,8 +23,8 @@ PROJECT_TOOLCHAIN=""
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  scripts/validate-external-projects.sh [--files FILE_SELECTOR] [--batch N | --start-batch N] [--reuse-clone] [--skip-initial-build] [--skip-final-build] GIT_REPO[::FILE_SELECTOR]...
-  scripts/validate-external-projects.sh [--files FILE_SELECTOR] [--batch N | --start-batch N] [--reuse-clone] [--skip-initial-build] [--skip-final-build] NAME=GIT_REPO[::FILE_SELECTOR]...
+  scripts/validate-external-projects.sh [--files FILE_SELECTOR] [--build-target TARGET]... [--batch N | --start-batch N] [--reuse-clone] [--skip-initial-build] [--skip-final-build] GIT_REPO[::FILE_SELECTOR]...
+  scripts/validate-external-projects.sh [--files FILE_SELECTOR] [--build-target TARGET]... [--batch N | --start-batch N] [--reuse-clone] [--skip-initial-build] [--skip-final-build] NAME=GIT_REPO[::FILE_SELECTOR]...
 
 Each project argument must name an explicit git clone source. The validator
 creates a fresh clone under .scratch/external-validation/ before formatting
@@ -32,6 +32,9 @@ unless --reuse-clone is passed.
 Pass --skip-final-build to omit the complete build after every requested
 formatter batch succeeds. A formatter failure never triggers a build.
 The complete build before formatting still runs.
+Repeat --build-target TARGET to build explicit Lake targets before and after
+formatting instead of each project's default targets. The selected targets
+apply to every project argument in that invocation.
 Pass --start-batch N to validate batch N and every later batch. Pass
 --reuse-clone to keep an existing scratch clone, and --skip-initial-build to
 omit its already-completed pre-format build while resuming validation.
@@ -276,15 +279,20 @@ get_build_cache() {
 
 build_project() {
   local project_dir="$1"
-  (cd "$project_dir" && lake build)
+  shift
+  (cd "$project_dir" && lake build "$@")
 }
 
-tracked_lean_files() {
+selected_lean_files() {
   local project_dir="$1"
   local file_selector="$2"
   local file
 
-  if [[ -d "$project_dir/$file_selector" ]]; then
+  if [[ -f "$project_dir/$file_selector" ]]; then
+    if [[ "$file_selector" == *.lean ]]; then
+      printf '%s\0' "$project_dir/$file_selector"
+    fi
+  elif [[ -d "$project_dir/$file_selector" ]]; then
     while IFS= read -r -d '' file; do
       if [[ "$file" == *.lean ]]; then
         printf '%s\0' "$project_dir/$file"
@@ -297,14 +305,14 @@ tracked_lean_files() {
   fi
 }
 
-collect_tracked_lean_files() {
+collect_selected_lean_files() {
   local project_dir="$1"
   local file_selector="$2"
   local file
 
   while IFS= read -r -d '' file; do
     printf '%s\0' "$file"
-  done < <(tracked_lean_files "$project_dir" "$file_selector")
+  done < <(selected_lean_files "$project_dir" "$file_selector")
 }
 
 write_file_batch() {
@@ -366,12 +374,14 @@ run_project_validation_batches() {
   local start_batch="$6"
   local skip_initial_build="$7"
   local skip_final_build="$8"
+  shift 8
+  local -a build_targets=("$@")
   local -a files=()
   local file
 
   while IFS= read -r -d '' file; do
     files+=("$file")
-  done < <(collect_tracked_lean_files "$project_dir" "$file_selector")
+  done < <(collect_selected_lean_files "$project_dir" "$file_selector")
 
   if ((${#files[@]} == 0)); then
     printf 'No files matched %q in %s.\n' "$file_selector" "$project_dir"
@@ -414,6 +424,13 @@ run_project_validation_batches() {
   elif [[ -n "$start_batch" ]]; then
     printf 'Starting validation at batch: %d\n' "$start_batch"
   fi
+  if ((${#build_targets[@]} > 0)); then
+    printf 'Lake build targets:'
+    printf ' %s' "${build_targets[@]}"
+    printf '\n'
+  else
+    printf 'Lake build targets: project defaults\n'
+  fi
 
   local log_dir="$WORK_DIR/logs/$project_name"
   local state_file="$log_dir/state"
@@ -428,8 +445,8 @@ run_project_validation_batches() {
     printf 'SKIPPED: initial build disabled by --skip-initial-build.\n'
   else
     if run_phase_result \
-        "Build all of $project_name before formatting ($file_selector)" \
-        build_project "$project_dir"; then
+        "Build $project_name before formatting ($file_selector)" \
+        build_project "$project_dir" "${build_targets[@]}"; then
       :
     else
       status=$?
@@ -498,8 +515,8 @@ run_project_validation_batches() {
 
   build_status=0
   if run_phase_result \
-      "Build all of $project_name after all requested formatter batches passed ($file_selector)" \
-      build_project "$project_dir"; then
+      "Build $project_name after all requested formatter batches passed ($file_selector)" \
+      build_project "$project_dir" "${build_targets[@]}"; then
     :
   else
     build_status=$?
@@ -522,6 +539,7 @@ main() {
   local reuse_clone=0
   local skip_initial_build=0
   local skip_final_build=0
+  local -a build_targets=()
 
   validate_positive_integer LEANFMT_VALIDATION_BATCH_SIZE \
     "$VALIDATION_FILES_PER_BATCH" || return $?
@@ -560,6 +578,16 @@ main() {
       fi
       validate_positive_integer "--batch" "$1" || return $?
       selected_batch="$1"
+      shift
+      continue
+    fi
+    if [[ "$specification" == "--build-target" ]]; then
+      if (($# == 0)); then
+        printf 'Missing value for --build-target.\n' >&2
+        usage
+        return 2
+      fi
+      build_targets+=("$1")
       shift
       continue
     fi
@@ -662,7 +690,7 @@ main() {
     fi
     run_project_validation_batches "$name" "$project_dir" "$PROJECT_FORMATTER" \
       "$file_selector" "$selected_batch" "$start_batch" \
-      "$skip_initial_build" "$skip_final_build"
+      "$skip_initial_build" "$skip_final_build" "${build_targets[@]}"
   done
 
   section "Validation summary"

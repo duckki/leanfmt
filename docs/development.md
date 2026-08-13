@@ -473,18 +473,37 @@ scripts/validate-external-projects.sh $HOME/target-repo
 scripts/validate-external-projects.sh my-project=$HOME/target-repo
 ```
 
-Pass `--files FILE_SELECTOR` to validate a subset of tracked Lean files. A project
-can also override the current selector with `GIT_REPO::FILE_SELECTOR` or
-`NAME=GIT_REPO::FILE_SELECTOR`.
-When the selector names a tracked directory, every tracked `.lean` file under that
-directory is included. Other selectors are passed to `git ls-files`, so quote
-patterns containing `*` to keep the shell from expanding them first:
+Pass `--files FILE_SELECTOR` to validate a subset of Lean files. A project can
+also override the current selector with `GIT_REPO::FILE_SELECTOR` or
+`NAME=GIT_REPO::FILE_SELECTOR`. An exact existing `.lean` file is included even
+when a companion-environment setup generated or copied it as an untracked file.
+When the selector names a tracked directory, every tracked `.lean` file under
+that directory is included. Other selectors are passed to `git ls-files`, so
+quote patterns containing `*` to keep the shell from expanding them first:
 
 ```sh
 scripts/validate-external-projects.sh \
   --files Mathlib/Combinatorics \
   mathlib=https://github.com/leanprover-community/mathlib4.git
 ```
+
+By default, the validator runs each project's Lake default targets before and
+after formatting. Repeat `--build-target TARGET` to use explicit acceptance
+targets instead. The targets apply to every project argument in that invocation,
+so use a separate invocation when companion projects need different targets:
+
+```sh
+scripts/validate-external-projects.sh \
+  --build-target CompPoly.Univariate.CMvEquiv \
+  --build-target CompPoly.Bivariate.CMvEquiv \
+  --files 'CompPoly/*/CMvEquiv.lean' \
+  --reuse-clone comp-poly=$HOME/validation/CompPoly
+```
+
+Explicit targets are appropriate when a prepared companion project has a
+narrow declared acceptance surface and unrelated default targets are not part
+of the source being validated. Both the initial and final builds use the same
+target list.
 
 Validation runs in batches of 100 files by default. The validator first runs one
 complete project build. Each validation batch then formats its files directly with
