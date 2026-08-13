@@ -1,28 +1,14 @@
 # leanfmt
 
-leanfmt is a structure-preserving code formatter for Lean. It parses complete
-Lean files with Lean's own parser, preserves source tokens and comments, and
-formats declarations and expressions through the `fmt` executable.
+leanfmt is an opinionated formatter for Lean code, written in Lean.
 
-leanfmt favors layouts that expose the structure of Lean code. In particular,
-leading operators connect continuation lines vertically while indentation shows
-nested expressions.
+It is built for projects that care about trust as much as style: leanfmt parses
+files with Lean's own parser, loads project syntax extensions, preserves source
+tokens and comments, and refuses to silently rewrite code when its safety checks
+do not pass.
 
-## Formatting output
-
-Before:
-
-```lean
-def parenthesizedConjunctionChain (schema : Schema) : Prop :=
-  namesAreUnique (schema.allTypes.map TypeDefinition.name) ∧
-    schema.objectType schema.queryType ∧
-    (∀ typeDefinition, typeDefinition ∈ schema.types
-      -> typeDefinitionWellFormed schema typeDefinition) ∧ (∀ typeName objectTypeName,
-          objectTypeName ∈ schema.getPossibleTypes typeName
-    -> schema.objectType objectTypeName)
-```
-
-After:
+The style is structural. Continuation lines lead with the token that explains
+how they connect, while indentation shows the nesting.
 
 ```lean
 def parenthesizedConjunctionChain (schema : Schema) : Prop :=
@@ -35,26 +21,24 @@ def parenthesizedConjunctionChain (schema : Schema) : Prop :=
       -> schema.objectType objectTypeName)
 ```
 
-Nested logical groups keep their local structure:
+See the [formatting design](docs/design.md) for the full style guide and more
+examples.
 
-```lean
-def leadingArrowExistentialApplicationWrap : Prop :=
-  ∃ interfaceType,
-    schema.lookupInterface interfaceName = some interfaceType
-    ∧ ∀ interfaceField,
-        interfaceField ∈ interfaceType.fields
-        -> ∃ implementationField,
-            Schema.lookupFieldDefinition implementationFields interfaceField.name
-              = some implementationField
-            ∧ fieldDefinitionImplements schema implementationField interfaceField
-```
+## Why Use It
 
-See the [formatting design](docs/design.md) for the complete rule descriptions
-and more examples.
+- **Lean-native**: uses Lean's parser and the active Lake environment, so custom
+  syntax is handled in the same context as your project.
+- **Structure-preserving**: works from a lossless syntax tree and formats
+  whitespace around the code you wrote.
+- **Conservative by design**: checks token preservation, comments, parsing, and
+  idempotence; if formatting cannot be proven safe, the original source stays in
+  place.
+- **Practical for adoption**: format one file, a directory, or only files changed
+  in a branch.
 
-## Add leanfmt to a Lake package
+## Quick Start
 
-Add the Git dependency to `lakefile.toml`:
+Add leanfmt to `lakefile.toml`:
 
 ```toml
 [[require]]
@@ -63,70 +47,98 @@ git = "https://github.com/duckki/leanfmt.git"
 rev = "vX.Y.Z"
 ```
 
-Preserve the package's Lean version when resolving the dependency:
+Resolve the dependency without changing your project's Lean toolchain:
 
 ```sh
 lake update --keep-toolchain
 ```
 
-leanfmt uses one source release across its supported Lean versions and tests the
-current toolchain and previous minor versions in CI. `--keep-toolchain` prevents
-Lake from replacing an older project's toolchain with the version recorded by
-leanfmt. leanfmt is then built with the project's selected Lean version, which is
-important because it loads that project's parser extensions and imported
-environments.
-
-Projects that do not want leanfmt in their published dependency graph may place
-the requirement in a separate development-tool Lake package instead. That tool
-package should also depend on the project by a local path so leanfmt can load the
-project's dependencies and parser extensions.
-
-Then format files or directories through Lake:
+Format a file:
 
 ```sh
-lake exe fmt LeanFmt/Formatter.lean
-lake exe fmt LeanFmt
-lake exe fmt --recursive LeanFmt
-lake exe fmt --line-width 100 --recursive Mathlib
+lake exe fmt MyProject/File.lean
 ```
 
-For incremental adoption, format only Lean files changed in the current branch
-or working tree. Check staged changes before committing:
+Check formatting in CI:
 
 ```sh
+lake exe fmt --check -r MyProject
+```
+
+## Usage
+
+Common options:
+
+```text
+--version              Print the installed leanfmt and Lean version.
+--line-width <number>  Set the target line width. Default: 90.
+```
+
+### Format Common Targets
+
+```sh
+# One file
+lake exe fmt MyProject/File.lean
+
+# Files directly inside a directory
+lake exe fmt MyProject
+
+# A directory tree
+lake exe fmt -r MyProject
+
+# A project with a 100-column convention
+lake exe fmt --line-width 100 -r MyProject
+```
+
+Directory traversal skips hidden descendants by default. Explicitly supplied
+hidden paths are still processed. Pass `--include-hidden` to include hidden
+descendants.
+
+### Check Without Rewriting
+
+```sh
+lake exe fmt --check -r MyProject
+```
+
+`--check` exits nonzero if a file would change or cannot be formatted, which
+makes it suitable for CI and pre-commit validation.
+
+### Format Only Current Changes
+
+This is the easiest way to adopt leanfmt incrementally.
+
+```sh
+# Check staged Lean files before committing
 lake exe fmt --check $(git diff --cached --name-only --diff-filter=ACMR -- '*.lean')
-```
 
-Format local changes since `HEAD`:
-
-```sh
+# Format Lean files changed since HEAD
 lake exe fmt $(git diff --name-only --diff-filter=ACMR HEAD -- '*.lean')
-```
 
-In CI, check only files changed on a branch relative to `origin/main`:
-
-```sh
+# CI: check files changed on this branch
 lake exe fmt --check $(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- '*.lean')
 ```
 
-Run these commands only when the `git diff --name-only ... '*.lean'` file list is
-nonempty; pass unusual paths explicitly if your project uses spaces in file
-names.
+Run these commands only when the `git diff --name-only ... '*.lean'` list is
+nonempty. If your repository uses spaces in file names, pass those paths
+explicitly.
 
-Directory arguments include directly contained `.lean` files. Pass
-`--recursive` or `-r` to include nested directories. Hidden files and
-directories discovered inside directory arguments are skipped by default.
-Explicitly supplied hidden paths are still processed. Pass `--include-hidden`
-to include hidden descendants during directory traversal. leanfmt uses a
-90-character line limit by default; pass `--line-width N` when a project uses a
-different convention. Multi-file package invocations use concurrent workers:
-both default-environment files and files that require project-specific syntax
-environments use the machine's hardware concurrency. Each exact import header gets
-one short-lived worker process. Pass `--jobs N` to override the automatic count.
-Pass `--version` to print the installed leanfmt version.
+### Tune The Run
 
-To preserve the next complete syntax node exactly, put `-- leanfmt: off next`
-immediately before it. The marker works for top-level commands and nested terms:
+```sh
+# Use a specific worker count
+lake exe fmt --jobs 8 -r MyProject
+
+# Print the installed formatter version
+lake exe fmt --version
+```
+
+Multi-file package invocations use concurrent workers by default. leanfmt follows
+the selected Lake environment for each file group, including imported syntax
+extensions.
+
+### Leave Code Alone
+
+Preserve the next complete syntax node:
 
 ```lean
 -- leanfmt: off next
@@ -134,14 +146,7 @@ def handAligned   :   Nat:=
        1
 ```
 
-```lean
-def handAlignedFunction : Nat → Nat :=
-  -- leanfmt: off next
-  fun n =>
-      n + 1
-```
-
-To preserve a manual source region exactly, wrap it in line comments:
+Preserve a manual source region:
 
 ```lean
 -- leanfmt: off
@@ -150,37 +155,41 @@ def handAligned   :   Nat:=
 -- leanfmt: on
 ```
 
-leanfmt formats parseable chunks outside the ignored region and keeps the marker
-lines and enclosed lines unchanged, apart from the command's normal line-ending
-normalization.
+leanfmt still formats parseable chunks outside ignored regions and keeps marker
+lines and enclosed lines unchanged, apart from normal line-ending handling.
 
-To verify formatting without changing files, use `--check`:
+## Safety Model
 
-```sh
-lake exe fmt --check --recursive LeanFmt
+leanfmt's formatter pipeline is intentionally narrow:
+
+```text
+Lean parser
+  -> lossless syntax tree
+  -> syntax regrouping
+  -> spacing and line-break rules
+  -> width-aware renderer
+  -> preservation and idempotence checks
 ```
 
-The command exits nonzero if a file would change or cannot be formatted, making
-it suitable for CI.
+The formatter preserves code tokens, token order, comments, and protected source
+regions. With `--check-exception --check-idempotent`, CI can also fail on
+unexpected code changes, actionable line overflow, missing formatting rules, or a
+non-idempotent result.
 
 ## Status
 
-leanfmt is under active development. Review formatting changes before applying
-it broadly. Formatting is deliberately conservative: it changes whitespace,
-keeps token text and order and preserves proof regions.
+leanfmt is under active development. Review formatting diffs before broad
+rollout, start with changed files, and use `--check` in CI once the project is
+ready.
 
-## Project documentation
+## Learn More
 
-- [Contributing](CONTRIBUTING.md) defines the code-quality standards and local review
-  gate.
-- [Design](docs/design.md) describes the style, philosophy, rules, and examples for Lean
-  programmers considering the formatter.
-- [Architecture](docs/architecture.md) explains the implementation decisions and division
-  between the syntax tree, rules, and renderer.
-- [Development](docs/development.md) covers building, testing, fixtures, tracing,
-  profiling, validation, and contributing new rules.
-- [Comparison](docs/comparison.md) compares leanfmt's style, architecture, and workflow
-  with Lean's standard-library guide and pretty-lean.
+- [Introducing LeanFmt](https://duckki.github.io/2026/08/11/introducing-leanfmt.html)
+- [Contributing](CONTRIBUTING.md)
+- [Design](docs/design.md)
+- [Architecture](docs/architecture.md)
+- [Development](docs/development.md)
+- [Comparison](docs/comparison.md)
 
 ## License
 
