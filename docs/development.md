@@ -143,8 +143,10 @@ The target's `lake env` supplies its import paths and parser extensions, while
 the disposable build supplies a binary with the matching Lean ABI. Do not
 rebuild the main leanfmt checkout's `.lake` directory under the older toolchain;
 that would replace its current-toolchain artifacts. The external validator
-should eventually automate and cache this build by target toolchain and leanfmt
-source revision.
+automates this workflow. It keeps one compatible build directory per target
+toolchain under its scratch directory, refreshes that directory from the current
+tracked and untracked formatter source, preserves its `.lake` build artifacts,
+and lets Lake rebuild only changed modules.
 
 Add a maintenance branch for an older Lean version only if its implementation
 must diverge from `main`. Ordinary compatibility fixes belong on `main` and must
@@ -443,6 +445,16 @@ downloads their Lake build caches, builds each complete project, then formats ev
 tracked Lean file from that project's `lake env` while checking preservation, unknown
 rules, and idempotence. It builds the complete project again only after every requested
 formatter batch succeeds:
+
+Before formatting, the validator compares the project's `lean-toolchain` with
+leanfmt's. A matching project uses the formatter built in the main checkout. For
+a different Lean version, the validator automatically mirrors the current
+formatter source into
+`.scratch/external-validation/formatter-toolchains/TOOLCHAIN`, retains that
+mirror's incremental `.lake` build, builds `fmt` with the target toolchain, and
+runs the resulting executable from the target project's `lake env`. Neither the
+main checkout's build artifacts nor the target repository's package declaration
+is changed.
 
 The current release checkpoints and known external-formatting issues are tracked
 in [plan.md](plan.md).

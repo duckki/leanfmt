@@ -50,10 +50,6 @@ preservation, formatting, convergence, overflow, or build problem.
   reports a missing rule unless regrouping can prove a standard application,
   delimiter, infix, or declaration shape. Broadly treating such nodes as
   transparent would hide extension-owned layout.
-- The external validator runs the release-toolchain formatter binary under each
-  target project's `lake env`. A target on an older Lean toolchain therefore
-  rejects the binary before formatting even when the current source still
-  compiles and formats cleanly under that older toolchain.
 - Three tracked Hex benchmark adapters require CompPoly modules that are not in
   Hex's Lake environment. The pinned CompPoly consumer setup also fails to build
   two upstream modules under Hex's current toolchain, so these
@@ -102,13 +98,11 @@ The same shapes appear in the preceding exact-corpus checkpoint, so they are
 known consistency bugs rather than regressions from the tactic-application
 change. Fresh GraphQL formatting is unchanged by the current formatter.
 
-Quantum's ordinary validation script fails before formatting because it loads a
-release-toolchain formatter executable under the project's older Lean
-environment. Building the same current leanfmt source in a disposable checkout
-using that target toolchain and invoking that executable from Quantum's
-`lake env` validates all 21 files and completes the 2,653-target post-format
-build without an exception or formatting delta. This confirms a validator
-toolchain-selection problem, not a formatter source-compatibility problem.
+Quantum validates with the same current leanfmt source under Lean `v4.32.0`.
+The external validator now detects the target toolchain, refreshes an incremental
+compatible formatter build under its scratch directory, and invokes that binary
+from Quantum's `lake env`. This removes the executable ABI mismatch without
+mutating either repository or introducing a formatter-rule exception.
 
 ## Checkpoint 1: layout ownership
 
@@ -200,14 +194,14 @@ affect acceptance.
 
 ## Checkpoint 5: external-environment validation
 
-Status: next.
+Status: in progress.
 
 - Select or build a formatter binary compatible with each target project's Lean
   toolchain instead of loading a release-toolchain binary into an incompatible
-  `lake env`. Cache disposable builds by target toolchain and leanfmt source
-  revision, and invoke the compatible binary from the target's `lake env`
-  without mutating either repository. Keep one formatter source and one
-  validation behavior.
+  `lake env`. Retain one disposable build per target toolchain, refresh it from
+  the current leanfmt source, and let Lake reuse unchanged build artifacts.
+  Invoke the compatible binary from the target's `lake env` without mutating
+  either repository. Keep one formatter source and one validation behavior.
 - Represent tracked adapter sources that require a companion project as an
   explicit validation target, not as exceptions in syntax, line-break,
   diagnostics, or rendering code.

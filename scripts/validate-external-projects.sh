@@ -13,8 +13,12 @@ readonly VALIDATION_FILES_PER_BATCH="${LEANFMT_VALIDATION_BATCH_SIZE:-100}"
 readonly FORMATTER_WORKER_JOBS="${LEANFMT_VALIDATION_FORMATTER_JOBS:-}"
 readonly FORMATTER_LINE_WIDTH="${LEANFMT_VALIDATION_LINE_WIDTH:-}"
 readonly DEFAULT_FILE_SELECTOR="${LEANFMT_VALIDATION_FILE_PATTERN:-*.lean}"
+readonly FORMATTER_BUILD_ROOT="$WORK_DIR/formatter-toolchains"
 
 failures=0
+CURRENT_TOOLCHAIN=""
+PROJECT_FORMATTER=""
+PROJECT_TOOLCHAIN=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -40,6 +44,10 @@ invocation. For example, validate mathlib at width 100 with:
 
 Set LEANFMT_VALIDATION_FORMATTER_JOBS=N to limit concurrent formatter workers.
 The automatic default uses the hardware count for every formatter worker group.
+
+The validator reads each project's lean-toolchain. When it differs from
+leanfmt's toolchain, the current formatter source is built automatically with
+the target toolchain in .scratch/external-validation/formatter-toolchains/.
 EOF
 }
 
@@ -107,6 +115,83 @@ validate_boolean() {
 
   printf '%s must be 0 or 1, got %q.\n' "$name" "$value" >&2
   return 2
+}
+
+read_lean_toolchain() {
+  local project_dir="$1"
+  local toolchain_file="$project_dir/lean-toolchain"
+  local toolchain=""
+
+  if [[ ! -f "$toolchain_file" ]]; then
+    printf 'Missing Lean toolchain file: %s\n' "$toolchain_file" >&2
+    return 2
+  fi
+
+  IFS= read -r toolchain < "$toolchain_file" || true
+  toolchain="${toolchain%$'\r'}"
+  if [[ -z "$toolchain" ]]; then
+    printf 'Empty Lean toolchain file: %s\n' "$toolchain_file" >&2
+    return 2
+  fi
+
+  printf '%s\n' "$toolchain"
+}
+
+toolchain_cache_key() {
+  local toolchain="$1"
+  printf '%s\n' "${toolchain//[^[:alnum:]._-]/_}"
+}
+
+sync_formatter_source() {
+  local destination="$1"
+  local path parent
+
+  mkdir -p "$destination"
+  find "$destination" -mindepth 1 -maxdepth 1 ! -name .lake \
+    -exec rm -rf {} +
+
+  while IFS= read -r -d '' path; do
+    if [[ "$path" == */* ]]; then
+      parent="${path%/*}"
+      mkdir -p "$destination/$parent"
+    fi
+    cp -p "$REPO_ROOT/$path" "$destination/$path" || return $?
+  done < <(git -C "$REPO_ROOT" ls-files -co --exclude-standard -z)
+}
+
+select_project_formatter() {
+  local project_name="$1"
+  local project_dir="$2"
+  local cache_key build_dir formatter
+
+  PROJECT_TOOLCHAIN="$(read_lean_toolchain "$project_dir")" || return $?
+  printf 'leanfmt toolchain: %s\n' "$CURRENT_TOOLCHAIN"
+  printf '%s toolchain: %s\n' "$project_name" "$PROJECT_TOOLCHAIN"
+
+  if [[ "$PROJECT_TOOLCHAIN" == "$CURRENT_TOOLCHAIN" ]]; then
+    PROJECT_FORMATTER="$FORMATTER"
+    printf 'Using current-toolchain formatter: %s\n' "$PROJECT_FORMATTER"
+    return 0
+  fi
+
+  cache_key="$(toolchain_cache_key "$PROJECT_TOOLCHAIN")"
+  build_dir="$FORMATTER_BUILD_ROOT/$cache_key"
+  formatter="$build_dir/.lake/build/bin/fmt"
+
+  printf 'Preparing formatter source for %s in %s\n' \
+    "$PROJECT_TOOLCHAIN" "$build_dir"
+  sync_formatter_source "$build_dir" || return $?
+  printf '%s\n' "$PROJECT_TOOLCHAIN" > "$build_dir/lean-toolchain"
+  (cd "$build_dir" && lake build fmt) || return $?
+
+  if [[ ! -x "$formatter" ]]; then
+    printf 'Compatible formatter executable was not built: %s\n' \
+      "$formatter" >&2
+    return 1
+  fi
+
+  PROJECT_FORMATTER="$formatter"
+  printf 'Using target-toolchain formatter: %s\n' "$PROJECT_FORMATTER"
 }
 
 clone_project() {
@@ -239,9 +324,10 @@ write_file_batch() {
 run_formatter_file_list() {
   local project_dir="$1"
   local list_file="$2"
-  shift 2
+  local formatter="$3"
+  shift 3
 
-  local -a formatter_command=(lake env "$FORMATTER")
+  local -a formatter_command=(lake env "$formatter")
   if [[ -n "$FORMATTER_LINE_WIDTH" ]]; then
     formatter_command+=(--line-width "$FORMATTER_LINE_WIDTH")
   fi
@@ -259,24 +345,27 @@ run_logged_formatter_file_list() {
   local project_dir="$1"
   local list_file="$2"
   local log_file="$3"
-  shift 3
+  local formatter="$4"
+  shift 4
 
   {
     printf 'Project directory: %s\n' "$project_dir"
     printf 'File list: %s\n' "$list_file"
+    printf 'Formatter: %s\n' "$formatter"
     printf 'Formatter invocations: serial; formatter workers: concurrent\n'
-    run_formatter_file_list "$project_dir" "$list_file" "$@"
+    run_formatter_file_list "$project_dir" "$list_file" "$formatter" "$@"
   } 2>&1 | tee "$log_file"
 }
 
 run_project_validation_batches() {
   local project_name="$1"
   local project_dir="$2"
-  local file_selector="$3"
-  local selected_batch="$4"
-  local start_batch="$5"
-  local skip_initial_build="$6"
-  local skip_final_build="$7"
+  local formatter="$3"
+  local file_selector="$4"
+  local selected_batch="$5"
+  local start_batch="$6"
+  local skip_initial_build="$7"
+  local skip_final_build="$8"
   local -a files=()
   local file
 
@@ -374,7 +463,7 @@ run_project_validation_batches() {
     if run_phase_result \
         "Format and check $project_name batch $batch/$total_batches ($file_selector)" \
         run_logged_formatter_file_list "$project_dir" "$list_file" "$log_file" \
-          --check-exception --check-idempotent; then
+          "$formatter" --check-exception --check-idempotent; then
       :
     else
       formatter_status=$?
@@ -536,6 +625,7 @@ main() {
 
   mkdir -p "$WORK_DIR"
 
+  CURRENT_TOOLCHAIN="$(read_lean_toolchain "$REPO_ROOT")" || return $?
   run_phase "Build leanfmt" lake build fmt
   if [[ ! -x "$FORMATTER" ]]; then
     printf 'Cannot continue without the formatter executable: %s\n' "$FORMATTER" >&2
@@ -561,8 +651,18 @@ main() {
       seed_local_lake_packages "$source" "$project_dir"
       run_optional_phase "Download $name build cache" get_build_cache "$project_dir"
     fi
-    run_project_validation_batches "$name" "$project_dir" "$file_selector" \
-      "$selected_batch" "$start_batch" "$skip_initial_build" "$skip_final_build"
+    if run_phase_result \
+        "Select a Lean-compatible formatter for $name" \
+        select_project_formatter "$name" "$project_dir"; then
+      :
+    else
+      printf 'Skipping %s because a compatible formatter is unavailable.\n' \
+        "$name" >&2
+      continue
+    fi
+    run_project_validation_batches "$name" "$project_dir" "$PROJECT_FORMATTER" \
+      "$file_selector" "$selected_batch" "$start_batch" \
+      "$skip_initial_build" "$skip_final_build"
   done
 
   section "Validation summary"
