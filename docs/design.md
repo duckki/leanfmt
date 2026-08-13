@@ -779,6 +779,15 @@ inductive Color where
   | blue
 ```
 
+Documentation before an inductive constructor moves with the constructor and
+uses the same alternative base:
+
+```lean
+inductive Result where
+  /-- A successful result. -/
+  | ok
+```
+
 Constructor parameters flow at binder boundaries. A long constructor result
 type moves to a leading `:` continuation line.
 

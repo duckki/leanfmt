@@ -2448,11 +2448,21 @@ def inductiveBreaks (context : RuleContext) (segment : Segment) : List BreakPoin
   let alternativeBreaks :=
     segment.indexes.filterMap
       fun index =>
-        if childStartsWithLexeme segment index "|" then
+        if childStartsWithLexeme segment index "|"
+            || (segment.child? index).any
+                (treeContainsRawKind `Lean.Parser.Command.ctor) then
           boundaryBreak? segment index 1
         else
           none
   alternativeBreaks ++ derivingBreaks context segment
+
+def constructorBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
+  segment.indexes.filterMap
+    fun index =>
+      if childStartsWithLexeme segment index "|" then
+        boundaryBreak? segment index 0
+      else
+        none
 
 /-! ### Declaration and collection rule values -/
 
@@ -3369,6 +3379,15 @@ def transparentRule : LineBreakRule :=
             childIndex < index && (segment.child? childIndex).any treeHasContent
   }
 
+def constructorRule : LineBreakRule :=
+  {
+    transparentRule with
+      name := "constructor"
+      mandatory := fun context segment => !(constructorBreaks context segment).isEmpty
+      inheritBase := fun _ _ => true
+      breakPoints := constructorBreaks
+  }
+
 def suffixGroupRule : LineBreakRule :=
   {
     name := "suffixGroup"
@@ -4031,7 +4050,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Command.declValSimple) _ =>
       some declarationValueRule
   | .node (.raw `Lean.Parser.Command.instance) _ => some instanceRule
-  | .node (.raw `Lean.Parser.Command.ctor) _ => some transparentRule
+  | .node (.raw `Lean.Parser.Command.ctor) _ => some constructorRule
   | .node (.raw `Lean.Parser.Command.structSimpleBinder) _ => some transparentRule
   | .node (.raw `Lean.Parser.Term.structInstField) _ => some structInstFieldRule
   | .node (.raw `Lean.Parser.Term.structInstFieldDef) _ => some transparentRule

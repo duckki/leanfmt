@@ -27,9 +27,6 @@ preservation, formatting, convergence, overflow, or build problem.
   with the owning `let` and remain attached to its first token or comment.
 - Structural indentation can leak into horizontal whitespace after an infix
   operator, producing forms such as `&&  if`, `&&  let`, `++  if`, and `<|  if`.
-- Multiline match arms, ordinary lambda bodies, proof comments, inductive
-  constructors after comments can inherit a stale or shallower physical base
-  instead of their structural owner's base.
 - Nested infix and `<|` chains can accumulate indentation instead of sharing
   their expression base.
 - Both adjacent breakpoints in a low-priority application can fire and leave
@@ -229,20 +226,23 @@ and build cleanly.
 
 ## Checkpoint 7: structural base propagation
 
-Status: planned.
+Status: complete.
 
-- Give multiline match-arm and ordinary lambda bodies the indentation owned by
-  their structural parent.
-- Rebase proof comments and multiline block-comment continuations with the
-  proof statement they annotate.
-- Keep sibling infix and low-priority-pipe continuations on one expression base
-  instead of carrying an inline child column into the next operator.
-- Prefer one correction to base propagation over separate rules for each
-  observed syntax kind.
+- Audit the reported match-arm, ordinary-lambda, proof-comment, and multiline
+  block-comment cases against the current structural ownership tests. The
+  architecture migration already gives these forms their parent's base.
+- Recognize a documented inductive constructor as the same body child as a
+  constructor beginning directly with `|`, then let the constructor own its
+  internal marker boundary. Documentation and `|` consequently move together
+  on the inductive body's structural base.
+- Investigate adjacent low-priority-pipe breaks without adding a token or
+  renderer exception. Keeping `<|` with a fitting structural operand already
+  works; coordinating it with a child whose own first line must break requires
+  layout-search support and remains a known issue for a later checkpoint.
 
-Acceptance: focused tests and fixtures establish the shared base invariants,
-the complete local gate passes, and fresh GraphQL, quantum, and exact Mathlib
-validation has no release-blocking formatting finding.
+Acceptance: focused preservation and idempotency tests establish constructor
+base ownership, the complete local gate passes, and fresh GraphQL, quantum, and
+exact Mathlib validation has no release-blocking formatting finding.
 
 ## Validation standard
 

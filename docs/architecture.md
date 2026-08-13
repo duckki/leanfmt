@@ -712,6 +712,9 @@ Rules and regroupings should preserve these cross-syntax relationships:
   Anonymous constructors then use balanced item breaks like tuples and arrays.
 - Inductive and equation arms inherit the arm base while their binders/patterns use flow
   opportunities. This keeps `|` at the arm base and continuation binders below it.
+  When constructor documentation precedes `|`, the inductive rule assigns one base to
+  the complete constructor and the constructor rule keeps both the documentation and
+  marker on that base.
 - A semicolon suppresses the otherwise structural do-statement boundary when the joined
   sequence fits; width pressure can still activate the ordinary sequence layout.
 - Interpolated strings are atomic nodes: parents may break before the complete atom, but

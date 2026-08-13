@@ -598,9 +598,9 @@ def assertMovedStandaloneCommentsKeepSiblingIndent (env : Lean.Environment)
     "mutual\n"
     ++ "\n"
     ++ "  inductive Coefficient where\n"
-    ++ "  /-- A coefficient can also record rational coefficients.\n"
-    ++ "  In this case the denominator is stored separately. -/\n"
-    ++ "  | rational : Coefficient\n"
+    ++ "    /-- A coefficient can also record rational coefficients.\n"
+    ++ "    In this case the denominator is stored separately. -/\n"
+    ++ "    | rational : Coefficient\n"
     ++ "end\n"
   let constructorCommentResult ←
     Formatter.formatSourceWithEnvDetailed env constructorCommentSource
@@ -612,6 +612,11 @@ def assertMovedStandaloneCommentsKeepSiblingIndent (env : Lean.Environment)
   assertTrue "constructor doc comment preserves code"
     (← codePreservedIgnoringWhitespace env constructorCommentSource
         constructorCommentResult.formatted)
+  let constructorCommentFormattedAgain ←
+    Formatter.formatSourceWithEnv env constructorCommentResult.formatted
+      "moved-constructor-doc-comment-formatted.lean"
+  assertEq "constructor doc comment formatting is idempotent"
+    constructorCommentResult.formatted constructorCommentFormattedAgain
   let protectedSource :=
     "mutual\n"
     ++ "\n"
@@ -640,9 +645,9 @@ def assertMovedStandaloneCommentsKeepSiblingIndent (env : Lean.Environment)
     "mutual\n\n"
     ++ "  /-- A declaration containing quoted syntax. -/\n"
     ++ "  meta inductive ProtectedCoefficient where\n"
-    ++ "  /-- A constructor containing quoted syntax.\n"
-    ++ "  Its continuation keeps the constructor base. -/\n"
-    ++ "  | rational (_ : `(Nat) = `(Nat)) : ProtectedCoefficient\n"
+    ++ "    /-- A constructor containing quoted syntax.\n"
+    ++ "    Its continuation keeps the constructor base. -/\n"
+    ++ "    | rational (_ : `(Nat) = `(Nat)) : ProtectedCoefficient\n"
     ++ "end\n"
   let protectedFormatted ←
     Formatter.formatSourceWithEnv env protectedSource
