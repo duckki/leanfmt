@@ -376,8 +376,13 @@ run_project_validation_batches() {
   local skip_final_build="$8"
   shift 8
   local -a build_targets=("$@")
+  local -a build_command=(build_project "$project_dir")
   local -a files=()
   local file
+
+  if ((${#build_targets[@]} > 0)); then
+    build_command+=("${build_targets[@]}")
+  fi
 
   while IFS= read -r -d '' file; do
     files+=("$file")
@@ -446,7 +451,7 @@ run_project_validation_batches() {
   else
     if run_phase_result \
         "Build $project_name before formatting ($file_selector)" \
-        build_project "$project_dir" "${build_targets[@]}"; then
+        "${build_command[@]}"; then
       :
     else
       status=$?
@@ -516,7 +521,7 @@ run_project_validation_batches() {
   build_status=0
   if run_phase_result \
       "Build $project_name after all requested formatter batches passed ($file_selector)" \
-      build_project "$project_dir" "${build_targets[@]}"; then
+      "${build_command[@]}"; then
     :
   else
     build_status=$?
@@ -661,6 +666,7 @@ main() {
   fi
 
   local project name source file_selector project_dir
+  local -a validation_arguments=()
   for project in "${projects[@]}"; do
     IFS='|' read -r name source file_selector <<< "$project"
     project_dir="$WORK_DIR/$name"
@@ -688,9 +694,14 @@ main() {
         "$name" >&2
       continue
     fi
-    run_project_validation_batches "$name" "$project_dir" "$PROJECT_FORMATTER" \
-      "$file_selector" "$selected_batch" "$start_batch" \
-      "$skip_initial_build" "$skip_final_build" "${build_targets[@]}"
+    validation_arguments=(
+      "$name" "$project_dir" "$PROJECT_FORMATTER" "$file_selector"
+      "$selected_batch" "$start_batch" "$skip_initial_build" "$skip_final_build"
+    )
+    if ((${#build_targets[@]} > 0)); then
+      validation_arguments+=("${build_targets[@]}")
+    fi
+    run_project_validation_batches "${validation_arguments[@]}"
   done
 
   section "Validation summary"
