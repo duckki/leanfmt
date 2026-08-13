@@ -498,6 +498,14 @@ deriving Repr
 
 namespace Module
 
+def containsNonSourceLexemes (moduleTree : Module) : Bool :=
+  moduleTree.tokens.any
+    fun token =>
+      !token.lexeme.isEmpty
+      && !(token.span.start < token.span.stop
+            && String.Pos.Raw.extract moduleTree.source token.span.start token.span.stop
+                == token.lexeme)
+
 def sourceOrderedTokens (moduleTree : Module) : Array Token :=
   moduleTree.tokens.qsort fun left right => left.fullSpan.start < right.fullSpan.start
 
@@ -698,14 +706,92 @@ unsafe def parserPrecedenceUnsafe
 opaque parserPrecedence
   (env : Environment) (options : Options) (kind : SyntaxNodeKind) : Option (Nat × Nat)
 
-structure ParserPrecedenceFacts where
+abbrev SpacedApplicationKindSet := NameSet
+
+partial def parserDescrSequence : ParserDescr -> List ParserDescr
+  | .binary combinator left right =>
+      if combinator == `andthen then
+        parserDescrSequence left ++ parserDescrSequence right
+      else
+        [.binary combinator left right]
+  | parser => [parser]
+
+def parserDescrSymbolIsTight (symbol : String) : Bool :=
+  symbol.toList.all
+    fun char => char != ' ' && char != '\t' && char != '\n' && char != '\r'
+
+def parserDescrSymbolIsApplicationHead (symbol : String) : Bool :=
+  let symbol := symbol.trimAscii.toString
+  parserDescrSymbolIsTight symbol && symbol.toList.any (·.isAlphanum)
+
+def parserDescrIsApplicationHead : ParserDescr -> Bool
+  | .symbol symbol
+  | .nonReservedSymbol symbol _ => parserDescrSymbolIsApplicationHead symbol
+  | .unicodeSymbol ascii unicode _ =>
+      let ascii := ascii.trimAscii.toString
+      let unicode := unicode.trimAscii.toString
+      parserDescrSymbolIsTight ascii
+      && parserDescrSymbolIsTight unicode
+      && (ascii.toList.any (·.isAlphanum) || unicode.toList.any (·.isAlphanum))
+  | _ => false
+
+def parserDescrIsOptional : ParserDescr -> Bool
+  | .unary combinator _ => combinator == `optional
+  | _ => false
+
+def parserDescrIsSpacedOperand : ParserDescr -> Bool
+  | .cat category _ => category == `term || category == `ident
+  | .const category => category == `ident
+  | _ => false
+
+partial def parserDescrIsSpacedApplication (kind : SyntaxNodeKind) : ParserDescr -> Bool
+  | .node nodeKind _ parser
+  | .nodeWithAntiquot _ nodeKind parser =>
+      if nodeKind == kind then
+        match parserDescrSequence parser with
+        | [] | [_] => false
+        | head :: rest =>
+            parserDescrIsApplicationHead head
+            && rest.getLast?.any parserDescrIsSpacedOperand
+            && (rest.dropLast.all parserDescrIsOptional)
+      else
+        parserDescrIsSpacedApplication kind parser
+  | .unary _ parser => parserDescrIsSpacedApplication kind parser
+  | .binary _ left right =>
+      parserDescrIsSpacedApplication kind left
+      || parserDescrIsSpacedApplication kind right
+  | _ => false
+
+unsafe def parserDescribesSpacedApplicationUnsafe
+    (env : Environment) (options : Options) (kind : SyntaxNodeKind)
+    : Bool :=
+  if !(KeyedDeclsAttribute.getValues
+        PrettyPrinter.formatterAttribute env kind).isEmpty then
+    false
+  else
+    match env.find? kind with
+    | some info =>
+        if info.type.isConstOf ``ParserDescr then
+          match env.evalConst ParserDescr options kind with
+          | .ok parser => parserDescrIsSpacedApplication kind parser
+          | .error _ => false
+        else
+          false
+    | none => false
+
+@[implemented_by parserDescribesSpacedApplicationUnsafe]
+opaque parserDescribesSpacedApplication
+  (env : Environment) (options : Options) (kind : SyntaxNodeKind) : Bool
+
+structure ParserLayoutFacts where
   checkedKinds : NameSet := {}
   infixPrecedences : InfixPrecedenceMap := {}
+  spacedApplicationKinds : SpacedApplicationKindSet := {}
 
-def ParserPrecedenceFacts.record
-    (facts : ParserPrecedenceFacts)
+def ParserLayoutFacts.record
+    (facts : ParserLayoutFacts)
     (env : Environment) (options : Options) (kind : SyntaxNodeKind)
-    : ParserPrecedenceFacts :=
+    : ParserLayoutFacts :=
   if facts.checkedKinds.contains kind then
     facts
   else
@@ -713,15 +799,21 @@ def ParserPrecedenceFacts.record
       match parserPrecedence env options kind with
       | some precedence => facts.infixPrecedences.insert kind precedence
       | none => facts.infixPrecedences
+    let spacedApplicationKinds :=
+      if parserDescribesSpacedApplication env options kind then
+        facts.spacedApplicationKinds.insert kind
+      else
+        facts.spacedApplicationKinds
     {
       checkedKinds := facts.checkedKinds.insert kind
       infixPrecedences
+      spacedApplicationKinds
     }
 
-partial def collectParserPrecedenceFacts
+partial def collectParserLayoutFacts
     (env : Environment) (options : Options)
-    (stx : Syntax) (facts : ParserPrecedenceFacts := {})
-    : ParserPrecedenceFacts :=
+    (stx : Syntax) (facts : ParserLayoutFacts := {})
+    : ParserLayoutFacts :=
   match stx with
   | .missing
   | .atom ..
@@ -729,7 +821,7 @@ partial def collectParserPrecedenceFacts
   | .node _ kind children =>
       children.foldl
         (fun facts child =>
-          collectParserPrecedenceFacts env options child facts)
+          collectParserLayoutFacts env options child facts)
         (facts.record env options kind)
 
 /-! ## Logical regrouping -/
@@ -770,6 +862,42 @@ def isGeneratedCommandKind (kind : Lean.SyntaxNodeKind) : Bool :=
 
 def lexemeEndsWithOpeningDelimiter (lexeme : String) : Bool :=
   ["(", "[", "{", "⟨", "⟪", "‖"].any fun suffix => lexeme.endsWith suffix
+
+inductive DelimiterKind where
+  | paren
+  | bracket
+  | brace
+  | anonymousConstructor
+  | doubleAngle
+  | norm
+deriving BEq, Repr
+
+private def delimiterKindForLexemes? (opening closing : String) : Option DelimiterKind :=
+  if opening.endsWith "(" && closing == ")" then
+    some .paren
+  else if opening.endsWith "[" && closing == "]" then
+    some .bracket
+  else if opening.endsWith "{" && closing == "}" then
+    some .brace
+  else if opening.endsWith "⟨" && closing == "⟩" then
+    some .anonymousConstructor
+  else if opening.endsWith "⟪" && closing == "⟫" then
+    some .doubleAngle
+  else if opening == "‖" && closing == "‖" then
+    some .norm
+  else
+    none
+
+def outerDelimiterKind? (children : Array Tree) : Option DelimiterKind := do
+  let content := children.filter fun child => child.firstToken?.isSome
+  let openingTree ← content[0]?
+  let closingTree ← content[content.size - 1]?
+  let opening ← openingTree.singleToken?
+  let closing ← closingTree.singleToken?
+  if opening.role != .atom || closing.role != .atom then
+    none
+  else
+    delimiterKindForLexemes? opening.lexeme closing.lexeme
 
 private def sourceTokensAreAdjacent (left right : Token) : Bool :=
   left.span.start < left.span.stop
@@ -870,32 +998,44 @@ private def regroupGeneratedSuffixApplication?
     none
   some <| .node .application (#[.node .suffixGroup #[head, suffix]] ++ argumentChildren)
 
-private def regroupGeneratedSpacedApplication?
+private def regroupSpacedApplication?
+    (spacedApplicationKinds : SpacedApplicationKindSet)
     (kind : SyntaxNodeKind) (children : Array Tree)
     : Option Tree := do
-  if !isGeneratedTermKind kind then
+  let generated := isGeneratedTermKind kind
+  if !generated && !spacedApplicationKinds.contains kind then
     none
   let contentIndexes :=
     (List.range children.size).filter
       fun index => children[index]?.bind Tree.firstToken? |>.isSome
-  if contentIndexes.length < 3 || contentIndexes.head? != some 0 then
+  if contentIndexes.length < (if generated then 3 else 2)
+      || contentIndexes.head? != some 0 then
     none
   let head ← children[0]?
   if !directLeafAtom? head then
     none
-  let rec separatorsAreGeneratedSpaces : List Nat → Bool
+  let rec separatorsAreSpaces : List Nat → Bool
     | left :: right :: rest =>
-        right == left + 2
-        && (children[left + 1]?).any
-            fun separator =>
-              rawKind? separator == some `group
-              && separator.firstToken?.isNone
-              && separatorsAreGeneratedSpaces (right :: rest)
+        let separatorsHaveNoContent :=
+          (List.range' (left + 1) (right - left - 1)).all
+            fun index => children[index]?.bind Tree.firstToken? |>.isNone
+        let generatedSeparator :=
+          right == left + 2
+          && (children[left + 1]?).any fun separator => rawKind? separator == some `group
+        let sourceHasSpace :=
+          match children[left]? >>= Tree.lastToken?,
+                children[right]? >>= Tree.firstToken? with
+          | some leftToken, some rightToken =>
+              !sourceTokensAreAdjacent leftToken rightToken
+          | _, _ => false
+        separatorsHaveNoContent
+        && (if generated then generatedSeparator else sourceHasSpace)
+        && separatorsAreSpaces (right :: rest)
     | _ => true
-  if !separatorsAreGeneratedSpaces contentIndexes then
+  if !separatorsAreSpaces contentIndexes then
     none
   let arguments := contentIndexes.drop 1 |>.filterMap fun index => children[index]?
-  if arguments.any directLeafAtom? then
+  if generated && arguments.any directLeafAtom? then
     none
   some <| .node .application (#[head] ++ arguments.toArray)
 
@@ -1045,6 +1185,20 @@ def previousContentIndex? (children : Array Tree) (index : Nat) : Option Nat :=
       | some _ => some candidate
       | none => found)
     none
+
+def regroupMatchDiscriminantsBeforeWith (children : Array Tree) : Array Tree :=
+  match children.findIdx?
+          fun child =>
+            (Tree.firstToken? child).map (fun token => token.lexeme) == some "with" with
+  | some withIndex =>
+      match previousContentIndex? children withIndex with
+      | some discriminantsIndex =>
+          match children[discriminantsIndex]? with
+          | some discriminants =>
+              children.set! discriminantsIndex (regroupMatchDiscriminants discriminants)
+          | none => children
+      | none => children
+  | none => children
 
 def unwrapSingleNullChild (children : Array Tree) : Array Tree :=
   if children.size == 1 then
@@ -1642,6 +1796,19 @@ def prependElseToIfThenElseClause (elseKeyword : Tree) (parts : Array Tree)
       some <| parts.set! 0 (.node .ifThenElseClause (#[elseKeyword] ++ children))
   | _ => none
 
+def attachFinalBodySuffix (parts : Array Tree) : Array Tree :=
+  if parts.size < 2 then
+    parts
+  else
+    match parts[parts.size - 2]?, parts.back? with
+    | some delimiter, some body =>
+        if body.firstToken?.any
+            fun token => token.lexeme == "do" || token.lexeme == "by" then
+          parts.extract 0 (parts.size - 2) |>.push (.node .suffixGroup #[delimiter, body])
+        else
+          parts
+    | _, _ => parts
+
 def regroupIfThenElseChain (kind : SyntaxNodeKind) (children : Array Tree) : Tree :=
   let chain? : Option Tree := do
     let thenBranch ← children[3]?
@@ -1651,6 +1818,7 @@ def regroupIfThenElseChain (kind : SyntaxNodeKind) (children : Array Tree) : Tre
     let continuation ← prependElseToIfThenElseClause elseKeyword continuation
     some
     <| .node .ifThenElseChain
+    <| attachFinalBodySuffix
     <| #[.node .ifThenElseClause (childrenRange children 0 3), thenBranch] ++ continuation
   chain?.getD <| .node (.raw kind) children
 
@@ -1972,21 +2140,8 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
           | none => fieldParts
         .node (.raw kind) <| #[lvalue] ++ fieldParts
     | _, _ => .node (.raw kind) children
-  else if kind == `Lean.Parser.Term.match then
-    match children.findIdx?
-            fun child =>
-              (Tree.firstToken? child).map (fun token => token.lexeme) == some "with" with
-    | some withIndex =>
-        match previousContentIndex? children withIndex with
-        | some discriminantsIndex =>
-            match children[discriminantsIndex]? with
-            | some discriminants =>
-                .node (.raw kind)
-                <| children.set! discriminantsIndex
-                    (regroupMatchDiscriminants discriminants)
-            | none => .node (.raw kind) children
-        | none => .node (.raw kind) children
-    | none => .node (.raw kind) children
+  else if kind == `Lean.Parser.Term.match || kind == `Lean.Parser.Term.doMatch then
+    .node (.raw kind) (regroupMatchDiscriminantsBeforeWith children)
   else if kind == `Lean.Parser.Term.matchAlts then
     .node (.raw kind) (unwrapSingleNullChild children)
   else if kind == `Lean.Parser.Term.doFor then
@@ -2184,6 +2339,8 @@ def regroupTacticAlternativeChildren (children : Array Tree) : Array Tree :=
 
 def regroupRawNode
     (infixPrecedences : InfixPrecedenceMap)
+    (spacedApplicationKinds : SpacedApplicationKindSet)
+    (regroupSpacedApplications : Bool)
     (kind : SyntaxNodeKind) (children : Array Tree)
     : Tree :=
   if kind == `null then
@@ -2224,10 +2381,15 @@ def regroupRawNode
         let parts := appendInfixParts infixPrecedences kind #[] receiver
         .node (.infixChain kind) <| parts.push operator |>.push right
     | _, _, _ => .node (.raw kind) children
-  else if kind == `Lake.DSL.packageCommand || kind == `Lake.DSL.leanLibCommand then
+  else if kind == `Lake.DSL.packageCommand
+          || kind == `Lake.DSL.leanLibCommand
+          || kind == `Lake.DSL.leanExeCommand
+          || kind == `Lake.DSL.externLibCommand then
     .node (.raw kind) (regroupLakeCommandChildren children)
   else if kind == `Lake.DSL.requireDecl then
     .node (.raw kind) (regroupLakeRequireChildren children)
+  else if kind == `Lake.DSL.declField then
+    .node .definition children
   else if kind == `Lean.Linter.«command_Register_linter_set_:=_» then
     .node (.raw kind) (regroupRegisterLinterSetChildren children)
   else if kind == `commandUnsuppress_compilationIn_ then
@@ -2240,7 +2402,12 @@ def regroupRawNode
     if let some declaration := regroupPrefixedDeclaration? children then
       declaration
     else
-      if let some application := regroupGeneratedSpacedApplication? kind children then
+      let spacedApplication? :=
+        if regroupSpacedApplications then
+          regroupSpacedApplication? spacedApplicationKinds kind children
+        else
+          none
+      if let some application := spacedApplication? then
         application
       else
         if let some application := regroupGeneratedSuffixApplication? kind children then
@@ -2277,26 +2444,52 @@ def regroupRawNode
             | some definitionChildren => .node .definition definitionChildren
             | none => regroupOtherRawNode kind children
 
-partial def regroupTreeWithPrecedences (infixPrecedences : InfixPrecedenceMap)
+private partial def regroupTreeWithPrecedencesInContext
+    (infixPrecedences : InfixPrecedenceMap)
+    (spacedApplicationKinds : SpacedApplicationKindSet)
+    (isTacticSequenceEntry : Bool)
     : Tree → Tree
   | .missing => .missing
   | .leaf token => .leaf token
   | .node (.raw kind) children =>
+      let childIsTacticSequenceEntry :=
+        Tree.isTacticSequenceKind kind || (isTacticSequenceEntry && kind == `null)
+      let tacticOperandsAtEvenIndexes :=
+        isTacticSequenceEntry && isBinaryInfixRawNode kind children
+      let regroupChildren (children : Array Tree) :=
+        children.mapIdx
+          fun index child =>
+            regroupTreeWithPrecedencesInContext
+              infixPrecedences spacedApplicationKinds
+              (if tacticOperandsAtEvenIndexes then
+                  index % 2 == 0
+                else
+                  childIsTacticSequenceEntry)
+              child
       let tree :=
-        if isDelimitedCollectionKind kind then
-          let children :=
-            (flattenDelimitedCollectionChildren children).map
-              (regroupTreeWithPrecedences infixPrecedences)
+        if isDelimitedCollectionKind kind
+            || (!isGeneratedTermKind kind
+                && outerDelimiterKind? children == some .bracket) then
+          let children := regroupChildren (flattenDelimitedCollectionChildren children)
           .node (.raw kind) <| flattenDelimitedCollectionChildren children
         else
-          regroupRawNode infixPrecedences kind
-            (children.map (regroupTreeWithPrecedences infixPrecedences))
+          regroupRawNode infixPrecedences spacedApplicationKinds
+            (!isTacticSequenceEntry) kind (regroupChildren children)
       regroupCalcOwnerTree <| Tree.annotateTacticTree tree
   | .node kind children =>
-      .node kind (children.map (regroupTreeWithPrecedences infixPrecedences))
+      .node kind
+        (children.map
+          (regroupTreeWithPrecedencesInContext
+            infixPrecedences spacedApplicationKinds false))
+
+def regroupTreeWithPrecedences
+    (infixPrecedences : InfixPrecedenceMap)
+    (spacedApplicationKinds : SpacedApplicationKindSet := {})
+    : Tree → Tree :=
+  regroupTreeWithPrecedencesInContext infixPrecedences spacedApplicationKinds false
 
 def regroupTree (tree : Tree) : Tree :=
-  regroupTreeWithPrecedences {} tree
+  regroupTreeWithPrecedences {} {} tree
 
 def regroupTopLevelCommandAnnotations (tree : Tree) : Tree :=
   match tree with
@@ -2406,10 +2599,11 @@ def extractTree
     (source : String) (stx : Syntax)
     (letBodyParserFacts : Array LetBodyParserFact := #[])
     (infixPrecedences : InfixPrecedenceMap := {})
+    (spacedApplicationKinds : SpacedApplicationKindSet := {})
     : Tree :=
   regroupTopLevelAnnotations
   <| annotateLetExpressions letBodyParserFacts
-  <| regroupTreeWithPrecedences infixPrecedences
+  <| regroupTreeWithPrecedences infixPrecedences spacedApplicationKinds
   <| removeOverlappingSourceTokens source
   <| extractRawTree source stx
 
@@ -2575,7 +2769,20 @@ structure ParsedModuleSyntax where
   rawSyntax : Syntax
   letBodyParserFacts : Array LetBodyParserFact
   infixPrecedences : InfixPrecedenceMap
-deriving Repr
+  spacedApplicationKinds : SpacedApplicationKindSet
+
+instance : Repr ParsedModuleSyntax where
+  reprPrec parsed precedence :=
+    let spacedApplicationKinds :=
+      parsed.spacedApplicationKinds.foldl (fun kinds kind => kinds.push kind) #[]
+    reprPrec
+      (
+        parsed.rawSyntax,
+        parsed.letBodyParserFacts,
+        parsed.infixPrecedences,
+        spacedApplicationKinds
+      )
+      precedence
 
 def parseModuleSyntaxWithEnvCoreDetailed
     (env : Environment) (source fileName : String) (updateParserState : Bool)
@@ -2600,14 +2807,14 @@ def parseModuleSyntaxWithEnvCoreDetailed
   let rawSyntax :=
     (mkNode `Lean.Parser.Module.module #[header, mkListNode commands]).raw.updateLeading
   let parserContext := parserModuleContext commandState
-  let infixPrecedences :=
-    (collectParserPrecedenceFacts parserContext.env parserContext.options
-      rawSyntax).infixPrecedences
+  let parserLayoutFacts :=
+    collectParserLayoutFacts parserContext.env parserContext.options rawSyntax
   pure
     {
       rawSyntax := rawSyntax
       letBodyParserFacts := letBodyParserFacts
-      infixPrecedences := infixPrecedences
+      infixPrecedences := parserLayoutFacts.infixPrecedences
+      spacedApplicationKinds := parserLayoutFacts.spacedApplicationKinds
     }
 
 def parseModuleSyntaxWithEnvCore
@@ -2634,6 +2841,7 @@ def parseModuleStringWithEnv (env : Environment) (source fileName : String := "<
     parseModuleSyntaxWithEnvCoreDetailed env source fileName (updateParserState := true)
   let tree :=
     extractTree source parsed.rawSyntax parsed.letBodyParserFacts parsed.infixPrecedences
+      parsed.spacedApplicationKinds
   pure { source, rawSyntax := parsed.rawSyntax, tree, tokens := tree.tokens }
 
 def parseModuleString (source fileName : String := "<input>") : IO Module := do

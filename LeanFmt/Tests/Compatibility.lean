@@ -125,7 +125,7 @@ private def assertExportedEnvironment : IO Unit := do
         level := .exported
       }
   let some leafIndex := withMetaIr.getModuleIdx? `LeanFmt.Tests.MetaImportLeaf
-  | throw <| IO.userError "expected meta/IR-only leaf import"
+    | throw <| IO.userError "expected meta/IR-only leaf import"
   assertTrue "meta/IR-only imports remain available"
     (withMetaIr.header.modules[leafIndex]!.irPhases == .comptime)
 

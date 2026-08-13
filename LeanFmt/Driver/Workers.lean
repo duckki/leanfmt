@@ -309,6 +309,49 @@ def parseLakeEnvironment (output : String)
             environment.push (name, if value.isEmpty then none else some value)
   pure environment
 
+def setWorkerEnvironmentVariable
+    (environment : Array (String × Option String))
+    (name : String) (value : Option String)
+    : Array (String × Option String) :=
+  (environment.filter fun entry => entry.1 != name).push (name, value)
+
+def nativeLibrariesEnvironmentVariable : String :=
+  "LEANFMT_LOAD_DYNLIBS"
+
+def pluginsEnvironmentVariable : String :=
+  "LEANFMT_LOAD_PLUGINS"
+
+def runtimePaths (value : String) : List FilePath :=
+  let separator := if System.Platform.isWindows then ';' else ':'
+  (value.split fun char => char == separator)
+  |>.toList
+  |>.map (·.toString)
+  |>.filter (fun path => !path.isEmpty)
+  |>.map FilePath.mk
+
+def nativeLibraryPaths (value : String) : List FilePath :=
+  runtimePaths value
+
+def loadRequestedNativeLibraries : IO Unit := do
+  match ← IO.getEnv nativeLibrariesEnvironmentVariable with
+  | some value => (nativeLibraryPaths value).forM Lean.loadDynlib
+  | none => pure ()
+
+def loadRequestedPlugins : IO Unit := do
+  match ← IO.getEnv pluginsEnvironmentVariable with
+  | some value =>
+      Lean.withImporting do
+        (runtimePaths value).forM fun path => Lean.loadPlugin path
+  | none => pure ()
+
+def inheritRequestedRuntimeEnvironment (environment : Array (String × Option String))
+    : IO (Array (String × Option String)) := do
+  let mut environment := environment
+  for name in [nativeLibrariesEnvironmentVariable, pluginsEnvironmentVariable] do
+    if let some value ← IO.getEnv name then
+      environment := setWorkerEnvironmentVariable environment name (some value)
+  pure environment
+
 structure WorkerProcessContext where
   executable : FilePath
   environment : Array (String × Option String)
@@ -324,10 +367,11 @@ def loadWorkerProcessContext (cwd? : Option FilePath) : IO WorkerProcessContext 
           s!"`{lake} env` exited with code {output.exitCode}"
         else
           s!"`{lake} env` exited with code {output.exitCode}: {detail}"
-  let environment ←
+  let lakeEnvironment ←
     match parseLakeEnvironment output.stdout with
     | .ok environment => pure environment
     | .error message => throw <| IO.userError message
+  let environment ← inheritRequestedRuntimeEnvironment lakeEnvironment
   pure { executable := ← workerExecutable, environment }
 
 structure WorkerBatchResult where
@@ -384,8 +428,11 @@ def reportWorkerBatchResult
         IO.print result.stdout
       if !result.stderr.isEmpty then
         IO.eprint result.stderr
+      if result.exitCode != 0 && result.stdout.isEmpty && result.stderr.isEmpty then
+        IO.eprintln
+          s!"leanfmt: worker batch {batchIndex}/{totalBatches} exited with code {result.exitCode} without output"
       profileLine options
-        s!"worker-batch: index={batchIndex}/{totalBatches} environment={environment.description} environments={environmentCount} files={fileCount} elapsed={result.elapsedMs}ms"
+        s!"worker-batch: index={batchIndex}/{totalBatches} environment={environment.description} environments={environmentCount} files={fileCount} exit={result.exitCode} elapsed={result.elapsedMs}ms"
       pure (result.exitCode != 0)
   | .error error =>
       IO.eprintln s!"leanfmt: worker batch {batchIndex}/{totalBatches}: {error}"

@@ -30,6 +30,10 @@ def Boundary.hasLineStructure (boundary : Boundary) : Bool :=
 def Boundary.commentForcesBreak (boundary : Boundary) : Bool :=
   SpaceRules.commentForcesLineBreak boundary.normalized
 
+def Boundary.hasLineComment (boundary : Boundary) : Bool :=
+  boundary.normalized.splitOn "\n"
+  |>.any fun line => (SpaceRules.stripLeadingHorizontalWhitespace line).startsWith "--"
+
 def Boundary.startsOnNewLine (boundary : Boundary) : Bool :=
   match boundary.normalized.toList.dropWhile SpaceRules.isHorizontalWhitespace with
   | '\n' :: _ => true

@@ -99,6 +99,21 @@ def assertSyntaxTreeRoundTrip (env : Lean.Environment) : IO Unit := do
     SyntaxTree.parseModuleStringWithEnv env source "syntax-tree-round-trip.lean"
   assertEq "syntax tree reconstruction" source moduleTree.reconstruct
 
+def assertNonSourceLexemesPreserveModule (env : Lean.Environment) : IO Unit := do
+  let source := "def generatedParserOutput := 0\n"
+  let parsed ←
+    SyntaxTree.parseModuleStringWithEnv env source "non-source-parser-lexeme.lean"
+  let synthetic :=
+    SyntaxTree.Tree.leaf
+    <| SyntaxTree.tokenOfNone .atom .anonymous "generated-non-source-token"
+  let tree := SyntaxTree.Tree.node (.raw `null) #[synthetic, parsed.tree]
+  let moduleTree : SyntaxTree.Module := { parsed with tree, tokens := tree.tokens }
+  assertTrue "a non-source parser lexeme is detected" moduleTree.containsNonSourceLexemes
+  assertEq "a module with non-source parser lexemes is preserved"
+    source (Formatter.formatModule moduleTree)
+  assertTrue "a non-source parser tree does not report unreachable rules"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule moduleTree).isEmpty
+
 def assertSourcePositionMapColumns : IO Unit := do
   let source := "αβ\n  γ"
   let sourceMap := SyntaxTree.SourcePositionMap.ofString source
@@ -1232,6 +1247,17 @@ def assertSetOptionInBreaksAfterIn (env : Lean.Environment) : IO Unit := do
     (← codePreservedIgnoringWhitespace env source formatted)
   assertTextContains "set_option keeps in before command break" formatted "false in\n"
   assertTextLacks "set_option does not break before in" formatted "false\nin theorem"
+  let termSource :=
+    "def scopedOptionTerm : Nat × Nat :=\n"
+    ++ "  set_option backward.isDefEq.respectTransparency false in\n"
+    ++ "    { fst := 0, snd := 1 }\n"
+  let termModule ←
+    SyntaxTree.parseModuleStringWithEnv env termSource "set-option-term.lean"
+  assertTrue "term set_option has complete rule coverage"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule termModule).isEmpty
+  let termFormatted ← Formatter.formatSourceWithEnv env termSource "set-option-term.lean"
+  assertEq "term set_option reuses the option-prefix body boundary"
+    termSource termFormatted
 
 def assertDocumentedTopLevelDeclarationKeepsBaseIndent (env : Lean.Environment)
     : IO Unit := do
@@ -1772,7 +1798,7 @@ def assertDefinitionLikeCommandsRegroup : IO Unit := do
         children.findIdx?
           fun child =>
             SyntaxTree.rawKind? child == some `Lean.Parser.Command.whereStructInst
-      | throw <| IO.userError "custom structure-valued definition has no where body"
+        | throw <| IO.userError "custom structure-valued definition has no where body"
       let segment := Formatter.LineBreakRules.Segment.ofTree customWhereDefinition
       let rule := Formatter.LineBreakRules.formattingRuleFor customWhereDefinition
       assertTrue "custom structure-valued declarations keep where as a header suffix"
@@ -1949,6 +1975,30 @@ def assertOpenCommandListBreaksFromOpenColumn (env : Lean.Environment) : IO Unit
     ++ "      Functor.OplaxMonoidal TensorProduct\n"
   let formatted ← Formatter.formatSourceWithEnv env source "open-command-list.lean"
   assertEq "open command list breaks from open column" expected formatted
+
+  let openOnlySource :=
+    "open HexPolyZMathlib (toPolynomial coeff_toPolynomial toPolynomial_add "
+    ++ "toPolynomial_sub toPolynomial_mul toPolynomial_C equiv)\n"
+  let openOnlyExpected :=
+    "open HexPolyZMathlib (\n"
+    ++ "      toPolynomial coeff_toPolynomial toPolynomial_add toPolynomial_sub "
+    ++ "toPolynomial_mul\n"
+    ++ "        toPolynomial_C equiv\n"
+    ++ "      )\n"
+  let openOnlyResult ←
+    Formatter.formatSourceWithEnvDetailed env openOnlySource
+      "open-only-command-list.lean" { lineWidth := 100 }
+  assertTrue "parenthesized open list does not fall back" (!openOnlyResult.fellBack)
+  assertEq "parenthesized open list exposes identifier flow"
+    openOnlyExpected openOnlyResult.formatted
+  assertTrue "parenthesized open list fits its width"
+    (Formatter.linesFit openOnlyResult.formatted 100)
+  assertTrue "parenthesized open list preserves code"
+    (← codePreservedIgnoringWhitespace env openOnlySource openOnlyResult.formatted)
+  let openOnlyAgain ←
+    Formatter.formatSourceWithEnv env openOnlyResult.formatted
+      "open-only-command-list-formatted.lean" { lineWidth := 100 }
+  assertEq "parenthesized open list is idempotent" openOnlyResult.formatted openOnlyAgain
 
 def assertCommentsDoNotBlockFormatting (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -2801,26 +2851,27 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
       ++ "  | none")
     ("  let .leaf comma :=\n"
       ++ "    veryLongAtomicValueNameForDoLetElseFormattingThatCannotShareTheHeaderLine\n"
-      ++ "  | none")
+      ++ "    | none")
   assertCase "do-let fallback breaks multiline alternative"
     ("  let .leaf comma := commaTree | "
       ++ "veryLongAtomicFallbackNameForDoLetElseFormattingThatCannotShareTheHeaderLine")
-    ("  let .leaf comma := commaTree\n"
-      ++ "  | veryLongAtomicFallbackNameForDoLetElseFormattingThatCannotShareTheHeaderLine")
+    ("  let .leaf comma := commaTree |\n"
+      ++ "    veryLongAtomicFallbackNameForDoLetElseFormattingThatCannotShareTheHeaderLine")
   assertCase "do-let fallback breaks multiline value and alternative"
     ("  let .leaf comma :=\n"
       ++ "    veryLongAtomicValueNameForDoLetElseFormattingThatCannotShareTheHeaderLine\n"
       ++ "  | veryLongAtomicFallbackNameForDoLetElseFormattingThatCannotShareTheHeaderLine")
     ("  let .leaf comma :=\n"
       ++ "    veryLongAtomicValueNameForDoLetElseFormattingThatCannotShareTheHeaderLine\n"
-      ++ "  | veryLongAtomicFallbackNameForDoLetElseFormattingThatCannotShareTheHeaderLine")
+      ++ "    | veryLongAtomicFallbackNameForDoLetElseFormattingThatCannotShareTheHeaderLine")
   assertCase "do-let fallback keeps the bar with a wrapping fallback"
     ("  let .leaf comma := commaTree\n"
       ++ "  | return .text "
       ++ "\"A long fallback message that cannot share the fallback separator line at all\"")
     ("  let .leaf comma := commaTree\n"
-      ++ "  | return .text\n"
-      ++ "      \"A long fallback message that cannot share the fallback separator line at all\"")
+      ++ "    |\n"
+      ++ "      return .text\n"
+      ++ "        \"A long fallback message that cannot share the fallback separator line at all\"")
   let trailingCommentSource :=
     "def fallbackComment (depth : Nat) : Id Bool := do\n"
     ++ "  let depth + 1 := depth | pure (); return false -- fallback comment remains attached\n"
@@ -2828,8 +2879,8 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
     ++ "  return true\n"
   let trailingCommentExpected :=
     "def fallbackComment (depth : Nat) : Id Bool := do\n"
-    ++ "  let depth + 1 := depth\n"
-    ++ "  | pure (); return false -- fallback comment remains attached\n"
+    ++ "  let depth + 1 := depth |\n"
+    ++ "    pure (); return false -- fallback comment remains attached\n"
     ++ "  -- continuation comment keeps the do-body indentation\n"
     ++ "  return true\n"
   let trailingCommentFormatted ←
@@ -2869,11 +2920,16 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
     ++ "  let (.some first, .some second) := (some 1, some 2)\n"
     ++ "  | failure\n"
     ++ "  return first + second\n"
+  let multilineFallbackExpected :=
+    "def multilineFallback : Option Nat := do\n"
+    ++ "  let (.some first, .some second) := (some 1, some 2)\n"
+    ++ "    | failure\n"
+    ++ "  return first + second\n"
   let multilineFallbackFormatted ←
     Formatter.formatSourceWithEnv env multilineFallbackSource
       "multiline-do-let-fallback.lean"
   assertEq "multiline do-let fallback keeps continuation at body base"
-    multilineFallbackSource multilineFallbackFormatted
+    multilineFallbackExpected multilineFallbackFormatted
   let multiStatementFallbackSource :=
     "def multiStatementFallback (candidate : Option Nat) : Option Nat := do\n"
     ++ "  let some value := candidate |\n"
@@ -2882,8 +2938,8 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
     ++ "  return value\n"
   let multiStatementFallbackExpected :=
     "def multiStatementFallback (candidate : Option Nat) : Option Nat := do\n"
-    ++ "  let some value := candidate\n"
-    ++ "  | if candidate.isNone then\n"
+    ++ "  let some value := candidate |\n"
+    ++ "    if candidate.isNone then\n"
     ++ "      reportFailure; return none\n"
     ++ "    throwError \"candidate was rejected\"\n"
     ++ "  return value\n"
@@ -2922,9 +2978,9 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
         commentedFallbackResult.formatted)
   assertTextContains "commented do-let fallback indents its body beneath the pipe"
     commentedFallbackResult.formatted
-    ("        | -- We put this here rather than using a big try block.\n"
-      ++ "          -- The fallback remains nested after the surrounding body moves.\n"
-      ++ "          sinit s\n"
+    ("          | -- We put this here rather than using a big try block.\n"
+      ++ "            -- The fallback remains nested after the surrounding body moves.\n"
+      ++ "            sinit s\n"
       ++ "        let s := s.pushFold lit\n")
   let commentedFallbackAgain ←
     Formatter.formatSourceWithEnv env commentedFallbackResult.formatted
@@ -2996,7 +3052,7 @@ def assertDoLetArrowFallbackBreaksBeforeContinuation (env : Lean.Environment)
     ++ "  let .some value ←\n"
     ++ "    veryLongOptionProviderNameForDoLetArrowFallbackBreak (some 1) (some 2) (some 3)\n"
     ++ "      (some 4)\n"
-    ++ "  | fallbackValue\n"
+    ++ "    | fallbackValue\n"
     ++ "  assertInstancesCommute\n"
     ++ "  some value\n"
   let formatted ← Formatter.formatSourceWithEnv env source "do-let-arrow-fallback.lean"
@@ -3024,8 +3080,8 @@ def assertNestedDoLetArrowFallbackKeepsBodyBase (env : Lean.Environment) : IO Un
     (← codePreservedIgnoringWhitespace env source result.formatted)
   assertTextContains "nested do-let arrow fallback keeps its body beneath the pipe"
     result.formatted
-    ("| -- Keep the multiline fallback beneath the pipe.\n"
-      ++ "          let fallback := current\n")
+    ("          | -- Keep the multiline fallback beneath the pipe.\n"
+      ++ "            let fallback := current\n")
   assertTextContains
     "nested do-let arrow fallback keeps the continuation outside its body"
     result.formatted
@@ -3073,7 +3129,7 @@ def assertDoLetExprFallbackBreaksBeforeContinuation (env : Lean.Environment)
   assertTrue "do let_expr fallback preserves code"
     (← codePreservedIgnoringWhitespace env source formatted)
   assertTextContains "do let_expr fallback stays separate from continuation"
-    formatted "\n        | y\n        z\n"
+    formatted "\n          | y\n        z\n"
   assertTextLacks "do let_expr fallback does not absorb continuation" formatted "| y z"
   let formattedAgain ←
     Formatter.formatSourceWithEnv env formatted "do-let-expr-fallback-formatted.lean"
@@ -3725,6 +3781,71 @@ def assertProofBodyUntouched (env : Lean.Environment) : IO Unit := do
     "theorem proofBodyUntouched : True := by\n" ++ "  exact\n" ++ "    True.intro\n"
   let formatted ← Formatter.formatSourceWithEnv env source "proof-body-untouched.lean"
   assertEq "proof body untouched" source formatted
+
+def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let source :=
+    "theorem termTakingTactics (value : Nat) : True := by\n"
+    ++ "  cases value with\n"
+    ++ "  | zero =>\n"
+    ++ "      exact veryLongExactProofFunctionForTacticLayout\n"
+    ++ "        firstArgument secondArgument\n"
+    ++ "      apply veryLongApplyProofFunctionForTacticLayout\n"
+    ++ "        firstArgument secondArgument\n"
+    ++ "      refine veryLongRefineProofFunctionForTacticLayout\n"
+    ++ "        firstArgument secondArgument\n"
+    ++ "      context_term_tactic veryLongExtensionFunctionForTacticLayout\n"
+    ++ "        firstArgument secondArgument\n"
+    ++ "  | succ value => exact True.intro\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "term-taking-tactic-application.lean"
+  for (tactic, kind)
+      in [
+        ("exact", `Lean.Parser.Tactic.exact),
+        ("apply", `Lean.Parser.Tactic.apply),
+        ("refine", `Lean.Parser.Tactic.refine)
+      ] do
+    assertTrue s!"{tactic} retains its tactic ownership"
+      ((findTacticTree? kind moduleTree.tree).isSome)
+    assertTrue s!"{tactic} does not become an outer application"
+      ((findTreeNodeStartingWith? .application tactic moduleTree.tree).isNone)
+  assertTrue "extension term-taking tactic retains its tactic ownership"
+    ((findTacticTree? `contextTermTactic moduleTree.tree).isSome)
+  assertTrue "extension term-taking tactic does not become an outer application"
+    ((findTreeNodeStartingWith? .application
+        "context_term_tactic" moduleTree.tree).isNone)
+  let combinatorSource :=
+    "theorem combinedTermTakingTactics : True := by\n"
+    ++ "  exact veryLongExactProofFunction firstArgument <;>\n"
+    ++ "  apply veryLongApplyProofFunction secondArgument\n"
+  let combinatorTree ←
+    SyntaxTree.parseModuleStringWithEnv env combinatorSource
+      "combined-term-taking-tactic-application.lean"
+  for (tactic, kind)
+      in [("exact", `Lean.Parser.Tactic.exact), ("apply", `Lean.Parser.Tactic.apply)] do
+    assertTrue s!"combined {tactic} retains its tactic ownership"
+      ((findTacticTree? kind combinatorTree.tree).isSome)
+    assertTrue s!"combined {tactic} does not become an outer application"
+      ((findTreeNodeStartingWith? .application tactic combinatorTree.tree).isNone)
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "term-taking-tactic-application.lean" { lineWidth := 60 }
+  assertTrue "term-taking tactic applications do not fall back" (!result.fellBack)
+  assertTextContains "exact stays with its operand head" result.formatted
+    "      exact veryLongExactProofFunctionForTacticLayout\n        firstArgument secondArgument\n"
+  assertTextContains "apply stays with its operand head" result.formatted
+    "      apply veryLongApplyProofFunctionForTacticLayout\n        firstArgument secondArgument\n"
+  assertTextContains "refine stays with its operand head" result.formatted
+    "      refine veryLongRefineProofFunctionForTacticLayout\n        firstArgument secondArgument\n"
+  assertTextContains "extension tactic stays with its operand head" result.formatted
+    "      context_term_tactic veryLongExtensionFunctionForTacticLayout\n        firstArgument secondArgument\n"
+  assertTrue "term-taking tactic application formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "term-taking-tactic-application-formatted.lean" { lineWidth := 60 }
+  assertEq "term-taking tactic application formatting is idempotent"
+    result.formatted formattedAgain
 
 def assertAttachedProofLambdaUsesStructuralLayout (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -5066,6 +5187,19 @@ def assertInitializeUsesStructuralDeclarationHeader (env : Lean.Environment)
       "initialize-structural-declaration-header-formatted.lean" { lineWidth := 70 }
   assertEq "initialize declaration header formatting is idempotent"
     result.formatted formattedAgain
+
+  let suffixWidthSource :=
+    "initialize sameRootRef : IO.Ref (Option (RefinedIsolation refinePoly × RefinedIsolation refinePoly)) ←\n"
+    ++ "  IO.mkRef none\n"
+  let suffixWidthExpected :=
+    "initialize sameRootRef\n"
+    ++ "    : IO.Ref (Option (RefinedIsolation refinePoly × RefinedIsolation refinePoly)) ←\n"
+    ++ "  IO.mkRef none\n"
+  let suffixWidthFormatted ←
+    Formatter.formatSourceWithEnv env suffixWidthSource
+      "initialize-assignment-suffix-width.lean" { lineWidth := 100 }
+  assertEq "initialize assignment suffix counts for signature fit"
+    suffixWidthExpected suffixWidthFormatted
 
   let doSource :=
     "initialize notationClassAttribute : NameMapExtension AutomaticProjectionData ← do\n"
@@ -8096,6 +8230,45 @@ def assertCommentedArrayKeepsDelimitedLayout (env : Lean.Environment) : IO Unit 
   let formatted ← Formatter.formatSourceWithEnv env source "commented-array-layout.lean"
   assertEq "commented arrays keep balanced source delimiters" expected formatted
 
+def assertCommentedStructureItemKeepsFieldBase (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "structure CommentedRecord where\n"
+    ++ "  id : String\n"
+    ++ "  first : Nat\n"
+    ++ "  second : Nat\n"
+    ++ "\n"
+    ++ "def commentedRecords : List CommentedRecord := [\n"
+    ++ "  { id := \"example\",\n"
+    ++ "    first := 0,\n"
+    ++ "    -- Keep this comment with the following field.\n"
+    ++ "    second := 1 }\n"
+    ++ "]\n"
+  let expected :=
+    "structure CommentedRecord where\n"
+    ++ "  id : String\n"
+    ++ "  first : Nat\n"
+    ++ "  second : Nat\n"
+    ++ "\n"
+    ++ "def commentedRecords : List CommentedRecord :=\n"
+    ++ "  [{\n"
+    ++ "    id := \"example\",\n"
+    ++ "    first := 0,\n"
+    ++ "    -- Keep this comment with the following field.\n"
+    ++ "    second := 1\n"
+    ++ "  }]\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "commented-structure-item-field-base.lean"
+  assertTrue "a commented structure item does not fall back" (!result.fellBack)
+  assertEq "a commented structure item keeps the field base" expected result.formatted
+  assertTrue "a commented structure item preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "commented-structure-item-field-base-formatted.lean"
+  assertEq "commented structure item formatting is idempotent"
+    result.formatted formattedAgain
+
 def assertParenthesizedArrayItemsUseBalancedDelimiters (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -9757,6 +9930,42 @@ def assertMatchDiscriminantsFlowAfterCommas (env : Lean.Environment) : IO Unit :
     ++ "    some around => result\n"
   let formatted ← Formatter.formatSourceWithEnv env source "match-discriminants-flow.lean"
   assertEq "match discriminants align under the first discriminant" expected formatted
+  let doMatchSource :=
+    "def collectOffers state index := do\n"
+    ++ "  match state.engine.applications[index]?, state.applications[index]?, state.engine.queued[index]? with\n"
+    ++ "  | some application, some clock, some true => pure (application, clock)\n"
+    ++ "  | _, _, _ => pure default\n"
+  let doMatchExpected :=
+    "def collectOffers state index := do\n"
+    ++ "  match state.engine.applications[index]?, state.applications[index]?,\n"
+    ++ "        state.engine.queued[index]? with\n"
+    ++ "  | some application, some clock, some true => pure (application, clock)\n"
+    ++ "  | _, _, _ => pure default\n"
+  let doMatchFormatted ←
+    Formatter.formatSourceWithEnv env doMatchSource "do-match-discriminants-flow.lean"
+      { lineWidth := 100 }
+  assertEq "do match discriminants use ordinary match flow"
+    doMatchExpected doMatchFormatted
+  assertTrue "do match discriminant formatting preserves code"
+    (← codePreservedIgnoringWhitespace env doMatchSource doMatchFormatted)
+  let doMatchModule ←
+    SyntaxTree.parseModuleStringWithEnv env doMatchFormatted
+      "do-match-discriminants-flow-formatted.lean"
+  let discriminants ←
+    match findTreeNode? .matchDiscriminants doMatchModule.tree with
+    | some tree => pure tree
+    | none => throw <| IO.userError "do match discriminants were not regrouped"
+  let discriminantPlan :=
+    Formatter.LayoutPlan.resolve {}
+      (Formatter.LineBreakRules.Segment.ofTree discriminants)
+  assertTrue "do match exposes every comma boundary"
+    (discriminantPlan.breakPoints.length == 2)
+  assertTrue "do match discriminant formatting avoids overflow"
+    (Formatter.Diagnostics.overflowOccurrences doMatchModule { lineWidth := 100 }).isEmpty
+  let doMatchAgain ←
+    Formatter.formatSourceWithEnv env doMatchFormatted
+      "do-match-discriminants-flow-formatted.lean" { lineWidth := 100 }
+  assertEq "do match discriminant formatting is idempotent" doMatchFormatted doMatchAgain
   let parenthesizedSource :=
     "theorem resolveBoth\n"
     ++ "    : Result\n"
@@ -10828,6 +11037,34 @@ def assertStructInstanceFieldsBreakMandatory (env : Lean.Environment) : IO Unit 
     Formatter.formatSourceWithEnv env source "struct-instance-fields-break.lean"
   assertEq "structure constructor fields break mandatory" expected formatted
 
+def assertAmbiguousSyntaxChoiceRetainsSourceLayout (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "def replayInstance before after basePrefix stepPrefix sameOperations event origin :=\n"
+    ++ "  dispatch\n"
+    ++ "    { before\n"
+    ++ "      after\n"
+    ++ "      basePrefix\n"
+    ++ "      stepPrefix\n"
+    ++ "      sameOperations\n"
+    ++ "      event\n"
+    ++ "      origin }\n"
+  let sourceModule ←
+    SyntaxTree.parseModuleStringWithEnv env source "ambiguous-structure-choice.lean"
+  assertTrue "newline-separated shorthand fields retain Lean's syntax choice"
+    (findTreeNode? (.raw `choice) sourceModule.tree).isSome
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "ambiguous-structure-choice.lean"
+  assertTrue "an ambiguous syntax choice does not fall back" (!result.fellBack)
+  assertEq "an ambiguous syntax choice retains its source layout" source result.formatted
+  assertTrue "an ambiguous syntax choice preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "ambiguous-structure-choice-formatted.lean"
+  assertEq "ambiguous syntax choice formatting is idempotent"
+    result.formatted formattedAgain
+
 def assertStructInstanceFieldsBreakMandatoryBetweenFields (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -11559,7 +11796,7 @@ def assertExportedEnvironmentIncludesMetaIrClosure : IO Unit := do
   let environment ← prefixes.importEnvironment { imports, level := .exported }
   let some leafIndex :=
     environment.getModuleIdx? `LeanFmt.Tests.MetaImportLeaf
-  | throw <| IO.userError "expected meta/IR-only leaf import"
+    | throw <| IO.userError "expected meta/IR-only leaf import"
   assertTrue "meta/IR-only import is available during elaboration"
     (environment.header.modules[leafIndex]!.irPhases == .comptime)
 
@@ -11720,6 +11957,27 @@ def assertWorkersUseInputLakeRoot : IO Unit := do
             (environment.contains ("LEAN_CC", none))
       | .error message =>
           throw <| IO.userError s!"Lake environment parser failed: {message}"
+      let workerEnvironment :=
+        LeanFmt.Driver.setWorkerEnvironmentVariable
+          #[
+            ("LEAN_PATH", some "/project/.lake/build/lib/lean"),
+            ("LEANFMT_LOAD_DYNLIBS", some "/old/library.dylib")
+          ]
+          "LEANFMT_LOAD_DYNLIBS" (some "/target/library.dylib")
+      assertTrue "worker environment carries one updated native-library request"
+        (workerEnvironment
+          == #[
+            ("LEAN_PATH", some "/project/.lake/build/lib/lean"),
+            ("LEANFMT_LOAD_DYNLIBS", some "/target/library.dylib")
+          ])
+      assertEq "runtime paths use the platform list separator"
+        (toString [FilePath.mk "/first/library", FilePath.mk "/second/library"])
+        (toString
+          (LeanFmt.Driver.runtimePaths
+            (if System.Platform.isWindows then
+                "/first/library;/second/library"
+              else
+                "/first/library:/second/library")))
 
 def assertImportFilesGroupByHeader : IO Unit := do
   IO.FS.withTempDir
@@ -11910,6 +12168,27 @@ def assertFormattingExceptionChecks (env : Lean.Environment) : IO Unit := do
     }
   assertTrue "an isolated token at its structural indentation is exempt"
     (Formatter.Diagnostics.overflowOccurrences isolatedIdentifierModule).isEmpty
+  let structurallyIndentedIdentifier := String.ofList (List.replicate 37 'x')
+  let fittingInfixSource :=
+    s!"def shiftedInfix := left ++ {structurallyIndentedIdentifier}\n"
+  let structurallyIndentedInfix :=
+    "def shiftedInfix :=\n"
+    ++ "  left\n"
+    ++ String.ofList (List.replicate 64 ' ')
+    ++ s!"++ {structurallyIndentedIdentifier}\n"
+  let fittingInfixModule ←
+    SyntaxTree.parseModuleStringWithEnv env fittingInfixSource
+      "fitting-structural-infix-overflow.lean"
+  let structurallyIndentedInfixModule ←
+    SyntaxTree.parseModuleStringWithEnv env structurallyIndentedInfix
+      "structural-infix-overflow.lean"
+  assertTrue "an unbreakable token may overflow from its structural line indentation"
+    (!(Formatter.Diagnostics.formattingExceptions
+        fittingInfixModule structurallyIndentedInfixModule).any
+        fun exception =>
+          match exception with
+          | .lineOverflow _ => true
+          | _ => false)
   let atomicCloseOverflow := s!"def overflow := ({longIdentifier})\n"
   let atomicCloseModule ←
     SyntaxTree.parseModuleStringWithEnv env atomicCloseOverflow
@@ -13373,6 +13652,15 @@ def assertLakeDslFormatting : IO Unit := do
     ++ "\n"
     ++ "@[default_target]\n"
     ++ "lean_lib QuantumComputing where\n"
+    ++ "  precompileModules := true\n"
+    ++ "  extraDepTargets := #[`support]\n"
+    ++ "  moreLinkArgs := if System.Platform.isOSX then #[] else #[\"-ldl\"]\n"
+    ++ "\n"
+    ++ "lean_exe quantum where\n"
+    ++ "  root := `QuantumComputing\n"
+    ++ "\n"
+    ++ "extern_lib quantumffi (pkg) := do\n"
+    ++ "  pure (pkg.staticLibDir / nameToStaticLib \"quantumffi\")\n"
   let expected :=
     "import Lake\n"
     ++ "\n"
@@ -13386,6 +13674,15 @@ def assertLakeDslFormatting : IO Unit := do
     ++ "\n"
     ++ "@[default_target]\n"
     ++ "lean_lib QuantumComputing where\n"
+    ++ "  precompileModules := true\n"
+    ++ "  extraDepTargets := #[`support]\n"
+    ++ "  moreLinkArgs := if System.Platform.isOSX then #[] else #[\"-ldl\"]\n"
+    ++ "\n"
+    ++ "lean_exe quantum where\n"
+    ++ "  root := `QuantumComputing\n"
+    ++ "\n"
+    ++ "extern_lib quantumffi (pkg) := do\n"
+    ++ "  pure (pkg.staticLibDir / nameToStaticLib \"quantumffi\")\n"
   let formatted ← Formatter.formatSourceWithEnv env source "lakefile.lean"
   assertEq "Lake DSL commands preserve conventional layout" expected formatted
   let moduleTree ← SyntaxTree.parseModuleStringWithEnv env formatted "lakefile.lean"
@@ -14429,8 +14726,217 @@ def assertCslibStyleCoreSyntaxHasRules (env : Lean.Environment) : IO Unit := do
   assertTrue "CSLib-style core syntax has complete rule coverage"
     (Formatter.Diagnostics.missingRuleOccurrencesForModule moduleTree).isEmpty
 
+def assertBorrowedTermUsesUnaryPrefixRule (env : Lean.Environment) : IO Unit := do
+  let source := "def borrowedValue (value : @& Nat) : Nat := value\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "borrowed-term-prefix.lean"
+  assertTrue "borrowed terms have complete rule coverage"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule moduleTree).isEmpty
+  let formatted ← Formatter.formatSourceWithEnv env source "borrowed-term-prefix.lean"
+  assertEq "borrowed terms use ordinary prefix formatting" source formatted
+
+def assertParserDescribedSpacedTermsBecomeApplications (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "syntax (name := customSpacedTerm) \"custom_spaced\" term:max : term\n"
+    ++ "syntax (name := customOptionalSpacedTerm) \"custom_optional\" "
+    ++ "(\"(\" \"width\" \":=\" term \")\")? term : term\n"
+    ++ "syntax (name := customPunctuationPrefix) \"~~~\" term:max : term\n"
+    ++ "syntax (name := customOpaqueTerm) \"custom_opaque\" term \"=>\" term : term\n"
+    ++ "\n"
+    ++ "def customSpaced := custom_spaced (veryLongFunctionName firstArgument secondArgument)\n"
+    ++ "\n"
+    ++ "def customOptional := custom_optional veryLongOptionalOperandIdentifier\n"
+    ++ "\n"
+    ++ "def customPrefix := ~~~ veryLongPrefixOperandIdentifier\n"
+    ++ "\n"
+    ++ "def customOpaque := custom_opaque firstArgument => secondArgument\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "parser-described-spaced-terms.lean"
+  assertTrue "parser-described spaced terms own application trees"
+    ((findTreeNodeStartingWith? .application "custom_spaced" moduleTree.tree).isSome
+      && (findTreeNodeStartingWith? .application "custom_optional"
+            moduleTree.tree).isSome)
+  assertTrue "punctuation prefixes do not become applications"
+    ((findTreeNodeStartingWith? .application "~~~" moduleTree.tree).isNone)
+  let missing := Formatter.Diagnostics.missingRuleOccurrencesForModule moduleTree
+  assertTrue "opaque parser-described syntax retains its missing-rule diagnostic"
+    ((missing.any
+        fun occurrence =>
+          occurrence.syntaxKind? == some `customPunctuationPrefix)
+      && (missing.any
+            fun occurrence =>
+              occurrence.syntaxKind? == some `customOpaqueTerm))
+  let formatted ←
+    Formatter.formatSourceWithEnv env source "parser-described-spaced-terms.lean"
+      { lineWidth := 60 }
+  assertTextContains "parser-described term arguments use application flow"
+    formatted
+    ("def customSpaced :=\n"
+      ++ "  custom_spaced\n"
+      ++ "    (veryLongFunctionName firstArgument secondArgument)\n")
+  assertTextContains "optional parser pieces do not hide application ownership"
+    formatted
+    ("def customOptional :=\n" ++ "  custom_optional veryLongOptionalOperandIdentifier\n")
+  assertTrue "parser-described application grouping preserves code"
+    (← codePreservedIgnoringWhitespace env source formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env formatted
+      "parser-described-spaced-terms-formatted.lean" { lineWidth := 60 }
+  assertEq "parser-described application grouping is idempotent" formatted formattedAgain
+
+def assertParserDescribedSpacedIdentifierBecomesApplication (_env : Lean.Environment)
+    : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let source := "#project_clause in ExampleProject\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source
+      "parser-described-spaced-identifier.lean"
+  assertTrue "parser-described identifier suffix owns an application tree"
+    ((findTreeNodeStartingWith? .application "in" moduleTree.tree).isSome)
+  assertTrue "parser-described identifier suffix has complete rule coverage"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule moduleTree).isEmpty
+  let formatted ←
+    Formatter.formatSourceWithEnv env source "parser-described-spaced-identifier.lean"
+  assertEq "parser-described identifier suffix keeps its compact shape" source formatted
+
+def assertParserDescribedDelimitedSyntaxUsesStructuralRules (_env : Lean.Environment)
+    : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let source :=
+    "def projectConfig := project_config(first := second)\n"
+    ++ "def projectMatrix := #pm[first, second; third, fourth]\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source
+      "parser-described-delimited-syntax.lean"
+  let config ←
+    match findTreeNode? (.raw `projectDelimitedConfig) moduleTree.tree with
+    | some tree => pure tree
+    | none => throw <| IO.userError "project delimited config tree not found"
+  let matrix ←
+    match findTreeNode? (.raw `projectMatrixLiteral) moduleTree.tree with
+    | some tree => pure tree
+    | none => throw <| IO.userError "project matrix literal tree not found"
+  assertTrue "parenthesized extension syntax uses the structural paren rule"
+    ((Formatter.LineBreakRules.ruleFor config).any fun rule => rule.name == "paren")
+  assertTrue "bracketed extension syntax uses the structural matrix rule"
+    ((Formatter.LineBreakRules.ruleFor matrix).any
+      fun rule => rule.name == "matrixNotation")
+  assertTrue "structurally delimited extension syntax has complete rule coverage"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule moduleTree).isEmpty
+  let formatted ←
+    Formatter.formatSourceWithEnv env source "parser-described-delimited-syntax.lean"
+  assertEq "fitting structurally delimited extension syntax stays compact"
+    source formatted
+
+def assertTightIndexedExtensionUsesStructuralRule (_env : Lean.Environment)
+    : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let source := "def tightIndexedExtension := receiver[index]\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "tight-indexed-extension.lean"
+  let indexed ←
+    match findTreeNode? (.raw `projectTightIndexed) moduleTree.tree with
+    | some tree => pure tree
+    | none => throw <| IO.userError "tight indexed extension tree not found"
+  assertEq "tight indexed extension syntax uses the indexed-term rule"
+    "indexedTerm" (Formatter.LineBreakRules.formattingRuleFor indexed).name
+  assertTrue "tight indexed extension syntax has complete rule coverage"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule moduleTree).isEmpty
+  let formatted ← Formatter.formatSourceWithEnv env source "tight-indexed-extension.lean"
+  assertEq "fitting tight indexed extension syntax stays compact" source formatted
+
+def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
+    : IO Unit := do
+  let fallbackSource :=
+    "def fallbackSuffix := do\n"
+    ++ "  let some (first, second, third, fourth) := shape? |\n"
+    ++ "    -- The fallback comment starts the fallback body.\n"
+    ++ "    failure\n"
+    ++ "  pure first\n"
+  let fallbackExpected :=
+    "def fallbackSuffix := do\n"
+    ++ "  let some (first, second, third, fourth) := shape? |\n"
+    ++ "    -- The fallback comment starts the fallback body.\n"
+    ++ "    failure\n"
+    ++ "  pure first\n"
+  let fallbackResult ←
+    Formatter.formatSourceWithEnvDetailed env fallbackSource
+      "attached-fallback-suffix.lean" { lineWidth := 100 }
+  assertTrue "attached fallback suffix does not fall back" (!fallbackResult.fellBack)
+  assertEq "a fitting fallback bar stays with its declaration"
+    fallbackExpected fallbackResult.formatted
+  assertTrue "attached fallback suffix preserves code"
+    (← codePreservedIgnoringWhitespace env fallbackSource fallbackResult.formatted)
+  let fallbackAgain ←
+    Formatter.formatSourceWithEnv env fallbackResult.formatted
+      "attached-fallback-suffix-formatted.lean" { lineWidth := 100 }
+  assertEq "attached fallback suffix is idempotent" fallbackResult.formatted fallbackAgain
+
+  let conditionalSource :=
+    "def conditionalSuffix :=\n"
+    ++ "  if firstCondition then firstValue else if secondCondition then secondValue else do\n"
+    ++ "    pure thirdValue\n"
+  let conditionalExpected :=
+    "def conditionalSuffix :=\n"
+    ++ "  if firstCondition then\n"
+    ++ "    firstValue\n"
+    ++ "  else if secondCondition then\n"
+    ++ "    secondValue\n"
+    ++ "  else do\n"
+    ++ "    pure thirdValue\n"
+  let conditionalFormatted ←
+    Formatter.formatSourceWithEnv env conditionalSource
+      "attached-else-do-suffix.lean" { lineWidth := 50 }
+  assertEq "an else-if chain keeps its final do suffix attached"
+    conditionalExpected conditionalFormatted
+  assertTrue "an attached else-do suffix preserves code"
+    (← codePreservedIgnoringWhitespace env conditionalSource conditionalFormatted)
+  let conditionalAgain ←
+    Formatter.formatSourceWithEnv env conditionalFormatted
+      "attached-else-do-suffix-formatted.lean" { lineWidth := 50 }
+  assertEq "an attached else-do suffix is idempotent"
+    conditionalFormatted conditionalAgain
+
+def assertOptionalAccessSuffixPropagatesApplicationFit (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "theorem optionalAccessApplicationFit\n"
+    ++ "    (f : FpPoly p) (hmonic : DensePoly.Monic f)\n"
+    ++ "    (i j : Fin (basisSize f)) :\n"
+    ++ "    (berlekampMatrix f hmonic)[i][j] =\n"
+    ++ "      ((berlekampColumnPolys f hmonic (FpPoly.frobeniusXMod f hmonic)\n"
+    ++ "        (basisSize f) 1 #[])[j.val]?.getD 0).coeff i.val := by\n"
+    ++ "  rw [berlekampMatrix, Matrix.getElem_ofFn]\n"
+  let expected :=
+    "theorem optionalAccessApplicationFit\n"
+    ++ "    (f : FpPoly p) (hmonic : DensePoly.Monic f)\n"
+    ++ "    (i j : Fin (basisSize f))\n"
+    ++ "    : (berlekampMatrix f hmonic)[i][j]\n"
+    ++ "      = ((berlekampColumnPolys f hmonic (FpPoly.frobeniusXMod f hmonic)\n"
+    ++ "            (basisSize f) 1 #[])[j.val]?.getD\n"
+    ++ "          0).coeff\n"
+    ++ "          i.val := by\n"
+    ++ "  rw [berlekampMatrix, Matrix.getElem_ofFn]\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "optional-access-application-fit.lean" { lineWidth := 100 }
+  assertTrue "optional-access suffix fitting does not fall back" (!result.fellBack)
+  assertEq "tight optional access participates in application fit" expected
+    result.formatted
+  assertTrue "optional-access application formatting fits its width"
+    (Formatter.linesFit result.formatted 100)
+  assertTrue "optional-access application formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "optional-access-application-fit-formatted.lean" { lineWidth := 100 }
+  assertEq "optional-access application formatting is idempotent"
+    result.formatted formattedAgain
+
 def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertSyntaxTreeRoundTrip env
+  assertNonSourceLexemesPreserveModule env
   assertSourcePositionMapColumns
   assertDuplicateLetBodyParserFactsKeepFirstMatch env
   assertSyntaxTreeWhereRoundTrip env
@@ -14453,12 +14959,17 @@ def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertLowPriorityInfixOwnsBothOperatorBoundaries env
   assertGroupedEqualPrecedenceInfixChain env
   assertDoFallbackRegrouping env
+  assertParserDescribedSpacedTermsBecomeApplications env
+  assertParserDescribedSpacedIdentifierBecomesApplication env
+  assertParserDescribedDelimitedSyntaxUsesStructuralRules env
   assertDefinitionLikeCommandsRegroup
   assertDelimitedCollectionsFlattenOnlySeparatedItems
 
 def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
+  assertBorrowedTermUsesUnaryPrefixRule env
   assertSafeArrayIndexKeepsPostfixQuestion env
   assertGetElemBracketStaysAttachedAcrossWrap env
+  assertOptionalAccessSuffixPropagatesApplicationFit env
   assertPostfixSuperscriptSpacingPreservesParse env
   assertBlockCommentInternalWhitespacePreservedByFormatting env
   assertIndentedCommentTriviaDoesNotPadBlankLines
@@ -14549,6 +15060,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertAbbrevStructureValueKeepsWhereSuffix env
   assertWhereFinallyKeepsHeaderAndProofBody env
   assertProofBodyUntouched env
+  assertTermTakingTacticsAttachOperandHead env
   assertAttachedProofLambdaUsesStructuralLayout env
   assertMovedProofLayoutKeepsFittingContinuation env
   assertMovedProofBodiesKeepRelativeIndentation env
@@ -14686,6 +15198,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertSingletonProofRecordIndentsField env
   assertMultiItemArrayBreaksBalanced env
   assertCommentedArrayKeepsDelimitedLayout env
+  assertCommentedStructureItemKeepsFieldBase env
   assertParenthesizedArrayItemsUseBalancedDelimiters env
   assertListLikeCollectionsBreakBalanced env
   assertOffColumnArrayRoundsOneLevel env
@@ -14709,6 +15222,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertAdjacentQuantifiersFitBeforeSourceBreaks env
 
 def runControlFlowTests (env : Lean.Environment) : IO Unit := do
+  assertFallbackAndConditionalSuffixesStayAttached env
   assertIfThenElseRuleBreaksBalancedShape env
   assertShortIfThenElseStaysFlatInEquationArm env
   assertIfThenElseUsesExistingBreaks env
@@ -14762,6 +15276,7 @@ def runCollectionAndDeclarationTests (env : Lean.Environment) : IO Unit := do
   assertStructureExtendsDoesNotIndentFollowingCommand env
   assertInductiveAlternativesBreakMandatory env
   assertStructInstanceFieldsBreakMandatory env
+  assertAmbiguousSyntaxChoiceRetainsSourceLayout env
   assertStructInstanceFieldsBreakMandatoryBetweenFields env
   assertStructInstanceFieldsBreakBalanced env
   assertTypedStructInstanceBreaksBalanced env
@@ -14824,6 +15339,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertParserStateUpdatesAfterSyntaxCommands env
   assertSyntaxAuthoringDefinitionPreservesCode env
   assertCustomBracedTermSyntaxKeepsNestedSourceLayout env
+  assertTightIndexedExtensionUsesStructuralRule env
   assertPrefixedTermWrappersHaveRules env
   assertIgnoredRegionsPreserveSourceLines env
   assertIgnoredRegionMayContinueToEnd env

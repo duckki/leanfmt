@@ -1244,6 +1244,18 @@ the proof body exposes the existing elimination layout. Nested alternative
 bodies therefore receive the same two-level indentation as a direct
 elimination tactic.
 
+A term-taking tactic retains its tactic prefix while the final term keeps its
+own structural layout. For an ordinary application, this keeps the tactic and
+function head together and lets the application indent continuation arguments:
+
+```lean
+apply veryLongProofFunction
+  firstArgument secondArgument
+```
+
+The same parser-context rule covers `exact`, `refine`, and extension tactics;
+structural proof operands remain governed by the existing proof-island rules.
+
 ## Conditionals
 
 A fitting conditional stays on one line. A multiline conditional breaks as a

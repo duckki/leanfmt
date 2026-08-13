@@ -496,12 +496,13 @@ def suffixClosingDelimiterLexeme (lexeme : String) : Bool :=
 def suffixDelimiterLexeme (lexeme : String) : Bool :=
   suffixOpeningDelimiterLexeme lexeme
   || suffixClosingDelimiterLexeme lexeme
-  || lexemeIn lexeme [",", ";"]
+  || lexemeIn lexeme [",", ";", "?"]
 
 def suffixOperatorLexeme (lexeme : String) : Bool :=
   lexemeIn lexeme
     [
       ":=",
+      "←",
       "=>",
       ":",
       "|",
@@ -806,7 +807,8 @@ def exportIdentifierList (context : RuleContext) : Bool :=
 def openIdentifierList (context : RuleContext) : Bool :=
   match context.ancestors with
   | parent :: _ =>
-      parent.rawKind? == some `Lean.Parser.Command.openSimple && parent.childIndex == 0
+      (parent.rawKind? == some `Lean.Parser.Command.openSimple && parent.childIndex == 0)
+      || (parent.rawKind? == some `Lean.Parser.Command.openOnly && parent.childIndex == 2)
   | _ => false
 
 def commandAttributeIdentifierList (context : RuleContext) : Bool :=
@@ -1206,7 +1208,10 @@ def hasMissingCommaBetweenFields (segment : Segment) : List Nat → Bool
 
 def structInstFieldBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   if parentIsRawKind context `Lean.Parser.Term.structInstFields then
-    match structInstFieldIndexes segment with
+    let fieldIndexes := structInstFieldIndexes segment
+    let fieldIndexes :=
+      if fieldIndexes.isEmpty then nonemptyChildIndexes segment else fieldIndexes
+    match fieldIndexes with
     | [] => []
     | [_] => []
     | _ :: rest =>
@@ -1233,8 +1238,7 @@ def delimitedItemIndexes (segment : Segment) : List Nat :=
       rest.dropLast.filter
         fun index =>
           !childStartsWithLexeme segment index ","
-          && !(segment.rawKind? == some `Matrix.matrixNotation
-                && childStartsWithLexeme segment index ";")
+          && !childStartsWithLexeme segment index ";"
 
 def delimitedItemCount (segment : Segment) : Nat :=
   (delimitedItemIndexes segment).length
@@ -1294,8 +1298,14 @@ def matrixNotationRule : LineBreakRule :=
   }
 
 def structInstFieldsMandatory (context : RuleContext) (segment : Segment) : Bool :=
-  parentIsRawKind context `Lean.Parser.Term.structInstFields
-  && hasMissingCommaBetweenFields segment (structInstFieldIndexes segment)
+  if parentIsRawKind context `Lean.Parser.Term.structInstFields then
+    let fieldIndexes := structInstFieldIndexes segment
+    if fieldIndexes.isEmpty then
+      1 < (nonemptyChildIndexes segment).length
+    else
+      hasMissingCommaBetweenFields segment fieldIndexes
+  else
+    false
 
 def structInstBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   if 0 < structInstFieldCount segment || structInstHasWith segment then
@@ -2046,7 +2056,7 @@ def doFallbackBodyRequiresBreak (segment : Segment) : Bool :=
 def doFallbackBreaks (segment : Segment) : List BreakPoint :=
   match doFallbackClauseIndex? segment with
   | some clauseIndex =>
-      let clauseBreak := [boundaryBreak? segment clauseIndex 0].filterMap id
+      let clauseBreak := [boundaryBreak? segment clauseIndex 1].filterMap id
       let continuationBreaks :=
         segment.indexes.filterMap
           fun index =>
@@ -2099,6 +2109,32 @@ def doFallbackClauseBreaks (_context : RuleContext) (segment : Segment)
 def doFallbackContinuationBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
   [leadingBreak? segment segment.start 0].filterMap id
+
+partial def treeIsSingleContentPath : SyntaxTree.Tree -> Bool
+  | .missing => false
+  | .leaf _ => true
+  | .node _ children =>
+      match (children.filter treeHasContent).toList with
+      | [child] => treeIsSingleContentPath child
+      | _ => false
+
+def fallbackClauseSharesSourceLineWithPrefix (segment : Segment) (index : Nat) : Bool :=
+  if !childIsNodeKind segment index .doFallbackClause then
+    false
+  else
+    match previousContentIndex? segment index,
+          segment.child? index >>= SyntaxTree.Tree.firstToken? with
+    | some previousIndex, some first =>
+        match segment.child? previousIndex with
+        | some previousTree =>
+            match previousTree.lastToken? with
+            | some previous =>
+                treeIsSingleContentPath previousTree
+                && !SpaceRules.hasLineStructure
+                      (previous.trailing.text ++ first.leading.text)
+            | none => false
+        | none => false
+    | _, _ => false
 
 /-! ### Binding and `do` rule values -/
 
@@ -2178,6 +2214,8 @@ def byTacticRule : LineBreakRule :=
 def doLetElseRule : LineBreakRule :=
   {
     name := "doLetElse"
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index => fallbackClauseSharesSourceLineWithPrefix segment index
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
     breakPoints := doLetElseBreaks
@@ -2186,6 +2224,8 @@ def doLetElseRule : LineBreakRule :=
 def doLetExprRule : LineBreakRule :=
   {
     name := "doLetExpr"
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index => fallbackClauseSharesSourceLineWithPrefix segment index
     mandatory := fun _ _ => true
     inheritBase := fun _ _ => true
     breakPoints := doLetExprBreaks
@@ -2196,7 +2236,6 @@ def doFallbackClauseRule : LineBreakRule :=
     name := "doFallbackClause"
     formatOriginalChildLeadingBoundary :=
       fun _ segment index => segment.start < index
-    keepPrefixWithChildFirstLine := fun _ segment index => segment.start < index
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
     breakPoints := doFallbackClauseBreaks
@@ -2219,6 +2258,8 @@ def doSeqIndentRule : LineBreakRule :=
 def doIdDeclRule : LineBreakRule :=
   {
     name := "doIdDecl"
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index => fallbackClauseSharesSourceLineWithPrefix segment index
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
     breakPoints := doIdDeclBreaks
@@ -2227,6 +2268,8 @@ def doIdDeclRule : LineBreakRule :=
 def doPatternDeclRule : LineBreakRule :=
   {
     name := "doPatternDecl"
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index => fallbackClauseSharesSourceLineWithPrefix segment index
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
     breakPoints := doPatternDeclBreaks
@@ -2299,7 +2342,8 @@ def decreasingByBreaks (_context : RuleContext) (segment : Segment) : List Break
   [boundaryBreak? segment 1 1].filterMap id
 
 def setOptionBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
-  match breakAfterLexeme? segment "in" 0 with
+  let bodyIndent := if segment.rawKind? == some `Lean.Parser.Term.set_option then 1 else 0
+  match breakAfterLexeme? segment "in" bodyIndent with
   | some breakPoint => [breakPoint]
   | none => []
 
@@ -2642,6 +2686,34 @@ def isGeneratedIndexedPrefixTerm
               (nonemptyChildIndexes segment).any fun index => closingIndex < index
           | none => false
     | none => false
+
+def isTightIndexedTerm (children : Array SyntaxTree.Tree) : Bool :=
+  let segment := Segment.ofTree (.node (.raw `null) children)
+  let indexes := nonemptyChildIndexes segment
+  match indexes.find? fun index => childIsAtomLexeme segment index "[" with
+  | some openingIndex =>
+      match previousContentIndex? segment openingIndex,
+            segment.child? openingIndex >>= SyntaxTree.Tree.firstToken? with
+      | some receiverIndex, some opening =>
+          match segment.child? receiverIndex >>= SyntaxTree.Tree.lastToken? with
+          | some receiver =>
+              let sourceAdjacent :=
+                receiver.span.start < receiver.span.stop
+                && opening.span.start < opening.span.stop
+                && receiver.span.stop == opening.span.start
+              let closingIndex? :=
+                indexes.find?
+                  fun index =>
+                    openingIndex < index && childIsAtomLexeme segment index "]"
+              sourceAdjacent
+              && closingIndex?.any
+                  fun closingIndex =>
+                    indexes.getLast? == some closingIndex
+                    && indexes.any
+                        fun index => openingIndex < index && index < closingIndex
+          | none => false
+      | _, _ => false
+  | none => false
 
 def isGeneratedSetBuilderTerm
     (kind : Lean.SyntaxNodeKind) (children : Array SyntaxTree.Tree)
@@ -3839,6 +3911,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Command.openOnly) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.variable) _ => some variableCommandRule
   | .node (.raw `Lean.Parser.Command.set_option) _ => some setOptionRule
+  | .node (.raw `Lean.Parser.Term.set_option) _ => some setOptionRule
   | .node (.raw `Lean.Parser.Command.declModifiers) _ =>
       some declarationModifierRule
   | .node (.raw `Lean.Parser.Command.declId) _ => some declarationIdentifierRule
@@ -3934,6 +4007,8 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.unifConstraintElem) _ => some defaultRule
   | .node (.raw `Lake.DSL.packageCommand) _ => some lakeCommandRule
   | .node (.raw `Lake.DSL.leanLibCommand) _ => some lakeCommandRule
+  | .node (.raw `Lake.DSL.leanExeCommand) _ => some lakeCommandRule
+  | .node (.raw `Lake.DSL.externLibCommand) _ => some lakeCommandRule
   | .node (.raw `Lake.DSL.requireDecl) _ => some lakeRequireRule
   | .node (.raw `Lake.DSL.identOrStr) _ => some lakeDslWrapperRule
   | .node (.raw `Lake.DSL.optConfig) _ => some lakeDslWrapperRule
@@ -4142,6 +4217,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.quot) _ => some defaultRule
   | .node (.raw `Lean.Parser.Tactic.quot) _ => some defaultRule
   | .node (.raw `term!_) _ => some unaryPrefixRule
+  | .node (.raw `Lean.Parser.Term.borrowed) _ => some unaryPrefixRule
   | .node (.raw `«term¬_») _ => some unaryPrefixRule
   | .node (.raw `token.«← ») _ => some defaultRule
   | .node (.raw `Lean.Parser.Attr.simp) _ => some defaultRule
@@ -4481,7 +4557,21 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw kind) children =>
       if hasAtMostOneContentChild children then
         some transparentRule
-      else if isGeneratedIndexedPrefixTerm kind children then
+      else if !SyntaxTree.isGeneratedTermKind kind
+              && (SyntaxTree.outerDelimiterKind? children).isSome then
+        match SyntaxTree.outerDelimiterKind? children with
+        | some .paren => some parenRule
+        | some .bracket =>
+            if treeContainsLexeme ";" (.node (.raw kind) children) then
+              some matrixNotationRule
+            else
+              some arrayRule
+        | some .brace => some bracedTermRule
+        | some .anonymousConstructor => some anonymousCtorRule
+        | some .doubleAngle | some .norm => some transparentRule
+        | none => some transparentRule
+      else if isTightIndexedTerm children
+              || isGeneratedIndexedPrefixTerm kind children then
         some indexedTermRule
       else if isGeneratedSetBuilderTerm kind children then
         some setBuilderRule

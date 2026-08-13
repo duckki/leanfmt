@@ -1349,6 +1349,16 @@ def treeContainsCommentForcedBreak (source : String) (tree : SyntaxTree.Tree) : 
         boundary.commentForcesBreak || loop (some token) rest
   loop none <| tree.tokens.toList.filter (SyntaxTree.tokenComesFromSource source)
 
+def treeContainsLineCommentForcedBreak (source : String) (tree : SyntaxTree.Tree)
+    : Bool :=
+  let rec loop : Option SyntaxTree.Token → List SyntaxTree.Token → Bool
+    | _, [] => false
+    | none, token :: rest => loop (some token) rest
+    | some previous, token :: rest =>
+        let boundary := SourceBoundary.betweenTokens source previous token
+        (boundary.commentForcesBreak && boundary.hasLineComment) || loop (some token) rest
+  loop none <| tree.tokens.toList.filter (SyntaxTree.tokenComesFromSource source)
+
 def commentTriviaBeforeTree? (state : RenderState) (tree : SyntaxTree.Tree)
     : Option String := do
   let left ← state.lastToken?
@@ -1458,7 +1468,8 @@ partial def segmentAllowsLayoutWithoutRuleBreaks
           || !treeSourceHasLineStructure source segment.parent
       | none =>
           let plan := LayoutPlan.resolve context segment
-          if plan.isMandatory
+          if (!plan.isFlow && treeContainsLineCommentForcedBreak source segment.parent)
+              || plan.isMandatory
               || (plan.breakPoints.any (·.indentLevels == 0)
                   && segmentContainsMultilineOriginalEmission source segment) then
             false
@@ -1974,7 +1985,8 @@ mutual
       : RenderState :=
     let renderFlatOrRuleLayout (_ : Unit) :=
       let probe := measureLayout state segment false
-      if probe.acceptedForRule plan.isFlow plan.breakPoints then
+      if probe.acceptedForRule plan.isFlow plan.breakPoints
+          && !treeContainsLineCommentForcedBreak state.source segment.parent then
         state.commitLayoutProbe probe
       else
         renderRuleLayout state segment plan

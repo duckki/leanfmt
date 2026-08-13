@@ -117,6 +117,7 @@ def diagnosticsForModule (moduleTree : SyntaxTree.Module) : List Diagnostic :=
 
 def missingRuleReportSkipsTree : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Term.byTactic') _ => true
+  | .node (.raw `choice) _ => false
   | tree => OriginalTree.shouldEmit tree
 
 def missingRuleReportIgnoresTermNotationKindName (kindName : String) : Bool :=
@@ -180,8 +181,11 @@ def missingRuleOccurrences
 
 def missingRuleOccurrencesForModule (moduleTree : SyntaxTree.Module)
     : List MissingRuleOccurrence :=
-  missingRuleOccurrencesWith
-    (SyntaxTree.SourcePositionMap.ofString moduleTree.source) none moduleTree.tree
+  if moduleTree.containsNonSourceLexemes then
+    []
+  else
+    missingRuleOccurrencesWith
+      (SyntaxTree.SourcePositionMap.ofString moduleTree.source) none moduleTree.tree
 
 def treeSpan? (tree : SyntaxTree.Tree) : Option SyntaxTree.Span := do
   let first ← tree.firstToken?
@@ -618,16 +622,23 @@ def overflowContainedInUnbreakableLineHead
   let contentStart :=
     positionAfter lineStart
       (occurrence.text.takeWhile SpaceRules.isHorizontalWhitespace).toString
+  let contentIndentation :=
+    (occurrence.text.takeWhile SpaceRules.isHorizontalWhitespace).toString.length
   let overflowStart := positionAfter lineStart (occurrence.text.take lineWidth).toString
   let contentStop := positionAfter lineStart occurrence.text.trimAsciiEnd.toString
   match formattedTokens.filter (tokenIntersects overflowStart contentStop) with
   | [token] =>
       contentStop <= token.span.stop
-      && (let leading :=
-            SyntaxTree.sourceText formattedMap.source contentStart token.span.start
-          leading.toList.all
-            fun char =>
-              char == '(' || char == '[' || char == '{' || char == '⟨' || char == '⟪')
+      && (contentIndentation + token.lexeme.length > lineWidth
+          || (let leading :=
+                SyntaxTree.sourceText formattedMap.source contentStart token.span.start
+              leading.toList.all
+                fun char =>
+                  char == '('
+                  || char == '['
+                  || char == '{'
+                  || char == '⟨'
+                  || char == '⟪'))
   | _ => false
 
 def sourceCommentLineTexts (moduleTree : SyntaxTree.Module) : List String :=

@@ -1,7 +1,14 @@
 import Lean
 
 syntax (name := projectSyntax) "project_syntax" : term
+declare_syntax_cat projectClause
+syntax (name := projectInClause) " in " ident : projectClause
+syntax "#project_clause" projectClause : command
+syntax (name := projectDelimitedConfig) "project_config(" ident " := " ident ")" : term
+syntax (name := projectMatrixLiteral) "#pm[" term "," term ";" term "," term "]" : term
+syntax:max (name := projectTightIndexed) (priority := high) term noWs "[" term "]" : term
 syntax (name := contextClassifiedTactic) "context_classified_tactic " ident ident : tactic
+syntax (name := contextTermTactic) "context_term_tactic " term : tactic
 syntax (name := projectPrefixedDeclaration) "project_haveI' " letDecl : doElem
 elab (name := projectNoteCommand) "#project_note " (docComment)? : command =>
   pure ()

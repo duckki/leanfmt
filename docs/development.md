@@ -122,6 +122,29 @@ may update the root project to leanfmt's current version. With
 it. This is required for reliable loading of the project's compiled parser
 extensions and imported environment.
 
+An executable built by one Lean minor version cannot load another minor
+version's `.olean` files. To validate an older project without adding leanfmt as
+a dependency, build the current leanfmt source in a disposable checkout using
+the target toolchain, then run that executable from the target project's
+`lake env`:
+
+```sh
+compat=/tmp/leanfmt-v4.32
+mkdir -p "$compat"
+git archive HEAD | tar -x -C "$compat"
+printf 'leanprover/lean4:v4.32.0\n' > "$compat/lean-toolchain"
+(cd "$compat" && lake build fmt)
+(cd /path/to/target && lake env "$compat/.lake/build/bin/fmt" \
+  --check-exception --check-idempotent path/to/File.lean)
+```
+
+The target's `lake env` supplies its import paths and parser extensions, while
+the disposable build supplies a binary with the matching Lean ABI. Do not
+rebuild the main leanfmt checkout's `.lake` directory under the older toolchain;
+that would replace its current-toolchain artifacts. The external validator
+should eventually automate and cache this build by target toolchain and leanfmt
+source revision.
+
 Add a maintenance branch for an older Lean version only if its implementation
 must diverge from `main`. Ordinary compatibility fixes belong on `main` and must
 continue to pass the full toolchain matrix.
@@ -184,6 +207,12 @@ The `Lean formatter` line classifies the kind as `registered formatter`, `parser
 description`, or `no formatter metadata`. The final exception summary counts all three
 groups separately. This classification is evidence for rule development only; it neither
 delegates rendering to Lean's pretty printer nor makes a missing leanfmt rule pass.
+
+For release review, unresolved missing rules are blockers only in Lean's standard
+library and Mathlib, which are first-class syntax-support targets. In other external
+repositories, record missing-rule diagnostics as syntax inventory, but do not treat
+them as failures unless review also finds a concrete preservation, layout,
+convergence, overflow, or post-format build problem.
 
 ## Tests
 

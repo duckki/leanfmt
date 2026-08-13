@@ -28,7 +28,10 @@ end Debug
 /-! ## Public formatting API -/
 
 def formatModule (moduleTree : SyntaxTree.Module) (options : Options := {}) : String :=
-  renderModuleTree moduleTree options
+  if moduleTree.containsNonSourceLexemes then
+    moduleTree.source
+  else
+    renderModuleTree moduleTree options
 
 def formatModuleWithEnv (_env : Environment) (moduleTree : SyntaxTree.Module)
     (options : Options := {})
@@ -124,8 +127,11 @@ def buildModule
     (source : String) (rawSyntax : Syntax)
     (letBodyParserFacts : Array SyntaxTree.LetBodyParserFact := #[])
     (infixPrecedences : SyntaxTree.InfixPrecedenceMap := {})
+    (spacedApplicationKinds : SyntaxTree.SpacedApplicationKindSet := {})
     : SyntaxTree.Module :=
-  let tree := SyntaxTree.extractTree source rawSyntax letBodyParserFacts infixPrecedences
+  let tree :=
+    SyntaxTree.extractTree source rawSyntax letBodyParserFacts infixPrecedences
+      spacedApplicationKinds
   { source, rawSyntax, tree, tokens := tree.tokens }
 
 def parseModuleWithEnv (env : Environment) (source fileName : String)
@@ -135,6 +141,7 @@ def parseModuleWithEnv (env : Environment) (source fileName : String)
       (updateParserState := true)
   pure
   <| buildModule source parsed.rawSyntax parsed.letBodyParserFacts parsed.infixPrecedences
+      parsed.spacedApplicationKinds
 
 def formatPassWithEnv
     (env : Environment) (source fileName : String) (options : Options := {})
@@ -279,6 +286,7 @@ def formatSourceProfiledWithEnv
       let moduleTree :=
         Internal.buildModule normalizedSource parsedSyntax.rawSyntax
           parsedSyntax.letBodyParserFacts parsedSyntax.infixPrecedences
+          parsedSyntax.spacedApplicationKinds
       let tokenCount := moduleTree.tokens.size
       IO.eprintln s!"leanfmt profile: {fileName}: tokens: {tokenCount}"
       pure moduleTree

@@ -495,6 +495,10 @@ private def isAttributeModifierBlock (tree : SyntaxTree.Tree) : Bool :=
   | .node (.raw `Lean.Parser.Term.attributes) _ => true
   | _ => false
 
+private def isLayoutSensitiveSyntaxChoice : SyntaxTree.Tree → Bool
+  | tree@(.node (.raw `choice) _) => treeHasInternalLineBreakTrivia tree
+  | _ => false
+
 private def ignoreNextMarker : String :=
   "-- leanfmt: off next"
 
@@ -511,6 +515,7 @@ inductive LayoutIslandKind where
   | proof
   | proofLayout
   | attributes
+  | syntaxChoice
   | calc
   | commentSensitiveMatch
   | quotationLayout
@@ -541,6 +546,8 @@ def classify? (tree : SyntaxTree.Tree) : Option LayoutIslandKind :=
     some .proofLayout
   else if isAttributeModifierBlock tree then
     some .attributes
+  else if isLayoutSensitiveSyntaxChoice tree then
+    some .syntaxChoice
   else if isCalcTree tree && !isStructuredCalcTree tree then
     some .calc
   else if isCommentSensitiveMatchExpr tree then
@@ -648,6 +655,8 @@ def policyFor : LayoutIslandKind → IslandPolicy
         relativeLayout := .retain
         pendingIndent := .useWhenAvailable
       }
+  | .syntaxChoice =>
+      { multiline := .preserveWithoutRuleBreaks }
   | .calc =>
       {
         content := .calc

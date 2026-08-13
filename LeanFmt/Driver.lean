@@ -24,6 +24,8 @@ def runOptionsWithLoader (loader : EnvironmentLoader) (options : Options)
     summarizeOutcomes options (← files.mapM (formatFile loader options))
 
 def runOptions (options : Options) : IO UInt32 := do
+  loadRequestedNativeLibraries
+  loadRequestedPlugins
   let loader ← loadEnvironmentLoader options
   runOptionsWithLoader loader options
 
