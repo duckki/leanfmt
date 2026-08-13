@@ -10894,7 +10894,7 @@ def assertQuantifierBinderSequenceBreaksBetweenBinders (env : Lean.Environment)
   let existentialExpected :=
     "theorem quantifierBinderOverflow\n"
     ++ "    : ∃ (ι : Type u) (_ : Fintype ι) (_ : DecidableEq ι) (p : ι → R) (_ : ∀ i, Irreducible <| p i)\n"
-    ++ "            (e : ι → ℕ),\n"
+    ++ "        (e : ι → ℕ),\n"
     ++ "        DirectSum.IsInternal fun i => torsionBy R M <| p i ^ e i := by\n"
     ++ "  exact proof\n"
   let existentialFormatted ←
@@ -10918,10 +10918,10 @@ def assertQuantifierBinderSequenceBreaksBetweenBinders (env : Lean.Environment)
   let nestedExpected :=
     "def nestedBinderPunctuation\n"
     ++ "    : ∃ (first : Nat)\n"
-    ++ "            (secondNamedBinderWithEnoughCharactersForBreaking\n"
-    ++ "              : ∀ (a b c d : Nat),\n"
-    ++ "                  firstFunctionWithEnoughCharacters a b\n"
-    ++ "                  = secondFunctionWithEnoughCharacters c d),\n"
+    ++ "        (secondNamedBinderWithEnoughCharactersForBreaking\n"
+    ++ "          : ∀ (a b c d : Nat),\n"
+    ++ "              firstFunctionWithEnoughCharacters a b\n"
+    ++ "              = secondFunctionWithEnoughCharacters c d),\n"
     ++ "        True := by\n"
     ++ "  exact proof\n"
   let nestedResult ←
@@ -10929,7 +10929,7 @@ def assertQuantifierBinderSequenceBreaksBetweenBinders (env : Lean.Environment)
       "nested-quantifier-binder-punctuation.lean" { lineWidth := 70 }
   assertTrue "nested quantifier binder punctuation does not fall back"
     (!nestedResult.fellBack)
-  assertEq "nested quantifier binder punctuation uses the binder base"
+  assertEq "nested quantifier binders share the quantifier base"
     nestedExpected nestedResult.formatted
   assertTrue "nested quantifier binder punctuation preserves code"
     (← codePreservedIgnoringWhitespace env nestedSource nestedResult.formatted)

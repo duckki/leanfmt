@@ -1121,6 +1121,9 @@ def mixedQuantifierPredicate : Prop :=
 Long binder sequences can flow between binders and between names belonging to
 one untyped binder sequence.
 
+Parenthesized binders that continue on another line align with the first binder;
+their internal type annotation and body then use their own structural indentation.
+
 ```lean
 ∃ leftPrefixFields leftPrefixErrors rightPrefixFields rightPrefixErrors
     leftSuffixFields leftSuffixErrors rightSuffixFields rightSuffixErrors,

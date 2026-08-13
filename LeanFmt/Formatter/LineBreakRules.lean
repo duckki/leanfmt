@@ -847,7 +847,6 @@ def nullInheritBase (context : RuleContext) (segment : Segment) : Bool :=
         fun (_, child) =>
           treeIsRawKind child `Lean.Elab.ConfigEval.configEntries)
   || parentIsBinderDefaultWrapper context
-  || quantifierBinderSequence context
   || parentIsRawKind context `Lean.Parser.Command.extends
   || parentIsRawKind context `Lean.Parser.Term.structInstFields
   || parentIsRawKind context `Lean.Parser.Term.letRecDecls
@@ -1515,7 +1514,7 @@ def quantifierBinderBreaks (context : RuleContext) (segment : Segment)
     match nonemptyChildIndexes segment with
     | [] => []
     | [_] => []
-    | _ :: rest => rest.filterMap fun index => boundaryBreak? segment index 2
+    | _ :: rest => rest.filterMap fun index => boundaryBreak? segment index 0
   else
     []
 
