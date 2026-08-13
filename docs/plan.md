@@ -29,8 +29,10 @@ preservation, formatting, convergence, overflow, or build problem.
   operator, producing forms such as `&&  if`, `&&  let`, `++  if`, and `<|  if`.
 - Nested infix and `<|` chains can accumulate indentation instead of sharing
   their expression base.
-- Both adjacent breakpoints in a low-priority application can fire and leave
-  `<|` alone on a line, with neither operand attached.
+- A low-priority application can still leave `<|` alone before an ordinary
+  application whose own first-line boundary is not represented as a movable
+  original-child boundary. Comment-led and nonfitting protected operands retain
+  the post-operator boundary intentionally.
 - Declaration parameters and typeclass arguments can inherit the declaration
   name's ending column instead of the declaration's structural continuation
   base.
@@ -67,25 +69,27 @@ the comparator's generated benchmark commands, so style closure is not
 complete. Checking and rewriting the 886 native files took about 10 minutes 12
 seconds; their complete post-format build took 13 minutes 39 seconds.
 
-Current exact Mathlib evidence is complete: all 84 formatter batches covering
-8,311 tracked files under `Mathlib` pass preservation, overflow, missing-rule,
-fallback, and idempotency checks at width 100, and the complete post-format
-build passes all 8,705 targets. Review still finds the fallback,
-low-priority-infix, proof-body, declaration-base, binder-base, and
-comment-owner issues listed above, so this result is a diagnostic checkpoint
-rather than formatting closure.
+Current exact Mathlib formatter evidence is complete: all 84 formatter
+batches covering 8,311 tracked files under `Mathlib` pass preservation,
+overflow, missing-rule, fallback, and idempotency checks at width 100. The
+complete post-format build covers all 8,705 targets. Review still finds the
+fallback, low-priority-infix, declaration-base, binder-base, and comment-owner
+issues listed above, so this result is a diagnostic checkpoint rather than
+formatting closure.
 
 The latest complete Mathlib diff review makes the remaining groups concrete:
-eight refutable-`let` fallbacks leave `|` alone and sixteen low-priority
-applications leave `<|` alone. Thirteen declaration or typeclass continuations
+eight refutable-`let` fallbacks leave `|` alone. Thirty-five physical lines
+contain a standalone `<|`, down from 51 in the preceding checkpoint after 16
+movable operator-operand boundaries were coordinated. Review classifies most of
+the remainder as comment-led or nonfitting protected operands with intentional
+source boundaries; ordinary application and comment-owner cases remain
+follow-up consistency work. Thirteen declaration or typeclass continuations
 inherit declaration-name columns, two `finprod` bodies inherit a binder-comma
 column, and isolated lambda and constructor-after-comment cases retain a
-nonstructural base. The same shapes appear in the preceding exact-corpus
-checkpoint, so they are known consistency bugs rather than regressions from the
-tactic-application change. Checkpoint 6 separately validates every previously
-detached calc placeholder row plus the affected proof-introducer, nested-binder,
-and quotation files; all focused diagnostics and builds pass. Fresh GraphQL and
-quantum formatting is unchanged by the current formatter.
+nonstructural base. Checkpoint 6 separately validates every previously detached
+calc placeholder row plus the affected proof-introducer, nested-binder, and
+quotation files; all focused diagnostics and builds pass. GraphQL and quantum
+formatting remains unchanged by the checkpoint formatter.
 
 Quantum validates with the same current leanfmt source under Lean `v4.32.0`.
 The external validator now detects the target toolchain, refreshes an incremental
@@ -243,6 +247,28 @@ Status: complete.
 Acceptance: focused preservation and idempotency tests establish constructor
 base ownership, the complete local gate passes, and fresh GraphQL, quantum, and
 exact Mathlib validation has no release-blocking formatting finding.
+
+## Checkpoint 8: low-priority boundary coordination
+
+Status: complete.
+
+- Let a non-suffix low-priority operator-operand group format its original
+  child's leading boundary, using the existing boundary policy rather than a
+  token-specific renderer condition or a new rule API.
+- Keep `by`, `do`, `calc`, and other established suffix operands on the existing
+  suffix path so protected proof indentation remains source-relative.
+- Reuse the existing structural fallback for protected delimited operands when
+  attaching their first line to the operator. Do not generalize that fallback
+  to proof applications or other original-layout islands.
+- Validate that coordinated parent and child plans no longer fire both adjacent
+  boundaries while preservation, idempotency, and internal island indentation
+  remain unchanged.
+
+Acceptance: focused tests cover a chained low-priority application ending in a
+protected structure and the existing suffix controls; the complete local gate
+passes; GraphQL and quantum remain clean; exact Mathlib validation at width 100
+reduces the standalone-operator issue without introducing an exception, build
+failure, logical indentation regression, or material performance regression.
 
 ## Validation standard
 

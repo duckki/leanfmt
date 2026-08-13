@@ -95,7 +95,12 @@ leanfmt generally breaks before operators for this reason. Bodies after `:=`,
 The low-priority application operator `<|` is the one exception: its grouped
 right operand also exposes a boundary after the operator for protected source
 layout that cannot safely move onto the operator line. Other infix operators
-expose only their leading boundary.
+expose only their leading boundary. When a non-suffix operand can move, its
+leading boundary belongs to the complete `<| operand` group so both adjacent
+boundaries do not break and leave the operator alone. Established suffixes such
+as `by`, `do`, and `calc` keep using suffix attachment. A comment-led or
+nonfitting protected operand may retain its source break after `<|` because its
+first line cannot safely move onto the operator line.
 
 ### Preserve intentional source breaks selectively
 

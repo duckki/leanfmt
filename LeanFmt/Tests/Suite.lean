@@ -4372,20 +4372,16 @@ def assertNestedProofLayoutFollowsPendingIndent (env : Lean.Environment) : IO Un
     "def nestedAttachedProofField\n"
     ++ "    (selectedValue : Nat) :=\n"
     ++ "  VeryLongConstructorNameForProofFieldTesting\n"
-    ++ "  <|\n"
-    ++ "    {\n"
-    ++ "      object :=\n"
-    ++ "        anotherVeryLongConstructorNameForProofFieldTesting\n"
-    ++ "          {\n"
-    ++ "            nestedValue := selectedValue\n"
-    ++ "            anotherNestedValue :=\n"
-    ++ "              selectedValue\n"
-    ++ "          }\n"
-    ++ "      proof selectedValue := by\n"
-    ++ "        cases selectedValue with\n"
-    ++ "        | zero => exact True.intro\n"
-    ++ "        | succ n => exact True.intro\n"
-    ++ "    }\n"
+    ++ "  <| {\n"
+    ++ "    object :=\n"
+    ++ "      anotherVeryLongConstructorNameForProofFieldTesting\n"
+    ++ "        { nestedValue := selectedValue\n"
+    ++ "          anotherNestedValue := selectedValue }\n"
+    ++ "    proof selectedValue := by\n"
+    ++ "      cases selectedValue with\n"
+    ++ "      | zero => exact True.intro\n"
+    ++ "      | succ n => exact True.intro\n"
+    ++ "  }\n"
   let attachedFieldResult ←
     Formatter.formatSourceWithEnvDetailed env attachedFieldSource
       "nested-attached-proof-field.lean" { lineWidth := 40 }
@@ -6074,6 +6070,88 @@ def assertLowPriorityPipeAlignsBindingOperands (env : Lean.Environment) : IO Uni
     Formatter.formatSourceWithEnv env result.formatted
       "low-priority-pipe-bindings-formatted.lean" { lineWidth := 70 }
   assertEq "low-priority pipe bindings are idempotent" result.formatted formattedAgain
+
+def assertLowPriorityPipeKeepsStructurallyRenderedOperand (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "def pipeProtectedStructure :=\n"
+    ++ "  firstFunction firstArgument <|\n"
+    ++ "    secondFunction secondArgument <|\n"
+    ++ "      thirdFunction <|\n"
+    ++ "        { toFun := coconeFun F j\n"
+    ++ "          map_one' := by\n"
+    ++ "            apply Quot.sound\n"
+    ++ "            apply Relation.one\n"
+    ++ "          map_mul' := by intros; apply Quot.sound; apply Relation.mul\n"
+    ++ "          map_zero' := by apply Quot.sound; apply Relation.zero\n"
+    ++ "          map_add' := by intros; apply Quot.sound; apply Relation.add }\n"
+  let expected :=
+    "def pipeProtectedStructure :=\n"
+    ++ "  firstFunction firstArgument\n"
+    ++ "  <| secondFunction secondArgument\n"
+    ++ "  <| thirdFunction\n"
+    ++ "  <| {\n"
+    ++ "    toFun := coconeFun F j\n"
+    ++ "    map_one' := by\n"
+    ++ "      apply Quot.sound\n"
+    ++ "      apply Relation.one\n"
+    ++ "    map_mul' := by intros; apply Quot.sound; apply Relation.mul\n"
+    ++ "    map_zero' := by apply Quot.sound; apply Relation.zero\n"
+    ++ "    map_add' := by intros; apply Quot.sound; apply Relation.add\n"
+    ++ "  }\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "low-priority-pipe-structural-operand.lean"
+  assertTrue "structural pipe operand does not fall back" (!result.fellBack)
+  assertEq "low-priority pipe stays with a structurally rendered operand"
+    expected result.formatted
+  assertTrue "structural pipe operand preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "low-priority-pipe-structural-operand-formatted.lean"
+  assertEq "structural pipe operand is idempotent" result.formatted formattedAgain
+
+  let protectedSource :=
+    "def pipeProtectedShow :=\n"
+    ++ "  le_antisymm (Algebra.adjoin_le fun x hx ↦ show x ∈ Subalgebra.toSubmodule S from subset_span hx)\n"
+    ++ "  <|\n"
+    ++ "    show Subalgebra.toSubmodule S ≤ Subalgebra.toSubmodule (Algebra.adjoin R ↑t) from fun x hx ↦\n"
+    ++ "      span_le.mpr (fun _ hx ↦ Algebra.subset_adjoin hx)\n"
+    ++ "        (show x ∈ span R ↑t by\n"
+    ++ "          rw [ht]\n"
+    ++ "          exact hx)\n"
+  let protectedResult ←
+    Formatter.formatSourceWithEnvDetailed env protectedSource
+      "low-priority-pipe-protected-show.lean" { lineWidth := 100 }
+  assertTrue "protected pipe operand does not fall back" (!protectedResult.fellBack)
+  assertEq "a nonfitting protected operand retains the post-operator boundary"
+    protectedSource protectedResult.formatted
+  assertTrue "protected pipe operand preserves code"
+    (← codePreservedIgnoringWhitespace env protectedSource protectedResult.formatted)
+
+  let attachedProtectedSource :=
+    "def pipeProtectedShow :=\n"
+    ++ "  le_antisymm (Algebra.adjoin_le fun x hx ↦ show x ∈ Subalgebra.toSubmodule S from subset_span hx)\n"
+    ++ "  <| show Subalgebra.toSubmodule S ≤ Subalgebra.toSubmodule (Algebra.adjoin R ↑t) from fun x hx ↦\n"
+    ++ "       span_le.mpr (fun _ hx ↦ Algebra.subset_adjoin hx)\n"
+    ++ "         (show x ∈ span R ↑t by\n"
+    ++ "           rw [ht]\n"
+    ++ "           exact hx)\n"
+  let attachedProtectedResult ←
+    Formatter.formatSourceWithEnvDetailed env attachedProtectedSource
+      "low-priority-pipe-attached-protected-show.lean" { lineWidth := 100 }
+  assertTrue "attached protected pipe operand does not fall back"
+    (!attachedProtectedResult.fellBack)
+  assertEq "a detached protected operand rebases its complete source layout"
+    protectedSource attachedProtectedResult.formatted
+  assertTrue "detached protected pipe operand preserves code"
+    (← codePreservedIgnoringWhitespace env attachedProtectedSource
+        attachedProtectedResult.formatted)
+  let protectedAgain ←
+    Formatter.formatSourceWithEnv env protectedResult.formatted
+      "low-priority-pipe-protected-show-formatted.lean" { lineWidth := 100 }
+  assertEq "protected pipe operand is idempotent" protectedResult.formatted protectedAgain
 
 def assertMovedInlineCalcKeepsContinuationLayout (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -11548,11 +11626,10 @@ def assertAnonymousConstructorBreakBalanced (env : Lean.Environment) : IO Unit :
     ++ "  outer\n"
     ++ "    (fun value =>\n"
     ++ "      build\n"
-    ++ "      <|\n"
-    ++ "        {\n"
-    ++ "          firstField := firstValueWithEnoughCharacters\n"
-    ++ "          secondField := by exact proof\n"
-    ++ "        })\n"
+    ++ "      <| {\n"
+    ++ "        firstField := firstValueWithEnoughCharacters\n"
+    ++ "        secondField := by exact proof\n"
+    ++ "      })\n"
   let pipedStructureFormatted ←
     Formatter.formatSourceWithEnv env pipedStructureSource
       "structure-after-pipe.lean" { lineWidth := 60 }
@@ -15264,6 +15341,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertLowPriorityPipeBoundaryPolicy env
   assertLowPriorityPipeApplicationKeepsOperandBase env
   assertLowPriorityPipeAlignsBindingOperands env
+  assertLowPriorityPipeKeepsStructurallyRenderedOperand env
   assertMovedInlineCalcKeepsContinuationLayout env
   assertExplicitLambdaKeepsPrefixMarker env
   assertHaveTermFormatting env

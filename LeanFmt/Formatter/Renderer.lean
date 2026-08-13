@@ -1806,7 +1806,10 @@ def FlowRenderContext.stateForForcedNestedChild?
           <| state.withPendingIndent
               (state.currentIndent + breakPoint.indentLevels * indentationSpaces)
       else if keepPrefixWithChildFirstLine then
-        if (OriginalTree.plan? child).isSome && !childFit.get.flat then
+        if (OriginalTree.plan? child).isSome
+            && (!flow.plan.formatsOriginalLeadingBoundary index
+                || !OriginalTree.canUseStructuralOverflowFallback child)
+            && !childFit.get.flat then
           some <| flow.withBreak state breakPoint
         else
           none
@@ -2231,9 +2234,10 @@ mutual
     let rendered :=
       if emitOriginal
           && OriginalTree.canUseStructuralLayoutAfterParentMove child
-          && state.pendingIndent?.any
-              fun desiredIndent =>
-                parentRelativeOriginalColumn? != some desiredIndent then
+          && (formatLeadingBoundary && OriginalTree.canUseStructuralOverflowFallback child
+              || state.pendingIndent?.any
+                  fun desiredIndent =>
+                    parentRelativeOriginalColumn? != some desiredIndent) then
         renderSegmentByPlan childState childSegment childPlan
       else if emitOriginal then
         emitOriginalAt

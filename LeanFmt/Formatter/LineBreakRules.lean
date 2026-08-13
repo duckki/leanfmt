@@ -3450,6 +3450,9 @@ def infixChainRule : LineBreakRule :=
 def lowPriorityInfixRhsRule : LineBreakRule :=
   {
     name := "lowPriorityInfixRhs"
+    formatOriginalChildLeadingBoundary :=
+      fun _ segment index =>
+        index == segment.start + 1 && !lowPriorityInfixRhsCanFlow segment
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
     keepPrefixWithChildFirstLine := fun _ segment index => index == segment.start + 1

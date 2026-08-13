@@ -815,6 +815,8 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
   let retainsInlineRelativeLayout := retainsRelativeLayout || proofLayout || calcLayout
   let hasLineBreakTrivia := retainsInlineRelativeLayout && treeHasLineBreakTrivia tree
   let originalLeadingHasLineStructure := SpaceRules.hasLineStructure originalLeading
+  let formattedLeadingDetachesIsland :=
+    !originalLeadingHasLineStructure && SpaceRules.hasLineStructure leading
   let detachedInlineProofBody :=
     proof
     && hasLineBreakTrivia
@@ -1025,8 +1027,9 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     | some continuationColumns, some targetColumn =>
         if proof
             || (proofLayout
-                && originalLeadingHasLineStructure
-                && proofLayoutRebasesFromFirstToken tree) then
+                && (formattedLeadingDetachesIsland
+                    || (originalLeadingHasLineStructure
+                        && proofLayoutRebasesFromFirstToken tree))) then
           some (sourceColumn, targetColumn)
         else if calcLayout then
           some
