@@ -90,8 +90,9 @@ Checkpoint 6 separately validates every previously detached calc placeholder
 row plus the affected proof-introducer, nested-binder, and quotation files; all
 focused diagnostics and builds pass. Fresh GraphQL and quantum validation passes
 before and after formatting. The preceding binder-sequence checkpoint aligns
-GraphQL's quantifier continuations with their first binder; the indexed-infix
-base propagation adds no further GraphQL or quantum formatting delta.
+GraphQL's quantifier continuations with their first binder instead of adding an
+extra continuation level; the indexed-infix base propagation adds no further
+GraphQL or quantum formatting delta.
 
 Quantum validates with the same current leanfmt source under Lean `v4.32.0`.
 The external validator now detects the target toolchain, refreshes an incremental
@@ -280,8 +281,9 @@ Status: complete.
   including when one tight delimiter wraps the operator.
 - Reuse the same base propagation already used by direct lambda bodies; do not
   add notation names, renderer conditions, or a new rule API.
-- Keep binder-sequence continuations aligned with the first binder while the
-  post-comma body remains one level inside the shared operator base.
+- Keep binder-sequence continuations aligned with the first binder without an
+  extra nesting level, while the post-comma body remains one level inside the
+  shared operator base.
 
 Acceptance: focused tests cover direct and parenthesized structural RHS terms;
 the complete local gate passes; the two affected Mathlib `finprod` bodies align

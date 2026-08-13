@@ -317,6 +317,13 @@ which parser wrappers represent binder lists. The enclosing binder rule owns a
 separate break before `:`; the name-list flow does not reserve the type as a
 same-line suffix.
 
+The quantifier rule separately exposes boundaries between complete binder
+groups. Those are zero-level breaks from the quantifier's binder base, so a
+continued group aligns with the first binder, rounded to the indentation grid
+when the operator starts off-column. It does not gain an extra continuation
+level. Flow within one untyped binder-name group retains its own ordinary
+continuation indentation.
+
 Open-command identifier lists use the same peer flow in both `open A B C` and
 parenthesized `open A (x y z)` forms. Their parser wrappers differ, but the list
 rule owns the same break between complete identifiers in either shape.

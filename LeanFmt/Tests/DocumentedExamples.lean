@@ -6,7 +6,7 @@ private def marker : String :=
   "<!-- leanfmt-test -->"
 
 private def expectedExampleCount : Nat :=
-  16
+  17
 
 private partial def takeFenceBody (lines body : List String)
     : Except String (List String × List String) :=

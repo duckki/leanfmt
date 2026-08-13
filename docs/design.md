@@ -1118,11 +1118,23 @@ def mixedQuantifierPredicate : Prop :=
       selectedObjectSatisfiesTheDeclaredCompositeTypeCondition objectType typeCondition
 ```
 
-Long binder sequences can flow between binders and between names belonging to
-one untyped binder sequence.
+Long binder sequences can flow between complete binder groups and between names
+belonging to one untyped binder group. A continuation between complete binder
+groups aligns with the first binder, rounded forward to the indentation grid
+when necessary; wrapping does not add another indentation level. The continued
+binder's internal type annotation and body then use their own structural
+indentation.
 
-Parenthesized binders that continue on another line align with the first binder;
-their internal type annotation and body then use their own structural indentation.
+<!-- leanfmt-test -->
+```lean
+def resolverInvariant : Prop :=
+  ∀ {ObjectRef : Type} (resolvers : Resolvers ObjectRef)
+    variableValues fuel (source : ResolverValue ObjectRef),
+    accepts resolvers variableValues fuel source
+```
+
+Names inside one untyped binder group remain one peer flow and use that group's
+ordinary continuation indentation:
 
 ```lean
 ∃ leftPrefixFields leftPrefixErrors rightPrefixFields rightPrefixErrors
