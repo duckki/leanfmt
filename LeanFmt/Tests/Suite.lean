@@ -11803,10 +11803,19 @@ def assertCliParsing : IO Unit := do
         (reprStr (some "1.2.3"))
         (reprStr
           (LeanFmt.versionFromLakefileToml? "name = \"leanfmt\"\nversion = \"1.2.3\"\n"))
-      assertEq "Lake manifest leanfmt tag version" (reprStr (some "7.8.9"))
+      assertEq "Lake manifest leanfmt input tag version" (reprStr (some "7.8.9"))
         (reprStr
           (LeanFmt.versionFromLakeManifest?
-            "{\"packages\":[{\"name\":\"dependency\",\"rev\":\"v1.0.0\"},{\"name\":\"leanfmt\",\"rev\":\"v7.8.9\"}]}"))
+            "{\"packages\":[{\"name\":\"dependency\",\"rev\":\"v1.0.0\"},{\"name\":\"leanfmt\",\"rev\":\"abc123\",\"inputRev\":\"v7.8.9\"}]}"))
+      assertEq "Lake manifest leanfmt revision hash is not a version"
+        (reprStr (none : Option String))
+        (reprStr
+          (LeanFmt.versionFromLakeManifest?
+            "{\"packages\":[{\"name\":\"leanfmt\",\"rev\":\"8a9594b14a3ef2ad979e9dd2216a22986d779e61\"}]}"))
+      assertEq "Lake manifest leanfmt tag revision fallback" (reprStr (some "7.8.9"))
+        (reprStr
+          (LeanFmt.versionFromLakeManifest?
+            "{\"packages\":[{\"name\":\"leanfmt\",\"rev\":\"v7.8.9\"}]}"))
       let currentVersion ← LeanFmt.versionString
       assertEq "CLI version string"
         s!"leanfmt version {currentVersion} (Lean version {Lean.versionString})"

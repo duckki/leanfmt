@@ -31,18 +31,20 @@ def jsonStringField? (json : Lean.Json) (field : String) : Option String :=
   | .ok (.str value) => some value
   | _ => none
 
-def normalizeManifestRevision (revision : String) : String :=
+def versionFromRevision? (revision : String) : Option String :=
   if revision.startsWith "v" then
-    (revision.drop 1).toString
+    some (revision.drop 1).toString
   else
-    revision
+    none
 
 partial def versionFromPackages? (packages : Array Lean.Json) (index : Nat := 0)
     : Option String := do
   let package ← packages[index]?
-  match jsonStringField? package "name", jsonStringField? package "rev" with
-  | some "leanfmt", some revision => some (normalizeManifestRevision revision)
-  | _, _ => versionFromPackages? packages (index + 1)
+  match jsonStringField? package "name" with
+  | some "leanfmt" =>
+      (jsonStringField? package "inputRev" >>= versionFromRevision?)
+      <|> (jsonStringField? package "rev" >>= versionFromRevision?)
+  | _ => versionFromPackages? packages (index + 1)
 
 def versionFromLakeManifest? (contents : String) : Option String := do
   let json ← (Lean.Json.parse contents).toOption
