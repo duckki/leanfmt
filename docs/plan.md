@@ -27,16 +27,11 @@ preservation, formatting, convergence, overflow, or build problem.
   with the owning `let` and remain attached to its first token or comment.
 - Structural indentation can leak into horizontal whitespace after an infix
   operator, producing forms such as `&&  if`, `&&  let`, `++  if`, and `<|  if`.
-- Calc continuation rows can detach a placeholder `_` from its relation even
-  though placeholder-relation attachment is already the intended policy.
 - Multiline match arms, ordinary lambda bodies, proof comments, inductive
-  constructors after comments, and block closers can inherit a stale or
-  shallower physical base instead of their structural owner's base.
-- Fitting `by` and `do` suffixes can detach from `:=` or `=>`, while nested
-  infix and `<|` chains can accumulate indentation instead of sharing their
-  expression base.
-- Proof bodies introduced by `(by`, `<| by`, and `suffices ... := by` can retain
-  their former inline source column after the surrounding expression reflows.
+  constructors after comments can inherit a stale or shallower physical base
+  instead of their structural owner's base.
+- Nested infix and `<|` chains can accumulate indentation instead of sharing
+  their expression base.
 - Both adjacent breakpoints in a low-priority application can fire and leave
   `<|` alone on a line, with neither operand attached.
 - Declaration parameters and typeclass arguments can inherit the declaration
@@ -44,8 +39,6 @@ preservation, formatting, convergence, overflow, or build problem.
   base.
 - Quantifier and big-operator bodies can inherit the binder comma's inline
   column rather than a structural body indentation.
-- Long quotation operands and nested named binders can put a closing delimiter
-  or `:` on a line whose indentation does not follow its containing structure.
 - Unknown generated syntax with multiple meaningful children intentionally
   reports a missing rule unless regrouping can prove a standard application,
   delimiter, infix, or declaration shape. Broadly treating such nodes as
@@ -85,16 +78,17 @@ low-priority-infix, proof-body, declaration-base, binder-base, and
 comment-owner issues listed above, so this result is a diagnostic checkpoint
 rather than formatting closure.
 
-The latest Mathlib diff review makes those remaining groups concrete: eight
-refutable-`let` fallbacks leave `|` alone, sixteen low-priority applications
-leave `<|` alone, and proof bodies after `(by`, `<| by`, or `suffices ... := by`
-retain stale source columns across several major directories. Thirteen
-declaration or typeclass continuations inherit declaration-name columns, two
-`finprod` bodies inherit a binder-comma column, and isolated lambda,
-constructor-after-comment, and block-closer cases retain a nonstructural base.
-The same shapes appear in the preceding exact-corpus checkpoint, so they are
-known consistency bugs rather than regressions from the tactic-application
-change. Fresh GraphQL formatting is unchanged by the current formatter.
+The latest complete Mathlib diff review makes the remaining groups concrete:
+eight refutable-`let` fallbacks leave `|` alone and sixteen low-priority
+applications leave `<|` alone. Thirteen declaration or typeclass continuations
+inherit declaration-name columns, two `finprod` bodies inherit a binder-comma
+column, and isolated lambda and constructor-after-comment cases retain a
+nonstructural base. The same shapes appear in the preceding exact-corpus
+checkpoint, so they are known consistency bugs rather than regressions from the
+tactic-application change. Checkpoint 6 separately validates every previously
+detached calc placeholder row plus the affected proof-introducer, nested-binder,
+and quotation files; all focused diagnostics and builds pass. Fresh GraphQL and
+quantum formatting is unchanged by the current formatter.
 
 Quantum validates with the same current leanfmt source under Lean `v4.32.0`.
 The external validator now detects the target toolchain, refreshes an incremental
@@ -218,7 +212,7 @@ appears.
 
 ## Checkpoint 6: structural attachment consistency
 
-Status: planned.
+Status: complete.
 
 - Keep a calc placeholder attached to its relation without specializing the
   rule to a particular relation token.

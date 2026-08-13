@@ -1835,6 +1835,7 @@ def binderRule : LineBreakRule :=
     inheritBase :=
       fun context _ =>
         parentIsSignatureParameters context
+        || parentIsRawKind context `Lean.explicitBinders
         || parentIsRawKind context `Batteries.ExtendedBinder.extBinderCollection
     breakPoints := binderBreaks
   }
@@ -1903,8 +1904,36 @@ def doForHeaderBreaks (_context : RuleContext) (segment : Segment) : List BreakP
 def doUnlessBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   [breakAfterLexeme? segment "do" 1].filterMap id
 
-def byTacticBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
-  [breakAfterLexeme? segment "by" 1].filterMap id
+def inMatchAltRhs (context : RuleContext) : Bool :=
+  match context.ancestors with
+  | parent :: grandparent :: _ =>
+      (parent.rawKind? == some `Lean.Parser.Term.matchAlt && parent.childIndex == 3)
+      || (parent.rawKind? == some `null
+          && grandparent.rawKind? == some `Lean.Parser.Term.matchAlt
+          && grandparent.childIndex == 3)
+  | parent :: _ =>
+      parent.rawKind? == some `Lean.Parser.Term.matchAlt && parent.childIndex == 3
+  | _ => false
+
+def attachedBodyHasFollowingApplicationArgument (context : RuleContext) : Bool :=
+  match context.ancestors with
+  | parent :: _ =>
+      parent.nodeKind? == some .application
+      && parent.segment.indexes.any
+          fun index =>
+            parent.childIndex < index && (parent.segment.child? index).any treeHasContent
+  | _ => false
+
+def attachedBodyIndentLevels (context : RuleContext) : Nat :=
+  if inMatchAltRhs context then
+    alternativeBodyIndentLevels
+  else if attachedBodyHasFollowingApplicationArgument context then
+    2
+  else
+    1
+
+def byTacticBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
+  [breakAfterLexeme? segment "by" (attachedBodyIndentLevels context)].filterMap id
 
 def calcBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   [boundaryBreak? segment 1 1].filterMap id
@@ -2906,26 +2935,6 @@ def subtypeBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint
   | some breakPoint => [breakPoint]
   | none => []
 
-def inMatchAltRhs (context : RuleContext) : Bool :=
-  match context.ancestors with
-  | parent :: grandparent :: _ =>
-      (parent.rawKind? == some `Lean.Parser.Term.matchAlt && parent.childIndex == 3)
-      || (parent.rawKind? == some `null
-          && grandparent.rawKind? == some `Lean.Parser.Term.matchAlt
-          && grandparent.childIndex == 3)
-  | parent :: _ =>
-      parent.rawKind? == some `Lean.Parser.Term.matchAlt && parent.childIndex == 3
-  | _ => false
-
-def attachedBodyHasFollowingApplicationArgument (context : RuleContext) : Bool :=
-  match context.ancestors with
-  | parent :: _ =>
-      parent.nodeKind? == some .application
-      && parent.segment.indexes.any
-          fun index =>
-            parent.childIndex < index && (parent.segment.child? index).any treeHasContent
-  | _ => false
-
 def matchAltBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   if childIsRawKind segment 3 `Lean.Parser.Term.byTactic
       || attachedBodyStart segment 3 then
@@ -2939,14 +2948,7 @@ def matchExprAltBreaks (_context : RuleContext) (segment : Segment) : List Break
   [leadingBreak? segment segment.start 0, boundaryBreak? segment 3 1].filterMap id
 
 def doBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
-  let indentLevels :=
-    if inMatchAltRhs context then
-      alternativeBodyIndentLevels
-    else if attachedBodyHasFollowingApplicationArgument context then
-      2
-    else
-      1
-  match boundaryBreak? segment 1 indentLevels with
+  match boundaryBreak? segment 1 (attachedBodyIndentLevels context) with
   | some breakPoint => [breakPoint]
   | none => []
 
@@ -2979,10 +2981,9 @@ def barSeparatedSequence (segment : Segment) : Bool :=
         else
           !childStartsWithLexeme segment index "|"
 
-def placeholderEqualityOperator (segment : Segment) (index : Nat) : Bool :=
+def placeholderFirstOperator (segment : Segment) (index : Nat) : Bool :=
   index == segment.start + 1
   && (segment.child? segment.start >>= SyntaxTree.Tree.singleToken?).any (·.lexeme == "_")
-  && childStartsWithLexeme segment index "="
 
 def infixBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   if lowPriorityInfixSegment segment then
@@ -3001,7 +3002,7 @@ def infixBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :
         | some children =>
             (List.range children.size).flatMap
               fun index =>
-                if index % 2 == 1 && !placeholderEqualityOperator segment index then
+                if index % 2 == 1 && !placeholderFirstOperator segment index then
                   [boundaryBreak? segment index 0].filterMap id
                 else
                   []
@@ -4151,7 +4152,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.binderIdent) _ => some defaultRule
   | .node (.raw `Lean.explicitBinders) _ => some defaultRule
   | .node (.raw `Lean.unbracketedExplicitBinders) _ => some defaultRule
-  | .node (.raw `Lean.bracketedExplicitBinders) _ => some defaultRule
+  | .node (.raw `Lean.bracketedExplicitBinders) _ => some binderRule
   | .node (.raw `num) _ => some defaultRule
   | .node (.raw `scientific) _ => some defaultRule
   | .node (.raw `str) _ => some defaultRule

@@ -38,6 +38,13 @@ local macro "eval_simp" : tactic =>
 local macro "already_moved_eval_simp"
   : tactic =>
   `(tactic| simp only [eval_C, eval_X, eval_neg, eval_add, eval_sub, eval_mul, eval_pow, evalEval])
+
+macro "nested_quotation_closers_with_a_long_enough_name" : tactic =>
+  `(tactic| focus (
+      (repeat trivial) <;>
+      (try trivial)
+    )
+  )
 -----------------------------------------------------------------------------------------
 -- leanfmt: expected output below (DO NOT EDIT)
 -----------------------------------------------------------------------------------------
@@ -86,3 +93,11 @@ local macro "eval_simp"
 local macro "already_moved_eval_simp"
   : tactic =>
     `(tactic| simp only [eval_C, eval_X, eval_neg, eval_add, eval_sub, eval_mul, eval_pow, evalEval])
+
+macro "nested_quotation_closers_with_a_long_enough_name"
+  : tactic =>
+    `(tactic| focus (
+        (repeat trivial) <;>
+        (try trivial)
+      )
+    )

@@ -1423,6 +1423,23 @@ def sourceBreaksAllowedByBreakPointsInState
   else
     sourceBreaks
 
+def segmentHasOriginalEmissionAtRuleSourceBreak
+    (source : String) (segment : LineBreakRules.Segment) (plan : LayoutPlan.Plan)
+    : Bool :=
+  plan.breakPoints.any
+    fun breakPoint =>
+      match LineBreakRules.previousContentIndex? segment breakPoint.index
+            >>= segment.child?
+            >>= SyntaxTree.Tree.lastToken?,
+            segment.child? breakPoint.index with
+      | some prefixToken, some child =>
+          SpaceRules.hasLineStructure prefixToken.leading.text
+          && child.firstToken?.any
+              fun first =>
+                hasSourceBreakBetweenTokens source prefixToken first
+                && OriginalTree.startsWithEmission child
+      | _, _ => false
+
 def segmentHasAllowedSourceBreaks
     (source : String) (context : LineBreakRules.RuleContext)
     (segment : LineBreakRules.Segment)
@@ -1468,7 +1485,9 @@ partial def segmentAllowsLayoutWithoutRuleBreaks
           || !treeSourceHasLineStructure source segment.parent
       | none =>
           let plan := LayoutPlan.resolve context segment
-          if (!plan.isFlow && treeContainsLineCommentForcedBreak source segment.parent)
+          if segmentHasOriginalEmissionAtRuleSourceBreak source segment plan
+              || (!plan.isFlow
+                  && treeContainsLineCommentForcedBreak source segment.parent)
               || plan.isMandatory
               || (plan.breakPoints.any (·.indentLevels == 0)
                   && segmentContainsMultilineOriginalEmission source segment) then

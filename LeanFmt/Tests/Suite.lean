@@ -3912,6 +3912,63 @@ def assertMovedProofLayoutKeepsFittingContinuation (env : Lean.Environment)
     expected result.formatted
 
 def assertMovedProofBodiesKeepRelativeIndentation (env : Lean.Environment) : IO Unit := do
+  let attachedSource :=
+    "def declarationByWithEnoughCharactersToBreakTheValueBoundary : True :=\n"
+    ++ "  by\n"
+    ++ "    exact True.intro\n"
+    ++ "\n"
+    ++ "def declarationDoWithEnoughCharactersToBreakTheValueBoundary : IO Nat :=\n"
+    ++ "  do\n"
+    ++ "    pure 0\n"
+    ++ "\n"
+    ++ "def lambdaByWithEnoughCharactersToBreakTheValueBoundary :=\n"
+    ++ "  fun argumentWithEnoughCharactersToBreakTheValueBoundary =>\n"
+    ++ "    by\n"
+    ++ "      exact argumentWithEnoughCharactersToBreakTheValueBoundary\n"
+    ++ "\n"
+    ++ "def matchByWithEnoughCharactersToBreakTheValueBoundary (value : Nat) :=\n"
+    ++ "  match value with\n"
+    ++ "  | 0 =>\n"
+    ++ "    by\n"
+    ++ "      exact 0\n"
+    ++ "  | n + 1 =>\n"
+    ++ "    by\n"
+    ++ "      exact n\n"
+  let attachedExpected :=
+    "def declarationByWithEnoughCharactersToBreakTheValueBoundary\n"
+    ++ "    : True := by\n"
+    ++ "  exact True.intro\n"
+    ++ "\n"
+    ++ "def declarationDoWithEnoughCharactersToBreakTheValueBoundary\n"
+    ++ "    : IO Nat := do\n"
+    ++ "  pure 0\n"
+    ++ "\n"
+    ++ "def lambdaByWithEnoughCharactersToBreakTheValueBoundary :=\n"
+    ++ "  fun argumentWithEnoughCharactersToBreakTheValueBoundary => by\n"
+    ++ "    exact argumentWithEnoughCharactersToBreakTheValueBoundary\n"
+    ++ "\n"
+    ++ "def matchByWithEnoughCharactersToBreakTheValueBoundary\n"
+    ++ "    (value : Nat) :=\n"
+    ++ "  match value with\n"
+    ++ "  | 0 => by\n"
+    ++ "      exact 0\n"
+    ++ "  | n + 1 => by\n"
+    ++ "      exact n\n"
+  let attachedResult ←
+    Formatter.formatSourceWithEnvDetailed env attachedSource
+      "moved-attached-proof-introducers.lean" { lineWidth := 70 }
+  assertTrue "moved attached proof introducers do not fall back"
+    (!attachedResult.fellBack)
+  assertEq "moved attached proof bodies use their structural value base"
+    attachedExpected attachedResult.formatted
+  assertTrue "moved attached proof introducers preserve code"
+    (← codePreservedIgnoringWhitespace env attachedSource attachedResult.formatted)
+  let attachedAgain ←
+    Formatter.formatSourceWithEnv env attachedResult.formatted
+      "moved-attached-proof-introducers-formatted.lean" { lineWidth := 70 }
+  assertEq "moved attached proof introducers are idempotent"
+    attachedResult.formatted attachedAgain
+
   let outdentedSource :=
     "theorem originalProofIslandOutdentsFromNestedValue : True :=\n"
     ++ "    id <| by\n"
@@ -5749,6 +5806,36 @@ def assertCalcPlaceholderStaysWithRelationOperator (env : Lean.Environment)
     Formatter.formatSourceWithEnv env result.formatted
       "calc-placeholder-relation-layout-formatted.lean" { lineWidth := 90 }
   assertEq "calc placeholder relation is idempotent" result.formatted formattedAgain
+
+  let orderedSource :=
+    "def x := by\n"
+    ++ "  calc\n"
+    ++ "    _ ≤ veryLongFunctionName schema resolvers variableValues depth parentType source\n"
+    ++ "      (left ++ [.field responseName fieldName arguments directives selectionSet]) := by\n"
+    ++ "        exact proof\n"
+  let orderedExpected :=
+    "def x := by\n"
+    ++ "  calc\n"
+    ++ "    _ ≤ veryLongFunctionName schema resolvers variableValues depth parentType source\n"
+    ++ "          (left\n"
+    ++ "            ++ [.field responseName fieldName arguments directives selectionSet]) := by\n"
+    ++ "      exact proof\n"
+  let orderedResult ←
+    Formatter.formatSourceWithEnvDetailed env orderedSource
+      "calc-placeholder-ordered-relation-layout.lean" { lineWidth := 90 }
+  assertTrue "calc placeholder ordered relation does not fall back"
+    (!orderedResult.fellBack)
+  assertEq "calc placeholder stays with a non-equality relation operator"
+    orderedExpected orderedResult.formatted
+  assertTrue "calc placeholder ordered relation fits its configured width"
+    (Formatter.linesFit orderedResult.formatted 90)
+  assertTrue "calc placeholder ordered relation preserves code"
+    (← codePreservedIgnoringWhitespace env orderedSource orderedResult.formatted)
+  let orderedFormattedAgain ←
+    Formatter.formatSourceWithEnv env orderedResult.formatted
+      "calc-placeholder-ordered-relation-layout-formatted.lean" { lineWidth := 90 }
+  assertEq "calc placeholder ordered relation is idempotent"
+    orderedResult.formatted orderedFormattedAgain
 
 def assertCalcInfixRelationUsesStructuralLayout (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -10737,6 +10824,37 @@ def assertQuantifierBinderSequenceBreaksBetweenBinders (env : Lean.Environment)
       "existential-binder-sequence-break.lean"
   assertTrue "existential binder sequence has no overflow"
     (Formatter.Diagnostics.overflowOccurrences moduleTree { lineWidth := 100 }).isEmpty
+
+  let nestedSource :=
+    "def nestedBinderPunctuation :\n"
+    ++ "    ∃ (first : Nat)\n"
+    ++ "      (secondNamedBinderWithEnoughCharactersForBreaking : ∀ (a b c d : Nat),\n"
+    ++ "        firstFunctionWithEnoughCharacters a b = secondFunctionWithEnoughCharacters c d),\n"
+    ++ "      True := by\n"
+    ++ "  exact proof\n"
+  let nestedExpected :=
+    "def nestedBinderPunctuation\n"
+    ++ "    : ∃ (first : Nat)\n"
+    ++ "            (secondNamedBinderWithEnoughCharactersForBreaking\n"
+    ++ "              : ∀ (a b c d : Nat),\n"
+    ++ "                  firstFunctionWithEnoughCharacters a b\n"
+    ++ "                  = secondFunctionWithEnoughCharacters c d),\n"
+    ++ "        True := by\n"
+    ++ "  exact proof\n"
+  let nestedResult ←
+    Formatter.formatSourceWithEnvDetailed env nestedSource
+      "nested-quantifier-binder-punctuation.lean" { lineWidth := 70 }
+  assertTrue "nested quantifier binder punctuation does not fall back"
+    (!nestedResult.fellBack)
+  assertEq "nested quantifier binder punctuation uses the binder base"
+    nestedExpected nestedResult.formatted
+  assertTrue "nested quantifier binder punctuation preserves code"
+    (← codePreservedIgnoringWhitespace env nestedSource nestedResult.formatted)
+  let nestedAgain ←
+    Formatter.formatSourceWithEnv env nestedResult.formatted
+      "nested-quantifier-binder-punctuation-formatted.lean" { lineWidth := 70 }
+  assertEq "nested quantifier binder punctuation is idempotent"
+    nestedResult.formatted nestedAgain
 
 def assertInductiveConstructorIndentation (env : Lean.Environment) : IO Unit := do
   let source :=

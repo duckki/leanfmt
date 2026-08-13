@@ -87,6 +87,25 @@ private def treeContinuationIndent?
         minimum?)
     none
 
+private def treeTrailingDelimiterIndent?
+    (sourceMap : SyntaxTree.SourcePositionMap) (tree : SyntaxTree.Tree)
+    : Option Nat := do
+  let firstToken ← tree.firstToken?
+  let firstLine := sourceMap.lineNumberAt firstToken.span.start
+  tree.tokens.toList.reverse
+  |>.takeWhile (fun token => SpaceRules.isDelimiterCloserToken token.lexeme)
+  |>.foldl
+      (fun minimum? token =>
+        if firstLine < sourceMap.lineNumberAt token.span.start
+            && SpaceRules.hasLineStructure token.leading.text then
+          let column := sourceMap.columnAt token.span.start
+          match minimum? with
+          | some minimum => some (min minimum column)
+          | none => some column
+        else
+          minimum?)
+      none
+
 private def rebaseMultilineSourceSlice (targetColumn : Nat) (text : String) : String :=
   match (SpaceRules.normalizeLineEndings text).splitOn "\n" with
   | [] | [_] => text
@@ -871,6 +890,13 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
           some (sourceIndent, targetIndent)
       | _, _ => none
   let inlineContinuationColumns? :=
+    match if inlineMultilineLayoutIsland && quotationStartsOnLine then
+            treeTrailingDelimiterIndent? request.sourceMap tree
+          else
+            none with
+    | some sourceIndent => some (sourceIndent, leadingColumn)
+    | none => inlineContinuationColumns?
+  let inlineContinuationColumns? :=
     match inlineContinuationColumns? with
     | some (sourceIndent, targetIndent) =>
         if proofLayout && request.respectPendingIndent then
@@ -926,6 +952,9 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
             | none =>
                 if request.sourceMap.columnAt token.span.start == outputTokenColumn then
                   none
+                else if usesPendingIndent
+                        && SpaceRules.hasLineStructure token.leading.text then
+                  some leadingColumn
                 else
                   match targetColumn? with
                   | some targetColumn =>

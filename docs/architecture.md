@@ -633,6 +633,13 @@ the current line and pending boundary state, then records two facts from that on
   layout owned by an opaque or already-broken nested child without activating this
   segment's own break points.
 
+An original-layout island can make a source newline physically unremovable even when its
+parent rule does not generally preserve source breaks. If that island starts at a
+configured breakpoint and the preceding prefix moved from its own source line, flat
+measurement rejects the stale boundary. Ordinary rule layout then supplies the target
+indentation before original-tree emission rebases the protected text. The renderer makes
+this decision from boundary state; it does not inspect introducer spelling.
+
 When a flow segment contains a multiline protected child, the complete segment is not
 accepted as flat merely because the preserved lines fit. Computed flow then takes an
 available boundary before that child, so a parenthesized multiline proof argument moves
@@ -952,6 +959,9 @@ movement, clamped to the island's structural indentation, rather than treating t
 far-right first token as an indentation anchor. If formatting moves the quotation's
 first token onto its own line, that first token becomes the source-to-output anchor;
 continuations do not retain the column of an introducer that is no longer inline.
+A terminal run of closing delimiters that begins on later source lines identifies the
+quotation island's original base, so those delimiters return to the moved quotation's
+base while the protected body retains its relative indentation.
 Module and declaration documentation
 comments are also emitted from their original source slices so their internal whitespace
 cannot be changed. This
