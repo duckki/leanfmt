@@ -36,8 +36,6 @@ preservation, formatting, convergence, overflow, or build problem.
 - Declaration parameters and typeclass arguments can inherit the declaration
   name's ending column instead of the declaration's structural continuation
   base.
-- Quantifier and big-operator bodies can inherit the binder comma's inline
-  column rather than a structural body indentation.
 - Unknown generated syntax with multiple meaningful children intentionally
   reports a missing rule unless regrouping can prove a standard application,
   delimiter, infix, or declaration shape. Broadly treating such nodes as
@@ -73,9 +71,9 @@ Current exact Mathlib formatter evidence is complete: all 84 formatter
 batches covering 8,311 tracked files under `Mathlib` pass preservation,
 overflow, missing-rule, fallback, and idempotency checks at width 100. The
 complete post-format build covers all 8,705 targets. Review still finds the
-fallback, low-priority-infix, declaration-base, binder-base, and comment-owner
-issues listed above, so this result is a diagnostic checkpoint rather than
-formatting closure.
+fallback, low-priority-infix, declaration-base, and comment-owner issues listed
+above, so this result is a diagnostic checkpoint rather than formatting
+closure.
 
 The latest complete Mathlib diff review makes the remaining groups concrete:
 eight refutable-`let` fallbacks leave `|` alone. Thirty-five physical lines
@@ -84,12 +82,16 @@ movable operator-operand boundaries were coordinated. Review classifies most of
 the remainder as comment-led or nonfitting protected operands with intentional
 source boundaries; ordinary application and comment-owner cases remain
 follow-up consistency work. Thirteen declaration or typeclass continuations
-inherit declaration-name columns, two `finprod` bodies inherit a binder-comma
-column, and isolated lambda and constructor-after-comment cases retain a
-nonstructural base. Checkpoint 6 separately validates every previously detached
-calc placeholder row plus the affected proof-introducer, nested-binder, and
-quotation files; all focused diagnostics and builds pass. GraphQL and quantum
-formatting remains unchanged by the checkpoint formatter.
+inherit declaration-name columns, and isolated lambda and
+constructor-after-comment cases retain a nonstructural base. The two previously
+misaligned `finprod` bodies now use their indexed relation's structural base;
+focused formatting diagnostics and the affected Mathlib target build pass.
+Checkpoint 6 separately validates every previously detached calc placeholder
+row plus the affected proof-introducer, nested-binder, and quotation files; all
+focused diagnostics and builds pass. Fresh GraphQL and quantum validation passes
+before and after formatting. The preceding binder-sequence checkpoint aligns
+GraphQL's quantifier continuations with their first binder; the indexed-infix
+base propagation adds no further GraphQL or quantum formatting delta.
 
 Quantum validates with the same current leanfmt source under Lean `v4.32.0`.
 The external validator now detects the target toolchain, refreshes an incremental
@@ -269,6 +271,25 @@ protected structure and the existing suffix controls; the complete local gate
 passes; GraphQL and quantum remain clean; exact Mathlib validation at width 100
 reduces the standalone-operator issue without introducing an exception, build
 failure, logical indentation regression, or material performance regression.
+
+## Checkpoint 9: binder-operator body bases
+
+Status: complete.
+
+- Give a binder operator on an indexed-infix RHS the relation's structural base,
+  including when one tight delimiter wraps the operator.
+- Reuse the same base propagation already used by direct lambda bodies; do not
+  add notation names, renderer conditions, or a new rule API.
+- Keep binder-sequence continuations aligned with the first binder while the
+  post-comma body remains one level inside the shared operator base.
+
+Acceptance: focused tests cover direct and parenthesized structural RHS terms;
+the complete local gate passes; the two affected Mathlib `finprod` bodies align
+with their indexed relation; and focused Mathlib formatting and build checks
+pass without preservation, overflow, fallback, missing-rule, or idempotency
+failures. Fresh GraphQL and quantum validation also passes. A same-machine
+three-sample comparison against the preceding checkpoint reports 5,226 ms total
+formatting versus 5,216 ms, with no material performance regression.
 
 ## Validation standard
 

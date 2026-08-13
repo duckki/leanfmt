@@ -161,15 +161,6 @@ def RuleContext.parentIsAnnotatedDeclaration (context : RuleContext) : Bool :=
   | parent :: _ => parent.nodeKind? == some .annotatedDeclaration
   | _ => false
 
-def RuleContext.parentIsIndexedInfixRhs (context : RuleContext) : Bool :=
-  match context.ancestors with
-  | parent :: _ =>
-      (match parent.nodeKind? with
-        | some (.indexedInfix _) => true
-        | _ => false)
-      && parent.childIsLast
-  | _ => false
-
 def defaultInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   context.parentIsAnnotatedDeclaration
   || context.parentIsSingletonArrayItemWrapper
@@ -550,6 +541,38 @@ def frameWrapsOnlySelectedChild (frame : Frame) : Bool :=
       || match frame.segment.parentChild? index >>= SyntaxTree.Tree.firstToken? with
           | some _ => false
           | none => true
+
+def frameWrapsDelimitedSelectedChild (frame : Frame) : Bool :=
+  match frame.segment.children? with
+  | some children =>
+      (frame.rawKind? == some `Lean.Parser.Term.paren
+        || (SyntaxTree.outerDelimiterKind? children).isSome)
+      && (match nonemptyChildIndexes frame.segment with
+          | [_, itemIndex, _] => itemIndex == frame.childIndex
+          | _ => false)
+  | none => false
+
+def frameIsLeadingInfixOperand (frame : Frame) : Bool :=
+  match frame.nodeKind? with
+  | some (.infixChain _) => frame.childIndex == 0
+  | _ => false
+
+def indexedInfixRhsBaseIn : List Frame → Bool
+  | [] => false
+  | parent :: ancestors =>
+      let isIndexedRhs :=
+        (match parent.nodeKind? with
+          | some (.indexedInfix _) => true
+          | _ => false)
+        && parent.childIsLast
+      isIndexedRhs
+      || ((frameWrapsOnlySelectedChild parent
+            || frameWrapsDelimitedSelectedChild parent
+            || frameIsLeadingInfixOperand parent)
+          && indexedInfixRhsBaseIn ancestors)
+
+def RuleContext.usesIndexedInfixRhsBase (context : RuleContext) : Bool :=
+  indexedInfixRhsBaseIn context.ancestors
 
 def suffixProjectionMemberIn : List Frame → Bool
   | [] => false
@@ -3369,7 +3392,7 @@ def transparentRule : LineBreakRule :=
     inheritBase :=
       fun context segment =>
         (segment.rawKind? == some `Lean.Parser.Term.fun
-          && context.parentIsIndexedInfixRhs)
+          && context.usesIndexedInfixRhsBase)
         || segment.rawKind? == some `Lean.Parser.Command.structSimpleBinder
     formatOriginalChildLeadingBoundary :=
       fun _ segment index =>
@@ -3418,7 +3441,9 @@ def parenRule : LineBreakRule :=
     name := "paren"
     flow := fun context segment => !(patternAliasParenBreaks context segment).isEmpty
     inheritBase :=
-      fun context _ => parentIsRawKind context `Lean.Parser.Term.namedPattern
+      fun context _ =>
+        parentIsRawKind context `Lean.Parser.Term.namedPattern
+        || context.usesIndexedInfixRhsBase
     breakPoints := patternAliasParenBreaks
   }
 
@@ -3438,7 +3463,10 @@ def infixChainRule : LineBreakRule :=
     flow := infixFlow
     keepPrefixWithChildFirstLine :=
       fun _ segment index => childLowPriorityInfixRhsHasAttachedBody segment index
-    inheritBase := infixAttachedBodyAssignmentValue
+    inheritBase :=
+      fun context segment =>
+        infixAttachedBodyAssignmentValue context segment
+        || context.usesIndexedInfixRhsBase
     liftsTailIndentation :=
       fun context segment =>
         !infixAttachedBodyAssignmentValue context segment
@@ -3468,6 +3496,7 @@ def binderTacticRule : LineBreakRule :=
 def bigOperatorRule : LineBreakRule :=
   {
     name := "bigOperator"
+    inheritBase := fun context _ => context.usesIndexedInfixRhsBase
     breakPoints := bigOperatorBreaks
   }
 
@@ -3616,6 +3645,7 @@ def matchExpressionRule : LineBreakRule :=
 def quantifierRule : LineBreakRule :=
   {
     name := "quantifier"
+    inheritBase := fun context _ => context.usesIndexedInfixRhsBase
     breakPoints := quantifierBreaks
   }
 

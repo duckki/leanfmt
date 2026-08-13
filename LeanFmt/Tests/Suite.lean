@@ -8593,6 +8593,34 @@ def assertBigOperatorBodyBreaksAfterComma (env : Lean.Environment) : IO Unit := 
       { lineWidth := 60 }
   assertEq "big operator body breaks after its comma" expected formatted
 
+def assertIndexedInfixBinderBodyUsesStructuralBase (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "syntax:50 term:51 \" =test[\" term \" ] \" term:51 : term\n"
+    ++ "\n"
+    ++ "def embeddedBinderOperator :=\n"
+    ++ "  left =test[relationIndex] (∀ value : Nat,\n"
+    ++ "                              firstBodyFunction value\n"
+    ++ "                              = secondBodyFunctionWithLongName value)\n"
+  let expected :=
+    "syntax:50 term:51 \" =test[\" term \" ] \" term:51 : term\n"
+    ++ "\n"
+    ++ "def embeddedBinderOperator :=\n"
+    ++ "  left\n"
+    ++ "  =test[relationIndex] (∀ value : Nat,\n"
+    ++ "    firstBodyFunction value = secondBodyFunctionWithLongName value)\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "indexed-infix-binder-body-base.lean" { lineWidth := 70 }
+  assertTrue "indexed-infix binder body does not fall back" (!result.fellBack)
+  assertEq "indexed-infix binder body uses the relation base" expected result.formatted
+  assertTrue "indexed-infix binder body preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "indexed-infix-binder-body-base-formatted.lean" { lineWidth := 70 }
+  assertEq "indexed-infix binder body is idempotent" result.formatted formattedAgain
+
 def assertInfixIgnoresFittingSourceBreaks (env : Lean.Environment) : IO Unit := do
   let source :=
     "def sourceBreakInfix : Prop :=\n" ++ "  firstCondition\n" ++ "  ∧ secondCondition\n"
@@ -15425,6 +15453,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertInfixLeftDepth env
   assertInfixAlternativeSequenceFlows env
   assertBigOperatorBodyBreaksAfterComma env
+  assertIndexedInfixBinderBodyUsesStructuralBase env
   assertInfixIgnoresFittingSourceBreaks env
   assertInfixIgnoresArbitrarySourceBreaks env
   assertInfixRhsFitsBeforeSourceBreaks env
