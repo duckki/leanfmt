@@ -56,7 +56,7 @@ preservation, formatting, convergence, overflow, or build problem.
   compiles and formats cleanly under that older toolchain.
 - Three tracked Hex benchmark adapters require CompPoly modules that are not in
   Hex's Lake environment. The pinned CompPoly consumer setup also fails to build
-  two upstream modules under Hex's current `v4.33.0-rc1` toolchain, so these
+  two upstream modules under Hex's current toolchain, so these
   files need an explicit compatible companion environment rather than inclusion
   in Hex's ordinary all-file batch.
 - Source-authored calc text that Lean does not expose as parsed calc rows remains
@@ -83,13 +83,13 @@ the external CompPoly adapters described above. On the latest run, checking and
 rewriting the 886 files took about 10 minutes 12 seconds; the complete
 post-format build took 13 minutes 39 seconds.
 
-Current exact Mathlib `v4.33.0` evidence is complete: all 84 formatter batches
-covering 8,311 tracked files under `Mathlib` pass preservation, overflow,
-missing-rule, fallback, and idempotency checks at width 100, and the complete
-post-format build passes all 8,705 targets. Review still finds the fallback,
-low-priority-infix, proof-body, declaration-base, binder-base, and comment-owner
-issues listed above, so this result is a diagnostic checkpoint rather than
-formatting closure.
+Current exact Mathlib evidence is complete: all 84 formatter batches covering
+8,311 tracked files under `Mathlib` pass preservation, overflow, missing-rule,
+fallback, and idempotency checks at width 100, and the complete post-format
+build passes all 8,705 targets. Review still finds the fallback,
+low-priority-infix, proof-body, declaration-base, binder-base, and
+comment-owner issues listed above, so this result is a diagnostic checkpoint
+rather than formatting closure.
 
 The latest Mathlib diff review makes those remaining groups concrete: eight
 refutable-`let` fallbacks leave `|` alone, sixteen low-priority applications
@@ -103,12 +103,12 @@ known consistency bugs rather than regressions from the tactic-application
 change. Fresh GraphQL formatting is unchanged by the current formatter.
 
 Quantum's ordinary validation script fails before formatting because it loads a
-Lean `v4.33.0` formatter executable under the project's Lean `v4.32.0`
-environment. Building the same current leanfmt source in a disposable `v4.32.0`
-checkout and invoking that executable from Quantum's `lake env` validates all
-21 files and completes the 2,653-target post-format build without an exception
-or formatting delta. This confirms a validator toolchain-selection problem, not
-a formatter source-compatibility problem.
+release-toolchain formatter executable under the project's older Lean
+environment. Building the same current leanfmt source in a disposable checkout
+using that target toolchain and invoking that executable from Quantum's
+`lake env` validates all 21 files and completes the 2,653-target post-format
+build without an exception or formatting delta. This confirms a validator
+toolchain-selection problem, not a formatter source-compatibility problem.
 
 ## Checkpoint 1: layout ownership
 
@@ -139,8 +139,8 @@ issue set, and review of all fixture and self-format deltas.
 Status: complete.
 
 - Validate fresh GraphQL and quantum clones with automatic formatter workers.
-- Validate exact Mathlib `v4.33.0` at width 100, formatting only `Mathlib` and
-  using the Lake cache.
+- Validate exact Mathlib at width 100, formatting only `Mathlib` and using the
+  Lake cache.
 - Review every candidate-only formatting delta for missing or wrong line breaks,
   incorrect indentation, fallback, non-idempotence, preservation failures, and
   actionable overflow.
@@ -191,8 +191,8 @@ Status: validation complete; known layout blockers remain.
 - Add focused reproductions for each issue before changing grouping or break
   behavior, then review the complete generated Hex diff at width 100.
 
-Acceptance: the complete local gate passes under Lean `v4.33.0`; GraphQL and
-quantum remain clean; every Hex formatter batch passes preservation,
+Acceptance: the complete local gate passes under the current Lean toolchain;
+GraphQL and quantum remain clean; every Hex formatter batch passes preservation,
 overflow, fallback, and idempotency checks at width 100; the post-format Hex
 build passes; and review finds no logical layout regression or material
 performance regression. Hex missing-rule diagnostics are recorded but do not
@@ -219,9 +219,10 @@ Status: next.
   timing deltas before resuming Mathlib formatting work.
 
 Acceptance: GraphQL and Hex validate through the standard script; quantum uses
-the same current formatter source under Lean `v4.32.0`; the three CompPoly
-adapters parse and build in their declared environment; no target requires a
-formatter-rule exception; and no material performance regression appears.
+the same current formatter source under its target Lean toolchain; the three
+CompPoly adapters parse and build in their declared environment; no target
+requires a formatter-rule exception; and no material performance regression
+appears.
 
 ## Checkpoint 6: structural attachment consistency
 

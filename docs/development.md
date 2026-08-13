@@ -129,10 +129,11 @@ the target toolchain, then run that executable from the target project's
 `lake env`:
 
 ```sh
-compat=/tmp/leanfmt-v4.32
+target_lean_version=vX.Y.Z
+compat=/tmp/leanfmt-$target_lean_version
 mkdir -p "$compat"
 git archive HEAD | tar -x -C "$compat"
-printf 'leanprover/lean4:v4.32.0\n' > "$compat/lean-toolchain"
+printf 'leanprover/lean4:%s\n' "$target_lean_version" > "$compat/lean-toolchain"
 (cd "$compat" && lake build fmt)
 (cd /path/to/target && lake env "$compat/.lake/build/bin/fmt" \
   --check-exception --check-idempotent path/to/File.lean)

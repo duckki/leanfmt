@@ -412,7 +412,7 @@ package example where
   srcDir := "."
 
 require mathlib from git
-  "https://github.com/leanprover-community/mathlib4.git" @ "v4.33.0"
+  "https://github.com/leanprover-community/mathlib4.git" @ "vX.Y.Z"
 ```
 
 An attribute may share the line of any top-level command that accepts declaration

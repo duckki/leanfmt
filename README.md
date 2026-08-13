@@ -90,6 +90,29 @@ lake exe fmt --recursive LeanFmt
 lake exe fmt --line-width 100 --recursive Mathlib
 ```
 
+For incremental adoption, format only Lean files changed in the current branch
+or working tree. Check staged changes before committing:
+
+```sh
+lake exe fmt --check $(git diff --cached --name-only --diff-filter=ACMR -- '*.lean')
+```
+
+Format local changes since `HEAD`:
+
+```sh
+lake exe fmt $(git diff --name-only --diff-filter=ACMR HEAD -- '*.lean')
+```
+
+In CI, check only files changed on a branch relative to `origin/main`:
+
+```sh
+lake exe fmt --check $(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- '*.lean')
+```
+
+Run these commands only when the `git diff --name-only ... '*.lean'` file list is
+nonempty; pass unusual paths explicitly if your project uses spaces in file
+names.
+
 Directory arguments include directly contained `.lean` files. Pass
 `--recursive` or `-r` to include nested directories. Hidden files and
 directories discovered inside directory arguments are skipped by default.
@@ -100,6 +123,7 @@ different convention. Multi-file package invocations use concurrent workers:
 both default-environment files and files that require project-specific syntax
 environments use the machine's hardware concurrency. Each exact import header gets
 one short-lived worker process. Pass `--jobs N` to override the automatic count.
+Pass `--version` to print the installed leanfmt version.
 
 To preserve the next complete syntax node exactly, put `-- leanfmt: off next`
 immediately before it. The marker works for top-level commands and nested terms:

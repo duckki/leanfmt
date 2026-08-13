@@ -1,6 +1,7 @@
 import Lean
 import LeanFmt.Driver
 import LeanFmt.Formatter
+import LeanFmt.Version
 
 open System
 
@@ -11,6 +12,7 @@ abbrev Options := LeanFmt.Driver.Options
 inductive ParseResult where
   | run (options : Options)
   | help
+  | version
   | error (message : String)
 deriving Repr
 
@@ -32,6 +34,8 @@ def usage : String :=
       "            Each imported worker handles one exact import header and then exits.",
       "            Reduce this when imported environments cause memory pressure.",
       "  -h, --help",
+      "  --version",
+      "            Print the leanfmt version.",
       "",
       "Internal debugging options (not intended for general use):",
       "  --profile",
@@ -109,6 +113,7 @@ def parseArgs (args : List String) : ParseResult :=
     | "--include-hidden" :: rest =>
         loop { options with includeHidden := true } files rest
     | "-h" :: _ | "--help" :: _ => .help
+    | "--version" :: _ => .version
     | arg :: rest =>
         if arg.startsWith "-" then
           .error s!"unknown option: {arg}"
@@ -122,6 +127,7 @@ def runMain (args : List String) (hardwareConcurrency := 1) : IO UInt32 := do
       LeanFmt.Driver.runOptions
         { options with hardwareConcurrency := max 1 hardwareConcurrency }
   | .help => IO.println usage; pure 0
+  | .version => IO.println (← LeanFmt.fullVersionString); pure 0
   | .error message => IO.eprintln s!"leanfmt: {message}"; IO.eprintln usage; pure 1
 
 end LeanFmt.Cli

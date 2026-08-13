@@ -11555,6 +11555,7 @@ def assertCliParsing : IO Unit := do
     LeanFmt.Cli.usage "--line-width"
   assertTextContains "CLI help documents imported worker concurrency"
     LeanFmt.Cli.usage "--jobs"
+  assertTextContains "CLI help documents version output" LeanFmt.Cli.usage "--version"
   assertTextLacks "CLI help omits obsolete worker environment lifetime"
     LeanFmt.Cli.usage "--environments-per-worker"
   assertTextLacks "CLI help omits replaced preservation option"
@@ -11568,6 +11569,22 @@ def assertCliParsing : IO Unit := do
         (options.files.map toString == ["GraphQL.lean", "LeanFmt.lean"])
   | result =>
       throw <| IO.userError s!"CLI parser should accept --check and files: {repr result}"
+  match LeanFmt.Cli.parseArgs ["--version"] with
+  | .version =>
+      assertEq "Lake TOML leanfmt version"
+        (reprStr (some "1.2.3"))
+        (reprStr
+          (LeanFmt.versionFromLakefileToml? "name = \"leanfmt\"\nversion = \"1.2.3\"\n"))
+      assertEq "Lake manifest leanfmt tag version" (reprStr (some "7.8.9"))
+        (reprStr
+          (LeanFmt.versionFromLakeManifest?
+            "{\"packages\":[{\"name\":\"dependency\",\"rev\":\"v1.0.0\"},{\"name\":\"leanfmt\",\"rev\":\"v7.8.9\"}]}"))
+      let currentVersion ← LeanFmt.versionString
+      assertEq "CLI version string"
+        s!"leanfmt version {currentVersion} (Lean version {Lean.versionString})"
+        (← LeanFmt.fullVersionString)
+  | result =>
+      throw <| IO.userError s!"CLI parser should accept --version: {repr result}"
   match LeanFmt.Cli.parseArgs ["--check-exception", "GraphQL.lean"] with
   | .run options =>
       assertTrue "CLI exception check flag" options.checkException
@@ -13640,6 +13657,7 @@ def assertStructuralExtensionShapesReuseExistingOwners (env : Lean.Environment)
 
 def assertLakeDslFormatting : IO Unit := do
   let env ← SyntaxTree.importEnvironment #[{ module := `Lake }]
+  let mathlibRevision := s!"v{Lean.versionString}"
   let source :=
     "import Lake\n"
     ++ "open Lake DSL\n"
@@ -13648,7 +13666,7 @@ def assertLakeDslFormatting : IO Unit := do
     ++ "  srcDir := \".\"\n"
     ++ "\n"
     ++ "require mathlib from git\n"
-    ++ "  \"https://github.com/leanprover-community/mathlib4.git\" @ \"v4.33.0\"\n"
+    ++ s!"  \"https://github.com/leanprover-community/mathlib4.git\" @ \"{mathlibRevision}\"\n"
     ++ "\n"
     ++ "@[default_target]\n"
     ++ "lean_lib QuantumComputing where\n"
@@ -13670,7 +13688,7 @@ def assertLakeDslFormatting : IO Unit := do
     ++ "  srcDir := \".\"\n"
     ++ "\n"
     ++ "require mathlib from git\n"
-    ++ "  \"https://github.com/leanprover-community/mathlib4.git\" @ \"v4.33.0\"\n"
+    ++ s!"  \"https://github.com/leanprover-community/mathlib4.git\" @ \"{mathlibRevision}\"\n"
     ++ "\n"
     ++ "@[default_target]\n"
     ++ "lean_lib QuantumComputing where\n"
