@@ -1263,6 +1263,16 @@ A `suffices` body likewise begins on a separate line after the proposition and
 its `from` proof. The body remains offside from the proof expression so Lean's
 layout parser cannot absorb it into that expression.
 
+When `by` introduces the proof directly, it stays on the proposition line and
+the protected proof body uses the `suffices` base rather than the proposition's
+ending column:
+
+```lean
+suffices VeryLongProposition firstArgument secondArgument by
+  exact proof
+this
+```
+
 A `have` body also begins on a separate line. When its declaration does not fit,
 the assigned value breaks after `:=` while the following body remains aligned
 with the `have` expression rather than the assigned value. A dependent return
@@ -1342,6 +1352,19 @@ Accepted source breaks between branch boundaries can keep an intentional
 multiline conditional even when a flatter form fits. Because conditionals are
 non-flow rules, any accepted branch break activates the complete balanced
 branch layout.
+
+A dependent condition keeps a fitting `name : condition` header together. If
+the condition itself must wrap, it uses the same named-discriminant layout as a
+named `cases` target and breaks before `:` rather than leaving `name :` alone:
+
+```lean
+if h
+    : VeryLongPredicate firstArgument secondArgument
+        thirdArgument then
+  firstResult
+else
+  secondResult
+```
 
 Conditionals normally start on an indentation boundary. An immediately preceding
 opening parenthesis keeps tight spacing instead; branch indentation rounds up from
@@ -1527,7 +1550,13 @@ IO.println usage; pure 0
 ```
 
 If it does not fit, the do-sequence rules provide the normal balanced
-statement boundaries.
+statement boundaries, and the following statement returns to the peer
+statement base:
+
+```lean
+IO.println veryLongMessage;
+pure result
+```
 
 A refutable `let` with a fallback treats its value and fallback as separate
 branches. A multiline value begins one level below `:=`; `|` aligns with

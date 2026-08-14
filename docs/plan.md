@@ -28,52 +28,6 @@ command wrapper alone does not distinguish a parser-owned clause from an
 optional direct term, so attachment must wait for explicit parser-category
 ownership rather than inferring it from tokens or spaces.
 
-### Named conditional conditions
-
-```lean
-if h :
-  start < n then
-```
-
-A fitting dependent condition can break after `h :`. It should use the same
-complete-header grouping policy as named `cases` targets and `match` inputs.
-
-### Structural header suffixes
-
-```lean
-if longCondition
-  then do
-    action
-else
-  if anotherCondition then fallback
-
-for item in items
-do
-  action item
-
-field :=
-  by
-    exact proof
-```
-
-`then` or `then do` can be stranded after a condition wraps. The suffix should
-stay with the condition's final line and return to the conditional base.
-Likewise, an `else if` chain should remain a peer chain instead of gaining a
-new nested conditional base. Parser-owned `do` and `by` introducers after loop,
-alternative, and assignment headers should follow the same suffix policy.
-
-### Do statement separator bases
-
-```lean
-do
-  IO.println message;
-      pure result
-```
-
-A statement after `;` can inherit the preceding expression's continuation
-column. It should remain inline when it fits or return to the peer statement
-base when it breaks.
-
 ### Try clause bases
 
 ```lean
@@ -85,16 +39,48 @@ try
 `catch` can inherit the `try` body's indentation after its enclosing declaration
 moves. Peer `catch` and `finally` clauses should align with `try`.
 
-### Refutable let fallbacks
+### Parser-owned `do` suffix attachment
+
+```lean
+for item in items
+do
+  action item
+
+catch error =>
+  do
+    fallback error
+```
+
+Direct `do` and `by` suffixes are grouped for several structural headers, but
+some term-level loops, alternatives, assignments, and tactic clauses still
+detach their introducer. Their parser-owned header and body must be exposed by
+the syntax tree before the shared suffix and body-base policies can apply.
+
+### Named discriminant source breaks
+
+```lean
+if h :
+    start < n then
+```
+
+Named `if` and elimination discriminants expose the preferred break before `:`,
+but an old source break after `:` can still take precedence. Existing source
+layout must not override the structural break owned by the grouped
+discriminant.
+
+### Refutable fallback attachment
 
 ```lean
 let some value ← action
 |
-  return none
+  throwError
+    "long fallback message"
 ```
 
-Eight Mathlib cases leave `|` alone. The bar should align with its `let` and
-remain attached to the fallback's first token or leading comment.
+The fallback bar now aligns with its owning `let`, but a protected multiline
+fallback can still leave `|` alone. When the first fallback token can accept the
+boundary, it should remain attached to the bar without changing the fallback's
+internal layout.
 
 ### Infix horizontal spacing
 
@@ -173,30 +159,6 @@ wrapper (by
 Some inline `by` and `match` bodies retain the introducer's source column after
 their owner moves. Protected bodies should use the nearest structural base.
 
-### Lambda body bases
-
-```lean
-fun value => do
-action value
-
-fun value =>
-result value
-```
-
-A lambda body can retain its old source column when the lambda moves, leaving
-the body level with `fun` or `=> do`. The body should use the lambda's structural
-base, and a direct `do` or `by` introducer should remain attached to `=>`.
-
-### Suffices proof body bases
-
-```lean
-suffices veryLongProposition by
-                              exact proof
-```
-
-The proof after `suffices ... by` can retain the proposition's ending column.
-It should use the tactic's structural proof-body base.
-
 ### Tactic continuation bases
 
 ```lean
@@ -211,37 +173,45 @@ Operands after tactic introducers and branches after tactic combinators can
 inherit a distant source column. They should use the tactic's structural
 continuation base without treating tactic names as generic prefix operators.
 
+### External validator project environments
+
+```text
+import all Project.Module
+external declaration 'Project.nativeParser'
+```
+
+Formatting an imported source in an earlier batch can invalidate private object
+data needed by a later `import all`. Projects with native parser extensions can
+also require symbols that an externally built formatter executable does not
+link. The validator needs a target-project-aware execution path and a
+dependency-safe artifact policy; these are infrastructure failures, not missing
+formatting rules in third-party syntax.
+
 ## Progress
-
-### Checkpoint 10: suffix ownership
-
-Opaque declaration `:=` and structurally proven core suffixes stay attached when
-they fit. Terminal delimited operands keep their opener with term-taking tactics,
-while direct function and command arguments retain application layout. `else do`
-is grouped only in its direct clause wrapper, preserving refutable-fallback
-ownership. The implementation uses existing syntax ownership and suffix grouping
-without a renderer policy. The complete local gate and GraphQL, quantum, Hex,
-and Mathlib validations pass. The final Mathlib review closed a
-terminal-delimiter gap under attached tactic-sequence wrappers without finding
-a new checkpoint blocker.
-
-### Checkpoint 11: structural headers
-
-Generated command suffixes receive explicit parser-category ownership. Named
-conditional conditions stay together when they fit. Wrapped conditions, `then`
-suffixes, loop and assignment introducers, `try` peers, refutable fallbacks,
-statement separators, lambda bodies, `suffices` proofs, and declaration
-continuations use their owning construct's base. Direct `do` and `by`
-introducers remain attached to loop, alternative, assignment, and lambda
-headers.
 
 ### Checkpoint 12: expression bases
 
 Infix spacing is stable, nested chains share one base, and `<|` is not left alone
-when an ordinary operand can accept the break. Comment-owned and protected
-inline bodies use structural bases without weakening source preservation.
+when an ordinary operand can accept the break. Refutable fallback bars attach to
+their first movable token, and comment-owned and protected inline bodies use
+structural bases without weakening source preservation. `try`, `catch`, and
+`finally` retain one peer clause base when their owner moves.
 
-### Checkpoint 13: release validation
+### Checkpoint 13: declaration and proof ownership
+
+Extension command suffixes, declaration continuations, nested matches, and
+tactic continuations use explicit parser ownership. Remaining parser-owned `do`
+suffixes and named discriminants obey their grouped structure. No renderer
+policy or token spelling substitutes for missing syntax-tree structure.
+
+### Checkpoint 14: external validation environments
+
+The validator can run against project-native parser extensions and preserve
+usable `import all` artifacts across batches. Target-toolchain fallback remains
+automatic, and the project-aware path does not penalize ordinary Mathlib-style
+validation.
+
+### Checkpoint 15: release validation
 
 The complete local gate and fresh GraphQL, quantum, Hex, and Mathlib validations
 pass. Every formatting delta is reviewed, timings show no material regression,

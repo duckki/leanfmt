@@ -123,7 +123,7 @@ def workerCwd? (options : Options) : IO (Option FilePath) := do
     | path :: rest => do
         let some root ←
           findLakePackageRoot? path
-          | pure none
+        | pure none
         match expected? with
         | none => commonRoot? (some root) rest
         | some expected =>

@@ -324,7 +324,7 @@ def assertTacticQuotationAntiquotationPreserved (env : Lean.Environment) : IO Un
     (← codePreservedIgnoringWhitespace env movedCommandQuotation movedResult.formatted)
   assertTextContains "moved command quotation follows its do body"
     movedResult.formatted
-    "      `(\n"
+    "    `(\n"
   let movedAgain ←
     Formatter.formatSourceWithEnv env movedResult.formatted
       "moved-command-quotation-formatted.lean" { lineWidth := 60 }
@@ -1803,7 +1803,7 @@ def assertDefinitionLikeCommandsRegroup : IO Unit := do
         children.findIdx?
           fun child =>
             SyntaxTree.rawKind? child == some `Lean.Parser.Command.whereStructInst
-        | throw <| IO.userError "custom structure-valued definition has no where body"
+      | throw <| IO.userError "custom structure-valued definition has no where body"
       let segment := Formatter.LineBreakRules.Segment.ofTree customWhereDefinition
       let rule := Formatter.LineBreakRules.formattingRuleFor customWhereDefinition
       assertTrue "custom structure-valued declarations keep where as a header suffix"
@@ -2856,7 +2856,7 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
       ++ "  | none")
     ("  let .leaf comma :=\n"
       ++ "    veryLongAtomicValueNameForDoLetElseFormattingThatCannotShareTheHeaderLine\n"
-      ++ "    | none")
+      ++ "  | none")
   assertCase "do-let fallback breaks multiline alternative"
     ("  let .leaf comma := commaTree | "
       ++ "veryLongAtomicFallbackNameForDoLetElseFormattingThatCannotShareTheHeaderLine")
@@ -2868,15 +2868,15 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
       ++ "  | veryLongAtomicFallbackNameForDoLetElseFormattingThatCannotShareTheHeaderLine")
     ("  let .leaf comma :=\n"
       ++ "    veryLongAtomicValueNameForDoLetElseFormattingThatCannotShareTheHeaderLine\n"
-      ++ "    | veryLongAtomicFallbackNameForDoLetElseFormattingThatCannotShareTheHeaderLine")
+      ++ "  | veryLongAtomicFallbackNameForDoLetElseFormattingThatCannotShareTheHeaderLine")
   assertCase "do-let fallback keeps the bar with a wrapping fallback"
     ("  let .leaf comma := commaTree\n"
       ++ "  | return .text "
       ++ "\"A long fallback message that cannot share the fallback separator line at all\"")
     ("  let .leaf comma := commaTree\n"
-      ++ "    |\n"
-      ++ "      return .text\n"
-      ++ "        \"A long fallback message that cannot share the fallback separator line at all\"")
+      ++ "  |\n"
+      ++ "    return .text\n"
+      ++ "      \"A long fallback message that cannot share the fallback separator line at all\"")
   let trailingCommentSource :=
     "def fallbackComment (depth : Nat) : Id Bool := do\n"
     ++ "  let depth + 1 := depth | pure (); return false -- fallback comment remains attached\n"
@@ -2928,7 +2928,7 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
   let multilineFallbackExpected :=
     "def multilineFallback : Option Nat := do\n"
     ++ "  let (.some first, .some second) := (some 1, some 2)\n"
-    ++ "    | failure\n"
+    ++ "  | failure\n"
     ++ "  return first + second\n"
   let multilineFallbackFormatted ←
     Formatter.formatSourceWithEnv env multilineFallbackSource
@@ -2983,9 +2983,9 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
         commentedFallbackResult.formatted)
   assertTextContains "commented do-let fallback indents its body beneath the pipe"
     commentedFallbackResult.formatted
-    ("          | -- We put this here rather than using a big try block.\n"
-      ++ "            -- The fallback remains nested after the surrounding body moves.\n"
-      ++ "            sinit s\n"
+    ("        | -- We put this here rather than using a big try block.\n"
+      ++ "          -- The fallback remains nested after the surrounding body moves.\n"
+      ++ "          sinit s\n"
       ++ "        let s := s.pushFold lit\n")
   let commentedFallbackAgain ←
     Formatter.formatSourceWithEnv env commentedFallbackResult.formatted
@@ -3057,7 +3057,7 @@ def assertDoLetArrowFallbackBreaksBeforeContinuation (env : Lean.Environment)
     ++ "  let .some value ←\n"
     ++ "    veryLongOptionProviderNameForDoLetArrowFallbackBreak (some 1) (some 2) (some 3)\n"
     ++ "      (some 4)\n"
-    ++ "    | fallbackValue\n"
+    ++ "  | fallbackValue\n"
     ++ "  assertInstancesCommute\n"
     ++ "  some value\n"
   let formatted ← Formatter.formatSourceWithEnv env source "do-let-arrow-fallback.lean"
@@ -3085,8 +3085,8 @@ def assertNestedDoLetArrowFallbackKeepsBodyBase (env : Lean.Environment) : IO Un
     (← codePreservedIgnoringWhitespace env source result.formatted)
   assertTextContains "nested do-let arrow fallback keeps its body beneath the pipe"
     result.formatted
-    ("          | -- Keep the multiline fallback beneath the pipe.\n"
-      ++ "            let fallback := current\n")
+    ("        | -- Keep the multiline fallback beneath the pipe.\n"
+      ++ "          let fallback := current\n")
   assertTextContains
     "nested do-let arrow fallback keeps the continuation outside its body"
     result.formatted
@@ -3134,7 +3134,7 @@ def assertDoLetExprFallbackBreaksBeforeContinuation (env : Lean.Environment)
   assertTrue "do let_expr fallback preserves code"
     (← codePreservedIgnoringWhitespace env source formatted)
   assertTextContains "do let_expr fallback stays separate from continuation"
-    formatted "\n          | y\n        z\n"
+    formatted "\n        | y\n        z\n"
   assertTextLacks "do let_expr fallback does not absorb continuation" formatted "| y z"
   let formattedAgain ←
     Formatter.formatSourceWithEnv env formatted "do-let-expr-fallback-formatted.lean"
@@ -6791,10 +6791,15 @@ def assertCliSelfFormattingRegressions (env : Lean.Environment) : IO Unit := do
     ++ "  match action with\n"
     ++ "  | .help => IO.println usage;\n"
     ++ "      pure 0\n"
+  let semicolonSequenceExpected :=
+    "def runMain := do\n"
+    ++ "  match action with\n"
+    ++ "  | .help => IO.println usage;\n"
+    ++ "  pure 0\n"
   let semicolonSequenceFormatted ←
     Formatter.formatSourceWithEnv env semicolonSequence "semicolon-sequence.lean"
   assertEq "semicolon sequence keeps its parsed statement boundary"
-    semicolonSequence semicolonSequenceFormatted
+    semicolonSequenceExpected semicolonSequenceFormatted
 
   let sourceBrokenIf :=
     "def parse arg :=\n"
@@ -9069,9 +9074,9 @@ def assertDependentIfThenElseKeepsHeaderAndBranchesAligned (env : Lean.Environme
     ++ "    veryLongElseBranch firstArgument secondArgument\n"
   let expected :=
     "def choose : Nat :=\n"
-    ++ "  if h :\n"
-    ++ "    VeryLongPredicateName firstArgument secondArgument\n"
-    ++ "      thirdArgument then\n"
+    ++ "  if h\n"
+    ++ "      : VeryLongPredicateName firstArgument secondArgument\n"
+    ++ "          thirdArgument then\n"
     ++ "    veryLongThenBranch h firstArgument secondArgument\n"
     ++ "  else\n"
     ++ "    veryLongElseBranch firstArgument secondArgument\n"
@@ -9192,7 +9197,7 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
   let semicolonExpected :=
     "def semicolonDoSequence : Nat := do\n"
     ++ "  pure 0;\n"
-    ++ "      return valueWithEnoughCharactersToReallyRequireBreaking -- retain the result\n"
+    ++ "  return valueWithEnoughCharactersToReallyRequireBreaking -- retain the result\n"
   let semicolonFormatted ←
     Formatter.formatSourceWithEnv env semicolonSource
       "semicolon-do-sequence.lean" { lineWidth := 60 }
@@ -12096,7 +12101,7 @@ def assertExportedEnvironmentIncludesMetaIrClosure : IO Unit := do
   let environment ← prefixes.importEnvironment { imports, level := .exported }
   let some leafIndex :=
     environment.getModuleIdx? `LeanFmt.Tests.MetaImportLeaf
-    | throw <| IO.userError "expected meta/IR-only leaf import"
+  | throw <| IO.userError "expected meta/IR-only leaf import"
   assertTrue "meta/IR-only import is available during elaboration"
     (environment.header.modules[leafIndex]!.irPhases == .comptime)
 
@@ -15508,6 +15513,96 @@ def assertOwnedTerminalSuffixesStayAttached (_env : Lean.Environment) : IO Unit 
         }
     assertEq s!"terminal {name} formatting is idempotent" formatted formattedAgain
 
+def assertStructuralHeadersOwnAttachedBodies (env : Lean.Environment) : IO Unit := do
+  let check (name source expected : String) (lineWidth : Nat := 100) : IO Unit := do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source s!"{name}.lean" { lineWidth }
+    assertTrue s!"{name} formatting does not fall back" (!result.fellBack)
+    assertEq s!"{name} uses its structural header and body bases" expected
+      result.formatted
+    assertTrue s!"{name} formatting preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    let formattedAgain ←
+      Formatter.formatSourceWithEnv env result.formatted s!"{name}-formatted.lean"
+        { lineWidth }
+    assertEq s!"{name} formatting is idempotent" result.formatted formattedAgain
+
+  check "fitting-named-condition"
+    ("def namedCondition : Nat :=\n"
+      ++ "  if h : start = 0 then first\n"
+      ++ "  else second\n")
+    ("def namedCondition : Nat :=\n"
+      ++ "  if h : start = 0 then\n"
+      ++ "    first\n"
+      ++ "  else\n"
+      ++ "    second\n")
+
+  check "macro-do-suffix"
+    ("macro \"sample\" : term =>\n" ++ "  do\n" ++ "    `(0)\n")
+    ("macro \"sample\"\n" ++ "  : term => do\n" ++ "    `(0)\n")
+
+  check "named-argument-by-suffix"
+    ("def namedArgument :=\n"
+      ++ "  build (proof :=\n"
+      ++ "    by\n"
+      ++ "      exact result)\n")
+    ("def namedArgument :=\n"
+      ++ "  build\n"
+      ++ "    (proof := by\n"
+      ++ "      exact result)\n")
+    44
+
+  check "lambda-do-body-base"
+    ("def lambdaDo :=\n"
+      ++ "  withSetOptionIn\n"
+      ++ "    fun value => do\n"
+      ++ "  action value\n")
+    ("def lambdaDo :=\n"
+      ++ "  withSetOptionIn\n"
+      ++ "    fun value => do\n"
+      ++ "      action value\n")
+
+  check "for-do-suffix"
+    ("def loop := do\n"
+      ++ "  for item in collectionWithEnoughCharactersToBreak\n"
+      ++ "  do\n"
+      ++ "    action item\n")
+    ("def loop := do\n"
+      ++ "  for item\n"
+      ++ "      in collectionWithEnoughCharactersToBreak do\n"
+      ++ "    action item\n")
+    52
+
+  check "refutable-fallback-base"
+    ("def refutableFallback := do\n"
+      ++ "  let some value ← lookupValue\n"
+      ++ "  |\n"
+      ++ "    return none\n"
+      ++ "  pure value\n")
+    ("def refutableFallback := do\n"
+      ++ "  let some value ← lookupValue\n"
+      ++ "  | return none\n"
+      ++ "  pure value\n")
+
+  check "semicolon-statement-base"
+    ("def semicolonSequence : Nat := do\n"
+      ++ "  pure 0; return valueWithEnoughCharactersToRequireBreaking\n")
+    ("def semicolonSequence : Nat := do\n"
+      ++ "  pure 0;\n"
+      ++ "  return valueWithEnoughCharactersToRequireBreaking\n")
+    55
+
+  check "suffices-proof-body-base"
+    ("theorem sufficesBody : True :=\n"
+      ++ "  suffices VeryLongPropositionName firstArgument secondArgument by\n"
+      ++ "          exact proof\n"
+      ++ "  this\n")
+    ("theorem sufficesBody : True :=\n"
+      ++ "  suffices VeryLongPropositionName firstArgument secondArgument by\n"
+      ++ "    exact proof\n"
+      ++ "  this\n")
+    80
+
 def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
     : IO Unit := do
   let fallbackSource :=
@@ -15887,6 +15982,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
 
 def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertOwnedTerminalSuffixesStayAttached env
+  assertStructuralHeadersOwnAttachedBodies env
   assertFallbackAndConditionalSuffixesStayAttached env
   assertIfThenElseRuleBreaksBalancedShape env
   assertShortIfThenElseStaysFlatInEquationArm env

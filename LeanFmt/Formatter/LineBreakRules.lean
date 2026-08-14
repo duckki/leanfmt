@@ -697,6 +697,19 @@ def defaultBreaks (context : RuleContext) (segment : Segment) : List BreakPoint 
   else
     infixBreaks
 
+def structurallyOwnsAttachedBody (segment : Segment) : Bool :=
+  let indexes := defaultPresentChildIndexes segment
+  indexes.any
+    fun bodyIndex =>
+      match previousContentIndex? segment bodyIndex,
+            segment.child? bodyIndex with
+      | some headerIndex, some (.node bodyKind _) =>
+          match segment.child? headerIndex, bodyKind with
+          | some (.node .suffixGroup _), .proofBody _
+          | some (.node .suffixGroup _), .raw `Lean.Parser.Term.doSeqIndent => true
+          | _, _ => false
+      | _, _ => false
+
 def defaultIsInfix (context : RuleContext) (segment : Segment) : Bool :=
   !(defaultInfixBreaks context segment).isEmpty
 
@@ -707,6 +720,9 @@ def defaultRule : LineBreakRule :=
     flow :=
       fun context segment =>
         !(defaultBreaks context segment).isEmpty && !defaultIsInfix context segment
+    inheritBase :=
+      fun context segment =>
+        defaultInheritBase context segment || structurallyOwnsAttachedBody segment
     liftsTailIndentation := defaultIsInfix
     breakPoints := defaultBreaks
   }
@@ -2033,7 +2049,7 @@ def doSeqSemicolonBreaks (context : RuleContext) (segment : Segment) : List Brea
             | some previousIndex =>
                 match segment.child? previousIndex >>= SyntaxTree.Tree.lastToken? with
                 | some token =>
-                    if token.lexeme == ";" then boundaryBreak? segment index 2 else none
+                    if token.lexeme == ";" then boundaryBreak? segment index 0 else none
                 | none => none
             | none => none
   else
@@ -2115,7 +2131,7 @@ def doFallbackBodyRequiresBreak (segment : Segment) : Bool :=
 def doFallbackBreaks (segment : Segment) : List BreakPoint :=
   match doFallbackClauseIndex? segment with
   | some clauseIndex =>
-      let clauseBreak := [boundaryBreak? segment clauseIndex 1].filterMap id
+      let clauseBreak := [boundaryBreak? segment clauseIndex 0].filterMap id
       let continuationBreaks :=
         segment.indexes.filterMap
           fun index =>
@@ -2897,14 +2913,17 @@ def ifThenElseBreaks (_context : RuleContext) (segment : Segment) : List BreakPo
       else
         boundaryBreak? segment index indentLevels
 
-def dependentIfThenElseBreaks (_context : RuleContext) (segment : Segment)
+def dependentIfThenElseBreaks (context : RuleContext) (segment : Segment)
     : List BreakPoint :=
-  [(3, 1), (5, 1), (6, 0), (7, 1)].filterMap
-    fun (index, indentLevels) =>
-      if attachedBodyStart segment index then
-        none
-      else
-        boundaryBreak? segment index indentLevels
+  if childIsNodeKind segment 1 .namedDiscriminant then
+    ifThenElseBreaks context segment
+  else
+    [(3, 1), (5, 1), (6, 0), (7, 1)].filterMap
+      fun (index, indentLevels) =>
+        if attachedBodyStart segment index then
+          none
+        else
+          boundaryBreak? segment index indentLevels
 
 def ifLetThenElseBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   [(6, 1), (7, 0), (8, 1)].filterMap

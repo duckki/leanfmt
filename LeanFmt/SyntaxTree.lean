@@ -1367,6 +1367,42 @@ private def regroupTerminalLeadingTokenChildren
       | _, _ => children
   | _ => children
 
+private partial def unwrapAttachedBodyRemainder : Tree → Tree
+  | tree@(.node (.raw kind) children) =>
+      if kind == `Lean.Parser.Term.do
+          || kind == `Lean.Parser.Term.doNested
+          || kind == `Lean.Parser.Term.byTactic
+          || kind == `Lean.Parser.Term.byTactic'
+          || kind == `Lean.Parser.Command.macroRhs then
+        match singleContentChild? children with
+        | some child => unwrapAttachedBodyRemainder child
+        | none => tree
+      else
+        tree
+  | tree => tree
+
+private def regroupAttachedBodyIntroducerChildren (children : Array Tree) : Array Tree :=
+  let contentIndexes :=
+    (List.range children.size).filter
+      fun index => children[index]?.bind Tree.firstToken? |>.isSome
+  let rec loop : List Nat → Array Tree
+    | rightIndex :: leftIndex :: rest =>
+        match children[leftIndex]?, children[rightIndex]? with
+        | some left, some right =>
+            if treeStartsAttachedBody right then
+              match splitLeadingToken?
+                      (fun token => token.lexeme == "do" || token.lexeme == "by")
+                      right with
+              | some (introducer, body) =>
+                  children.set! leftIndex (.node .suffixGroup #[left, introducer])
+                  |>.set! rightIndex (unwrapAttachedBodyRemainder body)
+              | none => children
+            else
+              loop (leftIndex :: rest)
+        | _, _ => loop (leftIndex :: rest)
+    | _ => children
+  loop contentIndexes.reverse
+
 private def regroupDoIfElseBodySuffix : Tree → Tree
   | .node (.raw `null) children =>
       .node (.raw `null) <| regroupRightmostSuffixChildren children attachedDoTree?
@@ -2246,8 +2282,11 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
   else if kind == `Lean.Parser.Term.basicFun then
     match children[0]? with
     | some parameters =>
-        .node (.raw kind) <| children.set! 0 (regroupSignatureParameters parameters)
-    | none => .node (.raw kind) children
+        .node (.raw kind)
+        <| regroupAttachedBodyIntroducerChildren
+        <| children.set! 0 (regroupSignatureParameters parameters)
+    | none =>
+        .node (.raw kind) (regroupAttachedBodyIntroducerChildren children)
   else if kind == `Lean.«command__Unif_hint____Where_|_-⊢__» then
     .node (.raw kind) (regroupUnifHintChildren children)
   else if kind == `Lean.Parser.Term.letEqnsDecl then
@@ -2466,6 +2505,22 @@ def regroupNamedDiscriminant? (children : Array Tree) : Option Tree :=
   else
     none
 
+def regroupDependentIfNamedDiscriminant? (children : Array Tree)
+    : Option (Array Tree) := do
+  if children.size != 8 then
+    none
+  let name ← children[1]?
+  let colon ← children[2]?
+  let discriminant ← children[3]?
+  if colon.singleToken?.any (·.lexeme == ":")
+      && name.firstToken?.isSome
+      && discriminant.firstToken?.isSome then
+    some
+    <| #[children[0]!, .node .namedDiscriminant #[name, colon, discriminant]]
+        ++ childrenRange children 4 children.size
+  else
+    none
+
 def regroupTacticAlternativeChildren (children : Array Tree) : Array Tree :=
   let regrouped? : Option (Array Tree) := do
     let lhs ← children[0]?
@@ -2497,8 +2552,14 @@ def regroupRawNode
     .node (.raw kind) ((regroupInductionChildren children).getD children)
   else if kind == `Lean.Parser.Tactic.inductionAlt then
     .node (.raw kind) (regroupTacticAlternativeChildren children)
+  else if kind == `termDepIfThenElse then
+    .node (.raw kind) ((regroupDependentIfNamedDiscriminant? children).getD children)
   else if isIfThenElseKind kind then
     regroupIfThenElseChain kind children
+  else if kind == `Lean.Parser.Command.macroTail
+          || kind == `Lean.Parser.Term.namedArgument
+          || kind == `Lean.Parser.Term.sufficesDecl then
+    .node (.raw kind) (regroupAttachedBodyIntroducerChildren children)
   else if kind == `Lean.Parser.Term.app && children.size == 2 then
     match children[0]?, children[1]? with
     | some head, some argumentContainer =>
