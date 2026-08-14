@@ -959,14 +959,14 @@ def assertInlineSyntaxCommentKeepsSurroundingIndent (env : Lean.Environment)
     "def movedProjectNote :=\n"
     ++ "  wrapper\n"
     ++ "    (by\n"
-    ++ "    #project_note /-- The first line follows the syntax prefix.\n"
-    ++ "    Continuation lines move with the proof body. -/\n"
-    ++ "    trivial)\n"
+    ++ "      #project_note /-- The first line follows the syntax prefix.\n"
+    ++ "      Continuation lines move with the proof body. -/\n"
+    ++ "      trivial)\n"
   let movedResult ←
     Formatter.formatSourceWithEnvDetailed env movedSource "moved-inline-doc-comment.lean"
   assertTrue "moved inline multiline doc comment does not fall back"
     (!movedResult.fellBack)
-  assertEq "moved inline multiline doc comment preserves its relative base"
+  assertEq "moved inline multiline doc comment uses its structural proof base"
     movedExpected movedResult.formatted
   assertTrue "moved inline multiline doc comment preserves code"
     (← codePreservedIgnoringWhitespace env movedSource movedResult.formatted)
@@ -4032,9 +4032,9 @@ def assertMovedProofBodiesKeepRelativeIndentation (env : Lean.Environment) : IO 
     ++ "    veryLongRightProofNameWithEnoughCharactersToForceTheOperatorToBreak\n"
     ++ "  <| match condition with\n"
     ++ "      | true => by\n"
-    ++ "        exact True.intro\n"
+    ++ "          exact True.intro\n"
     ++ "      | false => by\n"
-    ++ "        exact True.intro\n"
+    ++ "          exact True.intro\n"
   let matchResult ←
     Formatter.formatSourceWithEnvDetailed env matchSource
       "proof-under-moved-match-alternative.lean"
@@ -6111,6 +6111,52 @@ def assertLowPriorityPipeKeepsStructurallyRenderedOperand (env : Lean.Environmen
     Formatter.formatSourceWithEnv env result.formatted
       "low-priority-pipe-structural-operand-formatted.lean"
   assertEq "structural pipe operand is idempotent" result.formatted formattedAgain
+
+  let showProofSource :=
+    "def pipeShowProof : True :=\n"
+    ++ "  veryLongFunctionNameWithEnoughCharactersToForcePipeBreak <| show True by\n"
+    ++ "    exact True.intro\n"
+  let showProofExpected :=
+    "def pipeShowProof : True :=\n"
+    ++ "  veryLongFunctionNameWithEnoughCharactersToForcePipeBreak\n"
+    ++ "  <|\n"
+    ++ "    show True by\n"
+    ++ "      exact True.intro\n"
+  let showProofResult ←
+    Formatter.formatSourceWithEnvDetailed env showProofSource
+      "low-priority-pipe-show-proof.lean" { lineWidth := 60 }
+  assertTrue "a detached show proof does not fall back" (!showProofResult.fellBack)
+  assertEq "a detached show proof keeps its tactic body structural base"
+    showProofExpected showProofResult.formatted
+  assertTrue "a detached show proof preserves code"
+    (← codePreservedIgnoringWhitespace env showProofSource showProofResult.formatted)
+  let showProofAgain ←
+    Formatter.formatSourceWithEnv env showProofResult.formatted
+      "low-priority-pipe-show-proof-formatted.lean" { lineWidth := 60 }
+  assertEq "a detached show proof is idempotent" showProofResult.formatted showProofAgain
+
+  let byProofSource :=
+    "theorem pipeByProof (hb : True → True) : True :=\n"
+    ++ "  fun e ↦ hb <| by\n"
+    ++ "  exact proofTermWithEnoughCharactersToForceTheProofBodyBreak e\n"
+  let byProofExpected :=
+    "theorem pipeByProof (hb : True → True)\n"
+    ++ "    : True :=\n"
+    ++ "  fun e ↦\n"
+    ++ "    hb <| by\n"
+    ++ "      exact proofTermWithEnoughCharactersToForceTheProofBodyBreak e\n"
+  let byProofResult ←
+    Formatter.formatSourceWithEnvDetailed env byProofSource
+      "low-priority-pipe-by-proof.lean" { lineWidth := 44 }
+  assertTrue "a detached by proof does not fall back" (!byProofResult.fellBack)
+  assertEq "a detached by proof indents beneath its moved introducer"
+    byProofExpected byProofResult.formatted
+  assertTrue "a detached by proof preserves code"
+    (← codePreservedIgnoringWhitespace env byProofSource byProofResult.formatted)
+  let byProofAgain ←
+    Formatter.formatSourceWithEnv env byProofResult.formatted
+      "low-priority-pipe-by-proof-formatted.lean" { lineWidth := 44 }
+  assertEq "a detached by proof is idempotent" byProofResult.formatted byProofAgain
 
   let protectedSource :=
     "def pipeProtectedShow :=\n"
@@ -15101,6 +15147,367 @@ def assertTightIndexedExtensionUsesStructuralRule (_env : Lean.Environment)
   let formatted ← Formatter.formatSourceWithEnv env source "tight-indexed-extension.lean"
   assertEq "fitting tight indexed extension syntax stays compact" source formatted
 
+def assertOwnedTerminalSuffixesStayAttached (_env : Lean.Environment) : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let directCommandSource :=
+    "#project_term sample buildResult { first := longFirstValue, second := longSecondValue }\n"
+  let directCommandExpected :=
+    "#project_term sample\n"
+    ++ "  buildResult\n"
+    ++ "    {\n"
+    ++ "      first := longFirstValue,\n"
+    ++ "      second := longSecondValue\n"
+    ++ "    }\n"
+  let directCommandResult ←
+    Formatter.formatSourceWithEnvDetailed env directCommandSource
+      "terminal-command-direct-term.lean" { lineWidth := 44 }
+  assertTrue "a direct command term does not fall back" (!directCommandResult.fellBack)
+  assertEq "a direct command term retains ordinary application layout"
+    directCommandExpected directCommandResult.formatted
+
+  let optionalCommandSource :=
+    "#project_optional sample project_wrapped { first := longFirstValue, second := longSecondValue }\n"
+  let optionalCommandExpected :=
+    "#project_optional sample\n"
+    ++ "  project_wrapped\n"
+    ++ "    {\n"
+    ++ "      first := longFirstValue,\n"
+    ++ "      second := longSecondValue\n"
+    ++ "    }\n"
+  let optionalCommandResult ←
+    Formatter.formatSourceWithEnvDetailed env optionalCommandSource
+      "terminal-command-optional-term.lean" { lineWidth := 44 }
+  assertTrue "an optional direct command term does not fall back"
+    (!optionalCommandResult.fellBack)
+  assertEq "an optional direct command term retains ordinary application layout"
+    optionalCommandExpected optionalCommandResult.formatted
+
+  let tacticSource :=
+    "example : True := by\n"
+    ++ "  refine {\n"
+    ++ "    first := longFirstValue,\n"
+    ++ "    second := longSecondValue\n"
+    ++ "  }\n"
+  let tacticExpected :=
+    "example : True := by\n"
+    ++ "  refine {\n"
+    ++ "    first := longFirstValue,\n"
+    ++ "    second := longSecondValue\n"
+    ++ "  }\n"
+  let tacticResult ←
+    Formatter.formatSourceWithEnvDetailed env tacticSource "terminal-tactic-operand.lean"
+      { lineWidth := 44 }
+  assertTrue "a term-taking tactic delimiter does not fall back" (!tacticResult.fellBack)
+  assertEq "a term-taking tactic keeps its terminal delimiter with its prefix"
+    tacticExpected tacticResult.formatted
+  let tacticTree ←
+    SyntaxTree.parseModuleStringWithEnv env tacticSource "terminal-tactic-tree.lean"
+  assertTrue "a term-taking tactic delimiter has suffix ownership"
+    ((findTacticTree? `Lean.Parser.Tactic.refine tacticTree.tree).any
+      fun tree => tree.containsNodeKind .suffixGroup)
+
+  let protectedTacticSource :=
+    "example : True := by\n"
+    ++ "  refine\n"
+    ++ "    { mp := by exact fun h ↦ h, mpr := by exact fun h ↦ h }\n"
+  let protectedTacticExpected :=
+    "example : True := by\n"
+    ++ "  refine {\n"
+    ++ "    mp := by exact fun h ↦ h,\n"
+    ++ "    mpr := by exact fun h ↦ h\n"
+    ++ "  }\n"
+  let protectedTacticResult ←
+    Formatter.formatSourceWithEnvDetailed env protectedTacticSource
+      "terminal-protected-tactic-operand.lean" { lineWidth := 44 }
+  assertTrue "a protected terminal tactic operand does not fall back"
+    (!protectedTacticResult.fellBack)
+  assertEq "a tactic keeps its opener when the operand contains proofs"
+    protectedTacticExpected protectedTacticResult.formatted
+  let protectedTacticTree ←
+    SyntaxTree.parseModuleStringWithEnv env protectedTacticSource
+      "terminal-protected-tactic-tree.lean"
+  assertTrue "a tactic with a terminal delimiter owns structural layout"
+    ((findTacticTree? `Lean.Parser.Tactic.refine protectedTacticTree.tree).any
+      SyntaxTree.Tree.isTacticLayoutOwner)
+
+  let protectedExactSource :=
+    "example : True := by\n"
+    ++ "  exact\n"
+    ++ "    { liftedCone :=\n"
+    ++ "        { point := selectedPoint\n"
+    ++ "          projection := selectedProjection }\n"
+    ++ "      validLift := by apply proveValidLift selectedPoint\n"
+    ++ "      makesLimit := finalLimitProof }\n"
+  let protectedExactExpected :=
+    "example : True := by\n"
+    ++ "  exact {\n"
+    ++ "    liftedCone :=\n"
+    ++ "      {\n"
+    ++ "        point := selectedPoint\n"
+    ++ "        projection := selectedProjection\n"
+    ++ "      }\n"
+    ++ "    validLift := by apply proveValidLift selectedPoint\n"
+    ++ "    makesLimit := finalLimitProof\n"
+    ++ "  }\n"
+  let protectedExactResult ←
+    Formatter.formatSourceWithEnvDetailed env protectedExactSource
+      "terminal-protected-exact-operand.lean" { lineWidth := 80 }
+  assertTrue "an owning tactic delimiter does not fall back"
+    (!protectedExactResult.fellBack)
+  assertEq "an owning tactic keeps its terminal delimiter with its prefix"
+    protectedExactExpected protectedExactResult.formatted
+
+  let constructorTacticSource :=
+    "example : True := by\n"
+    ++ "  exact\n"
+    ++ "    ⟨pref, suff, by\n"
+    ++ "      rw [hnext, hmergedContext, hpruned]⟩\n"
+  let constructorTacticExpected :=
+    "example : True := by\n"
+    ++ "  exact ⟨\n"
+    ++ "    pref,\n"
+    ++ "    suff,\n"
+    ++ "    by\n"
+    ++ "      rw [hnext, hmergedContext, hpruned]\n"
+    ++ "  ⟩\n"
+  let constructorTacticResult ←
+    Formatter.formatSourceWithEnvDetailed env constructorTacticSource
+      "terminal-constructor-tactic-operand.lean" { lineWidth := 44 }
+  assertTrue "a constructor tactic operand does not fall back"
+    (!constructorTacticResult.fellBack)
+  assertEq "a tactic constructor keeps sibling items aligned"
+    constructorTacticExpected constructorTacticResult.formatted
+
+  let parenthesizedTacticSource :=
+    "example : True := by\n"
+    ++ "  exact\n"
+    ++ "    (veryLongProofFunction firstArgument secondArgument).trans\n"
+    ++ "      anotherVeryLongProofFunction thirdArgument fourthArgument\n"
+  let parenthesizedTacticExpected :=
+    "example : True := by\n"
+    ++ "  exact (veryLongProofFunction firstArgument\n"
+    ++ "          secondArgument).trans\n"
+    ++ "          anotherVeryLongProofFunction thirdArgument\n"
+    ++ "          fourthArgument\n"
+  let parenthesizedTacticResult ←
+    Formatter.formatSourceWithEnvDetailed env parenthesizedTacticSource
+      "terminal-parenthesized-tactic-operand.lean" { lineWidth := 60 }
+  assertTrue "a parenthesized tactic operand does not fall back"
+    (!parenthesizedTacticResult.fellBack)
+  assertEq "a tactic keeps a terminal opener after application regrouping"
+    parenthesizedTacticExpected parenthesizedTacticResult.formatted
+
+  let bulletTacticSource :=
+    "example : True := by\n"
+    ++ "  · exact\n"
+    ++ "      ⟨firstValue * secondValue, by\n"
+    ++ "        rw [firstRewrite, secondRewrite]\n"
+    ++ "        rfl⟩\n"
+  let bulletTacticExpected :=
+    "example : True := by\n"
+    ++ "  · exact ⟨\n"
+    ++ "      firstValue * secondValue,\n"
+    ++ "      by\n"
+    ++ "        rw [firstRewrite, secondRewrite]\n"
+    ++ "        rfl\n"
+    ++ "    ⟩\n"
+  let bulletTacticResult ←
+    Formatter.formatSourceWithEnvDetailed env bulletTacticSource
+      "terminal-bullet-tactic-operand.lean" { lineWidth := 60 }
+  assertTrue "a terminal operand under a tactic-sequence wrapper does not fall back"
+    (!bulletTacticResult.fellBack)
+  assertEq "a tactic-sequence wrapper forwards terminal suffix ownership"
+    bulletTacticExpected bulletTacticResult.formatted
+
+  let applicationSource :=
+    "def ordinaryArgument :=\n"
+    ++ "  buildResult { first := longFirstValue, second := longSecondValue }\n"
+  let applicationExpected :=
+    "def ordinaryArgument :=\n"
+    ++ "  buildResult\n"
+    ++ "    {\n"
+    ++ "      first := longFirstValue,\n"
+    ++ "      second := longSecondValue\n"
+    ++ "    }\n"
+  let applicationFormatted ←
+    Formatter.formatSourceWithEnv env applicationSource
+      "delimited-application-argument.lean" { lineWidth := 44 }
+  assertEq "an ordinary delimited application argument keeps application layout"
+    applicationExpected applicationFormatted
+
+  let opaqueSource :=
+    "opaque generatedValueWithALongName : VeryLongReturnType := veryLongImplementationName\n"
+  let opaqueExpected :=
+    "opaque generatedValueWithALongName\n"
+    ++ "    : VeryLongReturnType :=\n"
+    ++ "  veryLongImplementationName\n"
+  let opaqueFormatted ←
+    Formatter.formatSourceWithEnv env opaqueSource "opaque-assignment-suffix.lean"
+      { lineWidth := 44 }
+  assertEq "an opaque declaration keeps its assignment with its signature"
+    opaqueExpected opaqueFormatted
+  let opaqueTree ←
+    SyntaxTree.parseModuleStringWithEnv env opaqueSource "opaque-assignment-tree.lean"
+  assertTrue "an opaque declaration has ordinary definition ownership"
+    (opaqueTree.tree.containsNodeKind .definition)
+
+  let matchDoSource :=
+    "def matchDo (value : Option Nat) : IO Nat :=\n"
+    ++ "  match value with\n"
+    ++ "  | some value =>\n"
+    ++ "    do\n"
+    ++ "      pure value\n"
+    ++ "  | none => pure 0\n"
+  let matchDoExpected :=
+    "def matchDo (value : Option Nat) : IO Nat :=\n"
+    ++ "  match value with\n"
+    ++ "  | some value => do\n"
+    ++ "      pure value\n"
+    ++ "  | none => pure 0\n"
+  let matchDoResult ←
+    Formatter.formatSourceWithEnvDetailed env matchDoSource
+      "match-terminal-do-suffix.lean" { lineWidth := 44 }
+  assertTrue "a match-arm do suffix does not fall back" (!matchDoResult.fellBack)
+  assertEq "a match arm keeps do with its arrow" matchDoExpected matchDoResult.formatted
+
+  let fieldDoSource :=
+    "def structFieldDo :=\n"
+    ++ "  { discharger : IO Nat :=\n"
+    ++ "    do\n"
+    ++ "      pure 1 }\n"
+  let fieldDoExpected :=
+    "def structFieldDo :=\n"
+    ++ "  {\n"
+    ++ "    discharger : IO Nat := do\n"
+    ++ "      pure 1\n"
+    ++ "  }\n"
+  let fieldDoResult ←
+    Formatter.formatSourceWithEnvDetailed env fieldDoSource
+      "structure-field-terminal-do-suffix.lean" { lineWidth := 44 }
+  assertTrue "a structure-field do suffix does not fall back" (!fieldDoResult.fellBack)
+  assertEq "a structure field keeps do with its assignment"
+    fieldDoExpected fieldDoResult.formatted
+
+  let doSource :=
+    "def attachedDoSuffixes := do\n"
+    ++ "  let expectedPolyTy? : Option Expr ← do\n"
+    ++ "    firstAction\n"
+    ++ "    secondAction\n"
+    ++ "  let result ←\n"
+    ++ "    if firstCondition then\n"
+    ++ "      firstValue\n"
+    ++ "    else if secondCondition then\n"
+    ++ "      secondValue\n"
+    ++ "    else do\n"
+    ++ "      pure thirdValue\n"
+    ++ "  pure (expectedPolyTy?, result)\n"
+  let arrowBySource :=
+    "def attachedBySuffix : IO Nat := do\n"
+    ++ "  let value ← by\n"
+    ++ "    exact pure 1\n"
+    ++ "  pure value\n"
+  let conditionalBySource :=
+    "def conditionalBy := do\n"
+    ++ "  let result ←\n"
+    ++ "    if firstCondition then\n"
+    ++ "      pure 1\n"
+    ++ "    else by exact veryLongPureFunction 2\n"
+    ++ "  pure result\n"
+  let conditionalByExpected :=
+    "def conditionalBy := do\n"
+    ++ "  let result ←\n"
+    ++ "    if firstCondition then\n"
+    ++ "      pure 1\n"
+    ++ "    else\n"
+    ++ "      by\n"
+    ++ "        exact veryLongPureFunction 2\n"
+    ++ "  pure result\n"
+  let conditionalRefutableSource :=
+    "def conditionalRefutable := do\n"
+    ++ "  if condition then\n"
+    ++ "    let some value ← action\n"
+    ++ "    | do\n"
+    ++ "      fallback\n"
+    ++ "    pure value\n"
+  let doResult ←
+    Formatter.formatSourceWithEnvDetailed env doSource
+      "do-notation-terminal-suffixes.lean" { lineWidth := 60 }
+  let arrowByResult ←
+    Formatter.formatSourceWithEnvDetailed env arrowBySource "do-notation-arrow-by.lean"
+      { lineWidth := 60 }
+  let conditionalByResult ←
+    Formatter.formatSourceWithEnvDetailed env conditionalBySource
+      "do-notation-conditional-by.lean" { lineWidth := 30 }
+  let conditionalRefutableResult ←
+    Formatter.formatSourceWithEnvDetailed env conditionalRefutableSource
+      "do-if-refutable-fallback-do.lean" { lineWidth := 60 }
+  assertTrue "do notation terminal suffixes do not fall back"
+    (!doResult.fellBack
+      && !arrowByResult.fellBack
+      && !conditionalByResult.fellBack
+      && !conditionalRefutableResult.fellBack)
+  assertEq "do notation keeps arrow and fallback body suffixes attached"
+    doSource doResult.formatted
+  assertEq "do notation keeps an arrow with a by body"
+    arrowBySource arrowByResult.formatted
+  assertEq "a do conditional keeps else with a by body"
+    conditionalByExpected conditionalByResult.formatted
+  let conditionalRefutableTree ←
+    SyntaxTree.parseModuleStringWithEnv env conditionalRefutableSource
+      "do-if-refutable-fallback-do-tree.lean"
+  assertTrue "a do conditional keeps the fallback clause's two-child contract"
+    (conditionalRefutableTree.tree.firstNodeChildCount? .doFallbackClause == some 2)
+
+  for (name, source, formatted)
+      in [
+        ("direct command", directCommandSource, directCommandResult.formatted),
+        ("optional command", optionalCommandSource, optionalCommandResult.formatted),
+        ("tactic", tacticSource, tacticResult.formatted),
+        ("protected tactic", protectedTacticSource, protectedTacticResult.formatted),
+        (
+          "constructor tactic",
+          constructorTacticSource,
+          constructorTacticResult.formatted
+        ),
+        (
+          "parenthesized tactic",
+          parenthesizedTacticSource,
+          parenthesizedTacticResult.formatted
+        ),
+        ("bullet tactic", bulletTacticSource, bulletTacticResult.formatted),
+        ("application", applicationSource, applicationFormatted),
+        ("opaque", opaqueSource, opaqueFormatted),
+        ("match do", matchDoSource, matchDoResult.formatted),
+        ("field do", fieldDoSource, fieldDoResult.formatted),
+        ("do notation", doSource, doResult.formatted),
+        ("arrow by", arrowBySource, arrowByResult.formatted),
+        ("conditional by", conditionalBySource, conditionalByResult.formatted),
+        (
+          "conditional refutable",
+          conditionalRefutableSource,
+          conditionalRefutableResult.formatted
+        )
+      ] do
+    assertTrue s!"terminal {name} formatting preserves code"
+      (← codePreservedIgnoringWhitespace env source formatted)
+    let formattedAgain ←
+      Formatter.formatSourceWithEnv env formatted s!"terminal-{name}-again.lean"
+        {
+          lineWidth :=
+            if name == "do notation"
+                || name == "arrow by"
+                || name == "conditional by"
+                || name == "conditional refutable" then
+              if name == "conditional by" then 30 else 60
+            else if name == "parenthesized tactic" then
+              60
+            else if name == "bullet tactic" then
+              60
+            else
+              44
+        }
+    assertEq s!"terminal {name} formatting is idempotent" formatted formattedAgain
+
 def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
     : IO Unit := do
   let fallbackSource :=
@@ -15479,6 +15886,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertAdjacentQuantifiersFitBeforeSourceBreaks env
 
 def runControlFlowTests (env : Lean.Environment) : IO Unit := do
+  assertOwnedTerminalSuffixesStayAttached env
   assertFallbackAndConditionalSuffixesStayAttached env
   assertIfThenElseRuleBreaksBalancedShape env
   assertShortIfThenElseStaysFlatInEquationArm env

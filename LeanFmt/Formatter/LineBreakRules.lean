@@ -1312,7 +1312,15 @@ def arrayBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :
 def matrixNotationRule : LineBreakRule :=
   {
     name := "matrixNotation"
-    useExistingBreaks := fun _ _ => true
+    useExistingBreaks :=
+      fun context segment =>
+        parentIsRawKind context `Lean.Parser.Term.basicFun
+        || attachedBodyFollowsDelimiter context ";"
+        || segment.indexes.any
+            fun index =>
+              match segment.child? index with
+              | some (.node (.proofBody false) _) => true
+              | _ => false
     flow := fun _ _ => true
     inheritBase := fun _ segment => 1 < delimitedItemCount segment
     roundUpBaseIndentation := true
@@ -3414,6 +3422,8 @@ def suffixGroupRule : LineBreakRule :=
   {
     name := "suffixGroup"
     inheritBase := fun _ _ => true
+    formatOriginalChildLeadingBoundary :=
+      fun _ segment index => segment.start < index
   }
 
 def namedDiscriminantRule : LineBreakRule :=
@@ -3702,6 +3712,11 @@ def subtypeRule : LineBreakRule :=
 def matchAltRule : LineBreakRule :=
   {
     name := "matchAlt"
+    formatOriginalChildLeadingBoundary :=
+      fun _ segment index =>
+        match segment.child? index with
+        | some (.node (.proofBody _) _) => true
+        | _ => false
     useExistingBreaks := fun _ _ => true
     flow := fun _ _ => true
     breakPoints := matchAltBreaks

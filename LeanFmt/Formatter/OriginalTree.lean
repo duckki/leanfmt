@@ -388,7 +388,8 @@ private def isProtectedTacticTree : SyntaxTree.Tree → Bool
         false
       else
         match kind with
-        | .tactic rawKind _ isOwner _ => !isTacticSequenceKind rawKind && !isOwner
+        | .tactic rawKind _ isOwner containsOwner =>
+            !isTacticSequenceKind rawKind && !isOwner && !containsOwner
         | .raw rawKind =>
             coreTacticKindName kindName
             && !isTacticSequenceKind rawKind
@@ -945,9 +946,7 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
               bodyColumnAfterOpeningDelimiter? request.currentLine token
             match delimiterColumn? with
             | some delimiterColumn =>
-                if sourceColumn <= request.layoutAnchor.sourceColumn
-                    || request.sourceMap.columnAt token.span.start
-                        == outputTokenColumn then
+                if request.sourceMap.columnAt token.span.start == outputTokenColumn then
                   none
                 else
                   some delimiterColumn
@@ -1025,9 +1024,16 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     match inlineContinuationColumns?,
           request.rebaseSourceTextTargetColumn? with
     | some continuationColumns, some targetColumn =>
+        let detachedProofLayoutRebasesFromFirstToken :=
+          formattedLeadingDetachesIsland
+          && !LineBreakRules.treeContainsRawKind `Lean.calc tree
+          && !LineBreakRules.treeContainsRawKind `Lean.calcTactic tree
+          && !tree.containsNodeKind .calcBody
+          && (proofLayoutRebasesFromFirstToken tree
+              || sourceColumn <= continuationColumns.1)
         if proof
             || (proofLayout
-                && (formattedLeadingDetachesIsland
+                && (detachedProofLayoutRebasesFromFirstToken
                     || (originalLeadingHasLineStructure
                         && proofLayoutRebasesFromFirstToken tree))) then
           some (sourceColumn, targetColumn)
@@ -1045,6 +1051,10 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
           (treeContinuationIndent? request.sourceMap tree).map
             fun sourceIndent =>
               (sourceIndent, (targetColumn / indentationSpaces + 1) * indentationSpaces)
+        else if proof
+                && (treeContinuationIndent? request.sourceMap tree).any
+                    fun sourceIndent => sourceIndent < sourceColumn then
+          none
         else
           some (sourceColumn, targetColumn)
     | none, none =>

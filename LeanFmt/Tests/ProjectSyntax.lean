@@ -10,6 +10,9 @@ syntax:max (name := projectTightIndexed) (priority := high) term noWs "[" term "
 syntax (name := contextClassifiedTactic) "context_classified_tactic " ident ident : tactic
 syntax (name := contextTermTactic) "context_term_tactic " term : tactic
 syntax (name := projectPrefixedDeclaration) "project_haveI' " letDecl : doElem
+syntax (name := projectTermCommand) "#project_term " ident term : command
+syntax (name := projectWrappedTerm) "project_wrapped " term : term
+syntax (name := projectOptionalTermCommand) "#project_optional " ident (term)? : command
 elab (name := projectNoteCommand) "#project_note " (docComment)? : command =>
   pure ()
 

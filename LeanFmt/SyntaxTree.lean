@@ -182,6 +182,26 @@ def isTacticSequenceTree : Tree → Bool
   | .node (.tactic kind _ _ _) _ => isTacticSequenceKind kind
   | _ => false
 
+private def sharesSourceLineWith (left right : Tree) : Bool :=
+  match left.tokens.back?, right.tokens[0]? with
+  | some left, some right =>
+      !left.trailing.text.contains '\n' && !right.leading.text.contains '\n'
+  | _, _ => false
+
+private def directlyOwnsAttachedTacticSequence (children : Array Tree) : Bool :=
+  let contentIndexes :=
+    (List.range children.size).filter
+      fun index => children[index]?.any fun child => !child.tokens.isEmpty
+  match contentIndexes.reverse with
+  | rightIndex :: leftIndex :: _ =>
+      match children[leftIndex]?, children[rightIndex]? with
+      | some left, some right =>
+          (left.tokens.size == 1 && left.tokens[0]?.any (·.role == .atom))
+          && isTacticSequenceTree right
+          && sharesSourceLineWith left right
+      | _, _ => false
+  | _ => false
+
 private partial def firstTacticToken? : Tree → Option Token
   | .missing => none
   | .leaf token => if token.lexeme.isEmpty then none else some token
@@ -216,6 +236,7 @@ partial def tacticLayoutSummary : Tree → TacticLayoutSummary
         isOwner
         && (!isCalcTree tree
             || (firstTacticToken? tree).any fun token => token.leading.text.contains '\n')
+      let directlyOwnsSequence := directlyOwnsAttachedTacticSequence children
       let hidesNestedOwners :=
         match kind with
         | .raw rawKind =>
@@ -223,6 +244,7 @@ partial def tacticLayoutSummary : Tree → TacticLayoutSummary
             (isCoreTacticKindName kindName || isExtensionTacticKindName kindName)
             && !isTacticSequenceKind rawKind
             && !isOwner
+            && !directlyOwnsSequence
         | _ => false
       {
         containsSequence
@@ -1269,15 +1291,129 @@ def singleContentChild? (children : Array Tree) : Option Tree :=
   if content.size == 1 then content[0]? else none
 
 partial def attachedDoTree? : Tree → Option Tree
-  | tree@(.node (.raw `Lean.Parser.Term.doNested) _) => some tree
-  | .node (.raw kind) children =>
-      if kind == `Lean.Parser.Term.doSeqIndent
-          || kind == `Lean.Parser.Term.doSeqItem
-          || kind == `null then
+  | tree@(.node (.raw kind) children) =>
+      if kind == `Lean.Parser.Term.doNested then
+        some tree
+      else if kind == `Lean.Parser.Term.doSeqIndent
+              || kind == `Lean.Parser.Term.doSeqItem
+              || kind == `null then
         singleContentChild? children >>= attachedDoTree?
       else
         none
   | _ => none
+
+private def regroupRightmostSuffixChildren
+    (children : Array Tree) (ownedRight? : Tree → Option Tree)
+    (ownsPair : Tree → Tree → Bool := fun left _ => directLeafAtom? left)
+    : Array Tree :=
+  let contentIndexes :=
+    (List.range children.size).filter
+      fun index => children[index]?.bind Tree.firstToken? |>.isSome
+  let rec loop : List Nat → Array Tree
+    | rightIndex :: leftIndex :: rest =>
+        match children[leftIndex]?, children[rightIndex]? with
+        | some left, some right =>
+            match ownedRight? right with
+            | some right =>
+                if ownsPair left right then
+                  children.set! leftIndex (.node .suffixGroup #[left, right])
+                  |>.set! rightIndex .missing
+                else
+                  loop (leftIndex :: rest)
+            | none => children
+        | _, _ => loop (leftIndex :: rest)
+    | _ => children
+  loop contentIndexes.reverse
+
+private def treeStartsAttachedBody (tree : Tree) : Bool :=
+  tree.firstToken?.any fun token => token.lexeme == "do" || token.lexeme == "by"
+
+private def startsWithOpeningDelimiter (tree : Tree) : Bool :=
+  tree.firstToken?.any fun token => lexemeEndsWithOpeningDelimiter token.lexeme
+
+private partial def splitLeadingToken? (accepts : Token → Bool)
+    : Tree → Option (Tree × Tree)
+  | tree@(.leaf token) =>
+      if accepts token then
+        some (tree, .missing)
+      else
+        none
+  | .node kind children => do
+      let index ←
+        (List.range children.size).find?
+          fun index => children[index]?.bind Tree.firstToken? |>.isSome
+      let child ← children[index]?
+      let (token, child) ← splitLeadingToken? accepts child
+      some (token, .node kind (children.set! index child))
+  | .missing => none
+
+private def regroupTerminalLeadingTokenChildren
+    (children : Array Tree) (ownsRight : Tree → Bool) (accepts : Token → Bool)
+    (normalizeRemainder : Tree → Tree := id)
+    : Array Tree :=
+  match ((List.range children.size).filter
+          fun index => children[index]?.bind Tree.firstToken? |>.isSome).reverse with
+  | rightIndex :: leftIndex :: _ =>
+      match children[leftIndex]?, children[rightIndex]? with
+      | some left, some right =>
+          if directLeafAtom? left && ownsRight right && right.firstToken?.any accepts then
+            match splitLeadingToken? accepts right with
+            | some (token, right) =>
+                children.set! leftIndex (.node .suffixGroup #[left, token])
+                |>.set! rightIndex (normalizeRemainder right)
+            | none => children
+          else
+            children
+      | _, _ => children
+  | _ => children
+
+private def regroupDoIfElseBodySuffix : Tree → Tree
+  | .node (.raw `null) children =>
+      .node (.raw `null) <| regroupRightmostSuffixChildren children attachedDoTree?
+  | tree => tree
+
+private def regroupTacticTerminalDelimiter : Tree → Tree
+  | .node kind@(.tactic rawKind containsSequence isOwner _) children =>
+      let terminalToken? :=
+        ((List.range children.size).filter
+          fun index => children[index]?.bind Tree.firstToken? |>.isSome).getLast?
+        |>.bind fun index => children[index]? >>= Tree.firstToken?
+      let delimiterWasDetached :=
+        terminalToken?.any fun token => token.leading.text.contains '\n'
+      let grouped :=
+        regroupRightmostSuffixChildren children
+          fun tree => if startsWithOpeningDelimiter tree then some tree else none
+      if grouped == children then
+        .node kind children
+      else if !isOwner && delimiterWasDetached then
+        .node (.tactic rawKind containsSequence true true) grouped
+      else
+        .node kind grouped
+  | tree => tree
+
+private def regroupTacticSequenceWrapperPrefix : Tree → Tree
+  | .node kind@(.tactic _ _ _ _) children =>
+      .node kind
+      <| regroupRightmostSuffixChildren children
+          (fun tree => if Tree.isTacticSequenceTree tree then some tree else none)
+          fun left right =>
+            left.singleToken?.any (·.role == .atom)
+            && Tree.sharesSourceLineWith left right
+  | tree => tree
+
+private def regroupMatchAltBodySuffix (children : Array Tree) : Array Tree :=
+  regroupTerminalLeadingTokenChildren children (fun _ => true)
+    (fun token => token.lexeme == "do" || token.lexeme == "by")
+    fun tree =>
+      match tree with
+      | .node (.raw kind) children =>
+          if kind == `Lean.Parser.Term.do
+              || kind == `Lean.Parser.Term.doNested
+              || kind == `Lean.Parser.Term.byTactic then
+            (singleContentChild? children).getD tree
+          else
+            tree
+      | _ => tree
 
 def regroupInitialize? (children : Array Tree) : Option Tree := do
   let modifiers ← children[0]?
@@ -1416,8 +1552,9 @@ def flattenSimpleDeclarationValueChildren? (children : Array Tree)
     : Option (Array Tree) := do
   let valueIndex ←
     children.findIdx?
-      fun child => rawKind? child == some `Lean.Parser.Command.declValSimple
-  let value ← children[valueIndex]?
+      fun child =>
+        rawKind? (unwrapSingleNullTree child) == some `Lean.Parser.Command.declValSimple
+  let value ← children[valueIndex]? |>.map unwrapSingleNullTree
   match value with
   | .node _ valueChildren =>
       some
@@ -2071,7 +2208,10 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
     | some declarationChildren => .node (.raw kind) declarationChildren
     | none => .node (.raw kind) children
   else if kind == `Lean.Parser.Term.doIdDecl || kind == `Lean.Parser.Term.doPatDecl then
-    .node (.raw kind) (regroupDoDeclarationFallbackChildren children)
+    .node (.raw kind)
+    <| regroupDoDeclarationFallbackChildren
+    <| regroupRightmostSuffixChildren children
+        fun tree => if treeStartsAttachedBody tree then some tree else none
   else if kind == `Lean.Parser.Term.doLetElse || kind == `Lean.Parser.Term.doLetExpr then
     match regroupDoFallbackChildren? children with
     | some grouped => .node (.raw kind) grouped
@@ -2123,13 +2263,13 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
     | some children => .node (.raw kind) children
     | none => .node (.raw kind) children
   else if kind == `Lean.Parser.Term.matchAlt then
-    let children := regroupAttachedDoRhs children
+    let children := regroupMatchAltBodySuffix (regroupAttachedDoRhs children)
     match children[1]? with
     | some patterns =>
         .node (.raw kind) <| children.set! 1 (regroupMatchPatterns patterns)
     | none => .node (.raw kind) children
   else if kind == `Lean.Parser.Term.doIf then
-    .node (.raw kind) (regroupAttachedDoRhs children)
+    .node (.raw kind) <| (regroupAttachedDoRhs children).map regroupDoIfElseBodySuffix
   else if kind == `Lean.Parser.Term.structInstField then
     match children[0]?, children[1]? >>= structInstFieldParts? with
     | some lvalue, some fieldParts =>
@@ -2138,7 +2278,9 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
           | some parameters =>
               fieldParts.set! 0 (regroupSignatureParameters parameters)
           | none => fieldParts
-        .node (.raw kind) <| #[lvalue] ++ fieldParts
+        .node (.raw kind)
+        <| regroupRightmostSuffixChildren (#[lvalue] ++ fieldParts)
+            fun tree => if treeStartsAttachedBody tree then some tree else none
     | _, _ => .node (.raw kind) children
   else if kind == `Lean.Parser.Term.match || kind == `Lean.Parser.Term.doMatch then
     .node (.raw kind) (regroupMatchDiscriminantsBeforeWith children)
@@ -2432,7 +2574,8 @@ def regroupRawNode
           else if kind == `Lean.Parser.Command.classAbbrev then
             .node .definition children
           else if kind == `Lean.Parser.Command.definition
-                  || kind == `Lean.Parser.Command.abbrev then
+                  || kind == `Lean.Parser.Command.abbrev
+                  || kind == `Lean.Parser.Command.opaque then
             let children := regroupEquationTrailingClauseChildren children
             match regroupDefinitionChildren children with
             | some definitionChildren => .node .definition definitionChildren
@@ -2475,7 +2618,10 @@ private partial def regroupTreeWithPrecedencesInContext
         else
           regroupRawNode infixPrecedences spacedApplicationKinds
             (!isTacticSequenceEntry) kind (regroupChildren children)
-      regroupCalcOwnerTree <| Tree.annotateTacticTree tree
+      regroupCalcOwnerTree
+      <| regroupTacticSequenceWrapperPrefix
+      <| regroupTacticTerminalDelimiter
+      <| Tree.annotateTacticTree tree
   | .node kind children =>
       .node kind
         (children.map
@@ -2752,18 +2898,17 @@ partial def parseModuleCommandsQuiet
             s!"failed to parse file:\n{details}"
     else
       pure (commands, letBodyParserFacts, commandState)
-  else
-    do
-      let letBodyParserFacts :=
-        collectLetBodyParserFacts inputContext.inputString parserContext command
-          letBodyParserFacts
-      let commandState ←
-        if updateParserState && commandUpdatesParserState command then
-          elaborateParserStateCommand inputContext commandState command
-        else
-          pure commandState
-      parseModuleCommandsQuiet inputContext state messages commandState
-        updateParserState (commands.push command) letBodyParserFacts
+  else do
+    let letBodyParserFacts :=
+      collectLetBodyParserFacts inputContext.inputString parserContext command
+        letBodyParserFacts
+    let commandState ←
+      if updateParserState && commandUpdatesParserState command then
+        elaborateParserStateCommand inputContext commandState command
+      else
+        pure commandState
+    parseModuleCommandsQuiet inputContext state messages commandState
+      updateParserState (commands.push command) letBodyParserFacts
 
 structure ParsedModuleSyntax where
   rawSyntax : Syntax

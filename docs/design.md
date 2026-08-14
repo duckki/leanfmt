@@ -168,6 +168,33 @@ equation-style declaration arms.
 The same header-suffix principle keeps `instance ... where` and `match ... with`
 together; the body breaks after `where` or `with`, not before it.
 
+It also keeps an assignment marker on an opaque declaration's final signature
+line and keeps a terminal delimited tactic argument with its introducer:
+
+```lean
+opaque generatedValueWithALongName
+    : VeryLongReturnType :=
+  implementation
+
+example : True := by
+  refine {
+    property := proof
+  }
+
+example : True := by
+  · exact ⟨
+      witness,
+      proof
+    ⟩
+```
+
+Term-taking tactics use this suffix attachment even when their operand contains
+nested proof layout or has already been regrouped as an application. An attached
+tactic-sequence wrapper forwards that ownership without exposing unrelated proof
+text. An ordinary function application or direct command term still breaks before
+a delimited argument when necessary; the delimiter does not become part of the
+function head.
+
 The introducer keyword is also part of a binding header. leanfmt never emits a
 line containing only `let`; it keeps `let` with the pattern or identifier:
 

@@ -1,297 +1,251 @@
 # Version 0.4 plan
 
-This document is the forward-looking work list for the next release. Formatting
-examples from external projects are evidence for general rules; project paths,
-declaration names, and isolated token sequences must never become formatter
-conditions.
+This is the forward-looking work list for the next release. External examples
+justify general structural rules; project paths, declaration names, and isolated
+token sequences must never become formatter conditions.
 
 Missing-rule coverage is release-blocking only for Lean's standard library and
-Mathlib, which are leanfmt's first-class syntax-support targets. Missing-rule
-diagnostics from GraphQL, quantum, Hex, and other external projects are useful
-inventory, but do not block validation unless they coincide with an actual
-preservation, formatting, convergence, overflow, or build problem.
+Mathlib, leanfmt's first-class syntax-support targets. Missing rules in other
+external projects are useful inventory, but block validation only when they
+coincide with preservation, formatting, convergence, overflow, or build issues.
 
-## Known issues
+## Open Issues
 
-- Fitting custom command suffixes can detach from their headers. Hex exposes
-  this broadly through `setup_* ... where` commands: every observed header fits
-  at width 100 with `where` attached, but the generic custom-syntax layout moves
-  `where` onto a separate line.
-- Long `opaque` declaration headers can put `:=` on a line by itself instead of
-  keeping the assignment separator with the return type.
-- Core suffix attachment is inconsistent under width pressure. Hex contains
-  detached `then`, `else do`, and `← do` forms even though the suffix belongs to
-  the preceding header or separator.
-- A multiline `let` fallback can put `|` on an otherwise empty line. The
-  fallback may need its own structural continuation base, but the bar must align
-  with the owning `let` and remain attached to its first token or comment.
-- Structural indentation can leak into horizontal whitespace after an infix
-  operator, producing forms such as `&&  if`, `&&  let`, `++  if`, and `<|  if`.
-- Nested infix and `<|` chains can accumulate indentation instead of sharing
-  their expression base.
-- A low-priority application can still leave `<|` alone before an ordinary
-  application whose own first-line boundary is not represented as a movable
-  original-child boundary. Comment-led and nonfitting protected operands retain
-  the post-operator boundary intentionally.
-- Declaration parameters and typeclass arguments can inherit the declaration
-  name's ending column instead of the declaration's structural continuation
-  base.
-- Unknown generated syntax with multiple meaningful children intentionally
-  reports a missing rule unless regrouping can prove a standard application,
-  delimiter, infix, or declaration shape. Broadly treating such nodes as
-  transparent would hide extension-owned layout.
-- Source-authored calc text that Lean does not expose as parsed calc rows remains
-  an original-layout island. Reindenting malformed or ambiguous rows without a
-  structural owner risks changing syntax.
-- Adjacent anonymous-constructor delimiters can accumulate one indentation level
-  per delimiter. This is a style limitation, not a preservation or build blocker.
-- A source break after `<|` can preserve two spaces before its operand. Changing
-  that accepted shape requires a separate low-priority-infix style decision.
-- Long indivisible lines are accepted when they start at the correct logical
-  indentation. Formatter-created too-many-lines warnings are accepted when the
-  surrounding formatting shape is sound.
-- The local profiling guard is a same-machine comparison, so release review must
-  still consider full external-validation timings when concurrency, import
-  environments, or corpus size may dominate formatter cost.
+### Extension command suffix ownership
 
-Current Hex evidence is diagnostically complete for all 889 tracked Lean files.
-The 886 native files pass preservation, overflow, fallback, and idempotency
-checks at width 100, and the complete post-format Hex build passes. The three
-CompPoly adapters pass the same formatter checks in a pinned Lean `v4.32.2`
-companion environment, where their current blobs match the last compatible Hex
-source revision exactly; both consumer equivalence targets and the comparator
-target rebuild after formatting. Missing-rule reports are informational for
-this corpus. Formatting review still finds the suffix, separator, fallback, and
-horizontal-spacing issues listed above, including detached `where` and `{` in
-the comparator's generated benchmark commands, so style closure is not
-complete. Checking and rewriting the 886 native files took about 10 minutes 12
-seconds; their complete post-format build took 13 minutes 39 seconds.
+```lean
+setup_generator sample
+  where
+    { field := value }
 
-Current exact Mathlib formatter evidence is complete: all 84 formatter
-batches covering 8,311 tracked files under `Mathlib` pass preservation,
-overflow, missing-rule, fallback, and idempotency checks at width 100. The
-complete post-format build covers all 8,705 targets. Review still finds the
-fallback, low-priority-infix, declaration-base, and comment-owner issues listed
-above, so this result is a diagnostic checkpoint rather than formatting
-closure.
+run_meta
+  do
+    action
+```
 
-The latest complete Mathlib diff review makes the remaining groups concrete:
-eight refutable-`let` fallbacks leave `|` alone. Thirty-five physical lines
-contain a standalone `<|`, down from 51 in the preceding checkpoint after 16
-movable operator-operand boundaries were coordinated. Review classifies most of
-the remainder as comment-led or nonfitting protected operands with intentional
-source boundaries; ordinary application and comment-owner cases remain
-follow-up consistency work. Thirteen declaration or typeclass continuations
-inherit declaration-name columns, and isolated lambda and
-constructor-after-comment cases retain a nonstructural base. The two previously
-misaligned `finprod` bodies now use their indexed relation's structural base;
-focused formatting diagnostics and the affected Mathlib target build pass.
-Checkpoint 6 separately validates every previously detached calc placeholder
-row plus the affected proof-introducer, nested-binder, and quotation files; all
-focused diagnostics and builds pass. Fresh GraphQL and quantum validation passes
-before and after formatting. The preceding binder-sequence checkpoint aligns
-GraphQL's quantifier continuations with their first binder instead of adding an
-extra continuation level; the indexed-infix base propagation adds no further
-GraphQL or quantum formatting delta.
+Generated command clauses and bodies can detach from their headers. An optional
+command wrapper alone does not distinguish a parser-owned clause from an
+optional direct term, so attachment must wait for explicit parser-category
+ownership rather than inferring it from tokens or spaces.
 
-Quantum validates with the same current leanfmt source under Lean `v4.32.0`.
-The external validator now detects the target toolchain, refreshes an incremental
-compatible formatter build under its scratch directory, and invokes that binary
-from Quantum's `lake env`. This removes the executable ABI mismatch without
-mutating either repository or introducing a formatter-rule exception.
+### Named conditional conditions
 
-## Checkpoint 1: layout ownership
+```lean
+if h :
+  start < n then
+```
 
-Status: complete.
+A fitting dependent condition can break after `h :`. It should use the same
+complete-header grouping policy as named `cases` targets and `match` inputs.
 
-- Make command and extension-tactic context explicit in the syntax tree so
-  diagnostics, regrouping, and source-island policy do not infer ownership from
-  namespaces.
-- Reuse one declaration-header group for local declarations and `initialize`,
-  including `:=` and `←` value boundaries.
-- Give generated spaced applications and attached generated suffixes ordinary
-  application ownership only when their parser shape proves that interpretation.
-- Keep applications on their local base, including ordinary infix,
-  pipe-projection, and `<|` operands, and group `return` with its application
-  head so prefixed arguments do not inherit an incidental inline column.
-- Apply structural bases consistently to structure-field defaults, quotations,
-  protected proofs, and moved comments.
-- Keep physical comment-boundary indentation separate from the renderer's
-  logical segment base.
-- Classify comment token fragments by lexical boundaries so comment-looking text
-  inside multiline strings remains byte-preserved.
+### Structural header suffixes
 
-Acceptance: focused reproductions, the complete local gate, the focused Mathlib
-issue set, and review of all fixture and self-format deltas.
+```lean
+if longCondition
+  then do
+    action
+else
+  if anotherCondition then fallback
 
-## Checkpoint 2: external corpus closure
+for item in items
+do
+  action item
 
-Status: complete.
+field :=
+  by
+    exact proof
+```
 
-- Validate fresh GraphQL and quantum clones with automatic formatter workers.
-- Validate exact Mathlib at width 100, formatting only `Mathlib` and using the
-  Lake cache.
-- Review every candidate-only formatting delta for missing or wrong line breaks,
-  incorrect indentation, fallback, non-idempotence, preservation failures, and
-  actionable overflow.
-- Convert any blocker into a focused test and fix only its general syntax,
-  line-break, spacing, source-emission, or renderer-state cause. Stop for design
-  review if a finding requires a new rule API or a specialized exception.
+`then` or `then do` can be stranded after a condition wraps. The suffix should
+stay with the condition's final line and return to the conditional base.
+Likewise, an `else if` chain should remain a peer chain instead of gaining a
+new nested conditional base. Parser-owned `do` and `by` introducers after loop,
+alternative, and assignment headers should follow the same suffix policy.
 
-Acceptance: all formatter batches and post-format builds pass, no release-blocking
-formatting issue remains, and elapsed and CPU timings show no material regression.
+### Do statement separator bases
 
-## Checkpoint 3: performance and test hardening
+```lean
+do
+  IO.println message;
+      pure result
+```
 
-Status: complete.
+A statement after `;` can inherit the preceding expression's continuation
+column. It should remain inline when it fits or return to the peer statement
+base when it breaks.
 
-- Record a small representative profiling baseline that exercises syntax-tree
-  regrouping, original-layout emission, layout search, and convergence without
-  depending on an external checkout.
-- Remove repeated tree scans where an existing contextual node or cached fact can
-  answer the same question, without changing formatting behavior.
-- Add regression coverage for every issue discovered during corpus closure,
-  including preservation, fallback, and idempotency assertions where source
-  layout is involved.
-- Run the complete local and external release gates once more after any
-  performance-oriented change.
+### Try clause bases
 
-Acceptance: the profiling baseline is documented and repeatable, test coverage
-represents all accepted corpus fixes, all release gates pass, and the v0.4
-candidate has no known exception, build, or performance blocker.
+```lean
+try
+  action
+  catch error => fallback
+```
 
-## Checkpoint 4: Hex corpus closure
+`catch` can inherit the `try` body's indentation after its enclosing declaration
+moves. Peer `catch` and `finally` clauses should align with `try`.
 
-Status: validation complete; known layout blockers remain.
+### Refutable let fallbacks
 
-- Treat registered borrowed syntax as the same general unary-prefix structure
-  as other prefix terms; do not specialize a rule to a declaration or project.
-- Recognize extension-owned single-operand tactic terms as ordinary spaced
-  applications only when their parsed children prove that shape. A direct
-  tactic-sequence entry retains tactic ownership while its final term child
-  uses ordinary application flow, covering term-taking core and extension
-  tactics without a keyword list. Preserve the missing-rule diagnostic for
-  genuinely opaque extension syntax.
-- Keep a `let`-else fallback bar on its structural continuation base and apply
-  the existing suffix mechanism to `else do`; do not add renderer conditions
-  for either spelling.
-- Propagate break opportunities through long application, optional-access,
-  defaulting, and projection chains so width enforcement can choose an earlier
-  structural boundary.
-- Add focused reproductions for each issue before changing grouping or break
-  behavior, then review the complete generated Hex diff at width 100.
+```lean
+let some value ← action
+|
+  return none
+```
 
-Acceptance: the complete local gate passes under the current Lean toolchain;
-GraphQL and quantum remain clean; every Hex formatter batch passes preservation,
-overflow, fallback, and idempotency checks at width 100; the post-format Hex
-build passes; and review finds no logical layout regression or material
-performance regression. Hex missing-rule diagnostics are recorded but do not
-affect acceptance.
+Eight Mathlib cases leave `|` alone. The bar should align with its `let` and
+remain attached to the fallback's first token or leading comment.
 
-## Checkpoint 5: external-environment validation
+### Infix horizontal spacing
 
-Status: complete.
+```lean
+ready &&  if enabled then available else waiting
+```
 
-- Select or build a formatter binary compatible with each target project's Lean
-  toolchain instead of loading a release-toolchain binary into an incompatible
-  `lake env`. Retain one disposable build per target toolchain, refresh it from
-  the current leanfmt source, and let Lake reuse unchanged build artifacts.
-  Invoke the compatible binary from the target's `lake env` without mutating
-  either repository. Keep one formatter source and one validation behavior.
-- Represent tracked adapter sources that require a companion project as an
-  explicit validation target, not as exceptions in syntax, line-break,
-  diagnostics, or rendering code.
-- Establish a pinned CompPoly environment compatible with the current Hex
-  adapters and validate all three adapter sources with preservation, overflow,
-  fallback, and idempotency checks. Record missing-rule diagnostics as
-  informational syntax inventory.
-- Rerun GraphQL, quantum, and all 889 Hex files, then review formatting and
-  timing deltas before resuming Mathlib formatting work.
+Structural indentation can leak into horizontal trivia after an infix operator.
+Inline operator boundaries should emit exactly one separating space.
 
-Acceptance: GraphQL and Hex validate through the standard script; quantum uses
-the same current formatter source under its target Lean toolchain; the three
-CompPoly adapters parse and build in their declared environment; no target
-requires a formatter-rule exception; and no material performance regression
-appears.
+### Infix continuation bases
 
-## Checkpoint 6: structural attachment consistency
+```lean
+first
+  ++ second
+    ++ third
+```
 
-Status: complete.
+Nested infix and `<|` chains can staircase. Operators in one logical chain
+should share the expression's structural continuation base.
 
-- Keep a calc placeholder attached to its relation without specializing the
-  rule to a particular relation token.
-- Apply the existing suffix mechanism consistently to fitting `by` and `do`
-  introducers after `:=`, `=>`, and equivalent value boundaries.
-- Make paired delimiters return to their structural opener and keep nested
-  binder punctuation on the binder's established continuation base.
-- Add focused reproductions before changing regrouping or line-break behavior;
-  do not add syntax-specific renderer conditions.
+### Low-priority operand attachment
 
-Acceptance: focused tests cover each attachment invariant, self-formatting has
-no regression, GraphQL and quantum pass, and the affected Mathlib files format
-and build cleanly.
+```lean
+transform
+  <|
+  build value
+```
 
-## Checkpoint 7: structural base propagation
+An avoidable standalone `<|` remains when an ordinary operand does not expose a
+movable first-line boundary. Protected and comment-led boundaries remain valid.
 
-Status: complete.
+### Declaration continuation bases
 
-- Audit the reported match-arm, ordinary-lambda, proof-comment, and multiline
-  block-comment cases against the current structural ownership tests. The
-  architecture migration already gives these forms their parent's base.
-- Recognize a documented inductive constructor as the same body child as a
-  constructor beginning directly with `|`, then let the constructor own its
-  internal marker boundary. Documentation and `|` consequently move together
-  on the inductive body's structural base.
-- Investigate adjacent low-priority-pipe breaks without adding a token or
-  renderer exception. Keeping `<|` with a fitting structural operand already
-  works; coordinating it with a child whose own first line must break requires
-  layout-search support and remains a known issue for a later checkpoint.
+```lean
+def veryLongDeclarationName
+                           (value : Nat) :=
+  value
+```
 
-Acceptance: focused preservation and idempotency tests establish constructor
-base ownership, the complete local gate passes, and fresh GraphQL, quantum, and
-exact Mathlib validation has no release-blocking formatting finding.
+Some declaration parameters and typeclass arguments inherit the declaration
+name's ending column instead of the command's structural base. This also affects
+long `opaque` signatures.
 
-## Checkpoint 8: low-priority boundary coordination
+### Nested match ownership
 
-Status: complete.
+```lean
+match
+    match value with
+    | none => false with
+| false => fallback
+```
 
-- Let a non-suffix low-priority operator-operand group format its original
-  child's leading boundary, using the existing boundary policy rather than a
-  token-specific renderer condition or a new rule API.
-- Keep `by`, `do`, `calc`, and other established suffix operands on the existing
-  suffix path so protected proof indentation remains source-relative.
-- Reuse the existing structural fallback for protected delimited operands when
-  attaching their first line to the operator. Do not generalize that fallback
-  to proof applications or other original-layout islands.
-- Validate that coordinated parent and child plans no longer fire both adjacent
-  boundaries while preservation, idempotency, and internal island indentation
-  remain unchanged.
+An outer `with` can stay on the final inner branch line, obscuring which `match`
+owns the following alternatives. Nested match suffixes and bodies should move
+with their parser-owned match node.
 
-Acceptance: focused tests cover a chained low-priority application ending in a
-protected structure and the existing suffix controls; the complete local gate
-passes; GraphQL and quantum remain clean; exact Mathlib validation at width 100
-reduces the standalone-operator issue without introducing an exception, build
-failure, logical indentation regression, or material performance regression.
+### Comment-owned structural bases
 
-## Checkpoint 9: binder-operator body bases
+```lean
+  /-- Explanation. -/
+    | constructor
+```
 
-Status: complete.
+A leading comment and its lambda or constructor case can use different bases.
+Both should move with the same structural owner. Source-significant diagnostic
+comment payloads must retain their relative indentation as one protected block.
 
-- Give a binder operator on an indexed-infix RHS the relation's structural base,
-  including when one tight delimiter wraps the operator.
-- Reuse the same base propagation already used by direct lambda bodies; do not
-  add notation names, renderer conditions, or a new rule API.
-- Keep binder-sequence continuations aligned with the first binder without an
-  extra nesting level, while the post-comma body remains one level inside the
-  shared operator base.
+### Protected inline body bases
 
-Acceptance: focused tests cover direct and parenthesized structural RHS terms;
-the complete local gate passes; the two affected Mathlib `finprod` bodies align
-with their indexed relation; and focused Mathlib formatting and build checks
-pass without preservation, overflow, fallback, missing-rule, or idempotency
-failures. Fresh GraphQL and quantum validation also passes. A same-machine
-three-sample comparison against the preceding checkpoint reports 5,226 ms total
-formatting versus 5,216 ms, with no material performance regression.
+```lean
+wrapper (by
+          exact proof)
+```
+
+Some inline `by` and `match` bodies retain the introducer's source column after
+their owner moves. Protected bodies should use the nearest structural base.
+
+### Lambda body bases
+
+```lean
+fun value => do
+action value
+
+fun value =>
+result value
+```
+
+A lambda body can retain its old source column when the lambda moves, leaving
+the body level with `fun` or `=> do`. The body should use the lambda's structural
+base, and a direct `do` or `by` introducer should remain attached to `=>`.
+
+### Suffices proof body bases
+
+```lean
+suffices veryLongProposition by
+                              exact proof
+```
+
+The proof after `suffices ... by` can retain the proposition's ending column.
+It should use the tactic's structural proof-body base.
+
+### Tactic continuation bases
+
+```lean
+simpa [lemmas] using
+                     proof
+
+refine goal <;>
+| branch => exact result
+```
+
+Operands after tactic introducers and branches after tactic combinators can
+inherit a distant source column. They should use the tactic's structural
+continuation base without treating tactic names as generic prefix operators.
+
+## Progress
+
+### Checkpoint 10: suffix ownership
+
+Opaque declaration `:=` and structurally proven core suffixes stay attached when
+they fit. Terminal delimited operands keep their opener with term-taking tactics,
+while direct function and command arguments retain application layout. `else do`
+is grouped only in its direct clause wrapper, preserving refutable-fallback
+ownership. The implementation uses existing syntax ownership and suffix grouping
+without a renderer policy. The complete local gate and GraphQL, quantum, Hex,
+and Mathlib validations pass. The final Mathlib review closed a
+terminal-delimiter gap under attached tactic-sequence wrappers without finding
+a new checkpoint blocker.
+
+### Checkpoint 11: structural headers
+
+Generated command suffixes receive explicit parser-category ownership. Named
+conditional conditions stay together when they fit. Wrapped conditions, `then`
+suffixes, loop and assignment introducers, `try` peers, refutable fallbacks,
+statement separators, lambda bodies, `suffices` proofs, and declaration
+continuations use their owning construct's base. Direct `do` and `by`
+introducers remain attached to loop, alternative, assignment, and lambda
+headers.
+
+### Checkpoint 12: expression bases
+
+Infix spacing is stable, nested chains share one base, and `<|` is not left alone
+when an ordinary operand can accept the break. Comment-owned and protected
+inline bodies use structural bases without weakening source preservation.
+
+### Checkpoint 13: release validation
+
+The complete local gate and fresh GraphQL, quantum, Hex, and Mathlib validations
+pass. Every formatting delta is reviewed, timings show no material regression,
+and the release has no exception or logical-layout blocker.
 
 ## Validation standard
 
@@ -311,11 +265,11 @@ git diff --check
 ```
 
 Generated fixture and self-format changes require visual review. External runs
-must use automatic worker counts; do not pass `--jobs`. Hex runs at width 100
-before Mathlib and must pass every formatter batch and its complete post-format
-build apart from informational missing-rule reports. Missing rules are hard
-review failures only for Lean's standard library and Mathlib. Mathlib validation
-uses a shallow clone of exact `v4.33.0` commit
+use automatic worker counts; do not pass `--jobs`. Hex runs at width 100 before
+Mathlib and must pass every formatter batch and its complete post-format build,
+apart from informational missing-rule reports. Missing rules are hard failures
+only for Lean's standard library and Mathlib.
+
+Mathlib validation uses a shallow clone of exact `v4.33.0` commit
 `db584cd6d46c92f209a44c0f1c829460d327499d`, formats only `Mathlib` at width
-100, downloads the Lake cache, skips the released commit's redundant pre-format
-build, and always runs the complete post-format build.
+100, downloads the Lake cache, and always runs the complete post-format build.
