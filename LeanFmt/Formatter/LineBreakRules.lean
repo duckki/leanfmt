@@ -3448,7 +3448,6 @@ def suffixGroupRule : LineBreakRule :=
 def namedDiscriminantRule : LineBreakRule :=
   {
     name := "namedDiscriminant"
-    useExistingBreaks := fun _ _ => true
     flow := fun _ _ => true
     breakPoints := fun _ segment => [boundaryBreak? segment 1 0].filterMap id
   }

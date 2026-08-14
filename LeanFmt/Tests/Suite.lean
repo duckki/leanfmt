@@ -9085,6 +9085,20 @@ def assertDependentIfThenElseKeepsHeaderAndBranchesAligned (env : Lean.Environme
       { lineWidth := 70 }
   assertEq "dependent if keeps its header and branches aligned" expected formatted
 
+  let sourceBrokenSource :=
+    "def sourceBrokenChoose : Nat :=\n"
+    ++ "  if h :\n"
+    ++ "      VeryLongPredicateName firstArgument secondArgument thirdArgument then\n"
+    ++ "    veryLongThenBranch h firstArgument secondArgument\n"
+    ++ "  else\n"
+    ++ "    veryLongElseBranch firstArgument secondArgument\n"
+  let sourceBrokenExpected := expected.replace "def choose" "def sourceBrokenChoose"
+  let sourceBrokenFormatted ←
+    Formatter.formatSourceWithEnv env sourceBrokenSource
+      "source-broken-dependent-if-then-else.lean" { lineWidth := 70 }
+  assertEq "a dependent if replaces a source break after its colon"
+    sourceBrokenExpected sourceBrokenFormatted
+
 def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit := do
   let nestedProofSource :=
     "def protectedAnonymousConstructorLambdaBody :=\n"
@@ -9572,6 +9586,29 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
     Formatter.formatSourceWithEnv env compactNamedCasesSource "compact-named-cases.lean"
   assertEq "a fitting named cases header keeps its name and discriminant together"
     compactNamedCasesExpected compactNamedCasesFormatted
+
+  let sourceBrokenNamedCasesSource :=
+    "theorem sourceBrokenNamedCases (value : Nat) : True := by\n"
+    ++ "  cases selected :\n"
+    ++ "      value with | zero => trivial | succ value => trivial\n"
+  let sourceBrokenNamedCasesExpected :=
+    "theorem sourceBrokenNamedCases (value : Nat) : True := by\n"
+    ++ "  cases selected : value with\n"
+    ++ "  | zero => trivial\n"
+    ++ "  | succ value => trivial\n"
+  let sourceBrokenNamedCasesFormatted ←
+    Formatter.formatSourceWithEnv env sourceBrokenNamedCasesSource
+      "source-broken-named-cases.lean"
+  assertEq "a source break after a fitting named cases colon is ignored"
+    sourceBrokenNamedCasesExpected sourceBrokenNamedCasesFormatted
+  assertTrue "source-broken named cases formatting preserves code"
+    (← codePreservedIgnoringWhitespace
+        env sourceBrokenNamedCasesSource sourceBrokenNamedCasesFormatted)
+  let sourceBrokenNamedCasesAgain ←
+    Formatter.formatSourceWithEnv env sourceBrokenNamedCasesFormatted
+      "source-broken-named-cases-formatted.lean"
+  assertEq "source-broken named cases formatting is idempotent"
+    sourceBrokenNamedCasesFormatted sourceBrokenNamedCasesAgain
 
   let proofBearingCasesSource :=
     "example (value : Nat) : True := by\n"
@@ -15532,6 +15569,17 @@ def assertStructuralHeadersOwnAttachedBodies (env : Lean.Environment) : IO Unit 
       ++ "  if h : start = 0 then first\n"
       ++ "  else second\n")
     ("def namedCondition : Nat :=\n"
+      ++ "  if h : start = 0 then\n"
+      ++ "    first\n"
+      ++ "  else\n"
+      ++ "    second\n")
+
+  check "source-broken-named-condition"
+    ("def sourceBrokenNamedCondition : Nat :=\n"
+      ++ "  if h :\n"
+      ++ "      start = 0 then first\n"
+      ++ "  else second\n")
+    ("def sourceBrokenNamedCondition : Nat :=\n"
       ++ "  if h : start = 0 then\n"
       ++ "    first\n"
       ++ "  else\n"

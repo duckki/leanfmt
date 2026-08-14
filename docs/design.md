@@ -1366,6 +1366,10 @@ else
   secondResult
 ```
 
+An authored break after `:` does not override this shared layout: a fitting
+named discriminant flattens, while an overflowing one uses the structural break
+before `:`.
+
 Conditionals normally start on an indentation boundary. An immediately preceding
 opening parenthesis keeps tight spacing instead; branch indentation rounds up from
 the off-column `if`. This exception affects only the first line:

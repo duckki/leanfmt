@@ -56,18 +56,6 @@ some term-level loops, alternatives, assignments, and tactic clauses still
 detach their introducer. Their parser-owned header and body must be exposed by
 the syntax tree before the shared suffix and body-base policies can apply.
 
-### Named discriminant source breaks
-
-```lean
-if h :
-    start < n then
-```
-
-Named `if` and elimination discriminants expose the preferred break before `:`,
-but an old source break after `:` can still take precedence. Existing source
-layout must not override the structural break owned by the grouped
-discriminant.
-
 ### Refutable fallback attachment
 
 ```lean
@@ -154,10 +142,18 @@ comment payloads must retain their relative indentation as one protected block.
 ```lean
 wrapper (by
           exact proof)
+
+replay := fun context =>
+  if h :
+      longCondition context then
+    result
 ```
 
 Some inline `by` and `match` bodies retain the introducer's source column after
-their owner moves. Protected bodies should use the nearest structural base.
+their owner moves. A proof-bearing structure instance can also protect an entire
+field value, preventing an otherwise grouped named condition from replacing a
+source break after `:`. Protected bodies should use the nearest structural base,
+and proof islands should expose non-proof surrounding syntax to structural rules.
 
 ### Tactic continuation bases
 
@@ -201,8 +197,8 @@ structural bases without weakening source preservation. `try`, `catch`, and
 
 Extension command suffixes, declaration continuations, nested matches, and
 tactic continuations use explicit parser ownership. Remaining parser-owned `do`
-suffixes and named discriminants obey their grouped structure. No renderer
-policy or token spelling substitutes for missing syntax-tree structure.
+suffixes obey their grouped structure. No renderer policy or token spelling
+substitutes for missing syntax-tree structure.
 
 ### Checkpoint 14: external validation environments
 
