@@ -11,34 +11,27 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ## Open Issues
 
-### External validator project environments
+### Syntax-comment continuation indentation
 
 ```text
-import all HexBerlekamp.DelayedKernel
-unknown module prefix 'HexLLLBench'
-external declaration 'MD4Lean.parse' has no code
+/-- error: diagnostic detail
+  continuation -/
 ```
 
-Formatting an imported source invalidates `.olean` files needed by later files,
-including later files in the same formatter invocation. Hex also has bench-only
-module roots outside its default environment and native parser or external
-symbols, such as `MD4Lean.parse` and `Hex.ZMod64.inv`, that an externally built
-formatter executable does not link. The validator needs a target-project-aware
-execution path and a dependency-safe artifact policy. These are infrastructure
-failures, not missing formatting rules in third-party syntax.
+Syntax-comment islands currently infer their rebase origin from the least-indented
+continuation. A short two-line doc comment can therefore lose intentional internal
+indentation even when its opening delimiter does not move. This violates the
+comment-relative-whitespace guarantee and can break `#guard_msgs` fixtures.
 
 ## Progress
 
-### Checkpoint 14: external validation environments
+### Checkpoint 15: syntax-comment relative indentation
 
-The validator can run against project-native parser extensions and preserve
-usable imported artifacts while formatting source files. It discovers all
-requested module roots, builds or runs the formatter in the target project when
-native parser code requires it, and rebuilds invalidated dependencies at safe
-boundaries. Target-toolchain fallback remains automatic, and the project-aware
-path does not penalize ordinary Mathlib-style validation.
+Syntax and module doc comments preserve every continuation line relative to the
+opening delimiter, including two-line diagnostic fixtures. Hex's complete
+post-format build passes.
 
-### Checkpoint 15: release validation
+### Checkpoint 16: release validation
 
 The complete local gate and fresh GraphQL, quantum, Hex, and Mathlib validations
 pass. Every formatting delta is reviewed, timings show no material regression,

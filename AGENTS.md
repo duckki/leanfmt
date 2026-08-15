@@ -145,18 +145,21 @@ LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
 
 For each project the script builds leanfmt, creates a fresh clone under
 `.scratch/external-validation/`, optionally downloads the project's Lake cache,
-and runs one complete build before formatting. It then formats each file batch
-directly with `--check-exception --check-idempotent` under the target project's
-`lake env` until all batches pass or the first diagnostic failure occurs. After every
-requested formatter batch succeeds, it runs one complete build over all formatted
-candidates. A formatter failure stops validation without running that build. It
-times every phase and returns failure when any required phase fails. A missing
-build-cache executable is only an optional-phase skip. Pass `--skip-final-build`
-during formatter-only iteration to omit the successful-run post-format build
-while retaining the initial clean build. To resume an existing
-scratch clone after a successful batch, combine `--start-batch N`,
-`--reuse-clone`, and `--skip-initial-build`; the validator then continues from
-batch `N` without recloning or repeating the completed pre-format build.
+and runs one complete build before formatting. It resolves selected sources through
+Lake, builds non-default module targets, reports and skips sources without Lake module
+ownership, and formats staged copies with `--check-exception --check-idempotent`
+under the target project's `lake env`. The project-wide set of native libraries and
+parser plugins declared by Lake setup files is loaded in Lake's required order.
+After every requested formatter batch succeeds, the validator applies the staged output, builds changed
+modules, and runs one complete project build. A formatter failure leaves project
+sources untouched and stops validation without running that build. It times every
+phase and returns failure when any required phase fails. A missing build-cache
+executable is only an optional-phase skip. Pass `--skip-final-build` during
+formatter-only iteration to apply successful output without the changed-module and
+complete builds while retaining the initial clean build. To resume an existing
+scratch clone and staging tree after a successful batch, combine `--start-batch N`,
+`--reuse-clone`, and `--skip-initial-build`; the validator then continues from batch
+`N` without recloning or repeating the completed pre-format build.
 Validation batches run serially, while formatter workers within one invocation run
 concurrently up to the formatter's worker-job limit. Imported files are grouped by
 exact environment, and each group runs in one short-lived worker.

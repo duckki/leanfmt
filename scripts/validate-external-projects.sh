@@ -10,10 +10,12 @@ readonly REPO_ROOT
 readonly FORMATTER="$REPO_ROOT/.lake/build/bin/fmt"
 readonly WORK_DIR="${LEANFMT_VALIDATION_DIR:-$REPO_ROOT/.scratch/external-validation}"
 readonly VALIDATION_FILES_PER_BATCH="${LEANFMT_VALIDATION_BATCH_SIZE:-100}"
+readonly BUILD_FILES_PER_BATCH=1000
 readonly FORMATTER_WORKER_JOBS="${LEANFMT_VALIDATION_FORMATTER_JOBS:-}"
 readonly FORMATTER_LINE_WIDTH="${LEANFMT_VALIDATION_LINE_WIDTH:-}"
 readonly DEFAULT_FILE_SELECTOR="${LEANFMT_VALIDATION_FILE_PATTERN:-*.lean}"
 readonly FORMATTER_BUILD_ROOT="$WORK_DIR/formatter-toolchains"
+readonly SETUP_RUNTIME_HELPER="$REPO_ROOT/scripts/lake-setup-runtime.lean"
 
 failures=0
 CURRENT_TOOLCHAIN=""
@@ -29,6 +31,10 @@ Usage:
 Each project argument must name an explicit git clone source. The validator
 creates a fresh clone under .scratch/external-validation/ before formatting
 unless --reuse-clone is passed.
+Only selected source files owned by a Lake module target are formatted. Other
+tracked Lean files are reported as unowned and skipped. Formatter output is
+staged until every requested batch passes, then changed files are applied to
+the clone and rebuilt. This keeps imported artifacts stable between batches.
 Pass --skip-final-build to omit the complete build after every requested
 formatter batch succeeds. A formatter failure never triggers a build.
 The complete build before formatting still runs.
@@ -51,6 +57,8 @@ The automatic default uses the hardware count for every formatter worker group.
 The validator reads each project's lean-toolchain. When it differs from
 leanfmt's toolchain, the current formatter source is built automatically with
 the target toolchain in .scratch/external-validation/formatter-toolchains/.
+Lake setup files supply native libraries and parser plugins in their required load
+order when target syntax depends on compiled extensions.
 EOF
 }
 
@@ -283,6 +291,166 @@ build_project() {
   (cd "$project_dir" && lake build "$@")
 }
 
+query_project_source_group() {
+  local project_dir="$1"
+  local owned_file="$2"
+  local unowned_file="$3"
+  local setup_file="$4"
+  shift 4
+  local -a sources=("$@")
+  local -a targets=()
+  local source olean setup
+  local output error status split
+
+  for source in "${sources[@]}"; do
+    targets+=("$project_dir/$source:olean")
+  done
+
+  output="$(mktemp "$WORK_DIR/lake-query.XXXXXX")" || return 1
+  error="$(mktemp "$WORK_DIR/lake-query-error.XXXXXX")" || {
+    rm -f "$output"
+    return 1
+  }
+  if (cd "$project_dir" && lake query "${targets[@]}") > "$output" 2> "$error"; then
+    printf '%s\n' "${sources[@]}" >> "$owned_file"
+    while IFS= read -r olean; do
+      if [[ -z "$olean" ]]; then
+        continue
+      fi
+      setup="${olean%%/lib/lean/*}/ir/${olean#*/lib/lean/}"
+      setup="${setup%.olean}.setup.json"
+      printf '%s\n' "$setup" >> "$setup_file"
+    done < "$output"
+    rm -f "$output" "$error"
+    return 0
+  else
+    status=$?
+  fi
+
+  if grep -q '^error: unknown module source path ' "$error"; then
+    rm -f "$output" "$error"
+    if ((${#sources[@]} == 1)); then
+      printf '%s\n' "${sources[0]}" >> "$unowned_file"
+      return 0
+    fi
+    split=$((${#sources[@]} / 2))
+    query_project_source_group "$project_dir" "$owned_file" "$unowned_file" \
+      "$setup_file" "${sources[@]:0:split}" || return $?
+    query_project_source_group "$project_dir" "$owned_file" "$unowned_file" \
+      "$setup_file" "${sources[@]:split}" || return $?
+    return 0
+  fi
+
+  cat "$error" >&2
+  rm -f "$output" "$error"
+  return "$status"
+}
+
+classify_and_build_project_sources() {
+  local project_dir="$1"
+  local selected_file="$2"
+  local owned_file="$3"
+  local unowned_file="$4"
+  local setup_file="$5"
+  local -a batch=()
+  local source
+
+  : > "$owned_file"
+  : > "$unowned_file"
+  : > "$setup_file"
+  while IFS= read -r source; do
+    if [[ -z "$source" ]]; then
+      continue
+    fi
+    batch+=("$source")
+    if ((${#batch[@]} == VALIDATION_FILES_PER_BATCH)); then
+      query_project_source_group "$project_dir" "$owned_file" "$unowned_file" \
+        "$setup_file" "${batch[@]}" || return $?
+      batch=()
+    fi
+  done < "$selected_file"
+  if ((${#batch[@]} > 0)); then
+    query_project_source_group "$project_dir" "$owned_file" "$unowned_file" \
+      "$setup_file" "${batch[@]}" || return $?
+  fi
+}
+
+collect_setup_runtime_manifest() {
+  local project_dir="$1"
+  local setup_file="$2"
+  local output_file="$3"
+
+  (cd "$project_dir" && lake env lean --run "$SETUP_RUNTIME_HELPER" \
+    "$setup_file" "$output_file")
+}
+
+prepare_staged_sources() {
+  local project_dir="$1"
+  local stage_dir="$2"
+  local owned_file="$3"
+  local reuse_stage="$4"
+  local source staged parent
+
+  if ((reuse_stage == 0)); then
+    rm -rf "$stage_dir"
+  fi
+  mkdir -p "$stage_dir"
+  while IFS= read -r source; do
+    if [[ -z "$source" ]]; then
+      continue
+    fi
+    staged="$stage_dir/$source"
+    if [[ -f "$staged" ]]; then
+      continue
+    fi
+    parent="${staged%/*}"
+    mkdir -p "$parent"
+    cp -p "$project_dir/$source" "$staged" || return $?
+  done < "$owned_file"
+}
+
+apply_staged_sources() {
+  local project_dir="$1"
+  local stage_dir="$2"
+  local owned_file="$3"
+  local changed_file="$4"
+  local source staged target
+
+  : > "$changed_file"
+  while IFS= read -r source; do
+    if [[ -z "$source" ]]; then
+      continue
+    fi
+    staged="$stage_dir/$source"
+    target="$project_dir/$source"
+    if ! cmp -s "$staged" "$target"; then
+      cp -p "$staged" "$target" || return $?
+      printf '%s\n' "$source" >> "$changed_file"
+    fi
+  done < "$owned_file"
+}
+
+build_project_source_file() {
+  local project_dir="$1"
+  local source_file="$2"
+  local -a batch=()
+  local source
+
+  while IFS= read -r source; do
+    if [[ -z "$source" ]]; then
+      continue
+    fi
+    batch+=("$project_dir/$source")
+    if ((${#batch[@]} == BUILD_FILES_PER_BATCH)); then
+      (cd "$project_dir" && lake build "${batch[@]}") || return $?
+      batch=()
+    fi
+  done < "$source_file"
+  if ((${#batch[@]} > 0)); then
+    (cd "$project_dir" && lake build "${batch[@]}") || return $?
+  fi
+}
+
 selected_lean_files() {
   local project_dir="$1"
   local file_selector="$2"
@@ -315,6 +483,40 @@ collect_selected_lean_files() {
   done < <(selected_lean_files "$project_dir" "$file_selector")
 }
 
+run_formatter_file_group() {
+  local project_dir="$1"
+  local list_file="$2"
+  local formatter="$3"
+  local runtime_dynlibs="$4"
+  local runtime_plugins="$5"
+  shift 5
+
+  local -a formatter_command=(lake env "$formatter")
+  local -a runtime_environment=()
+  if [[ -n "$FORMATTER_LINE_WIDTH" ]]; then
+    formatter_command+=(--line-width "$FORMATTER_LINE_WIDTH")
+  fi
+  if [[ -n "$FORMATTER_WORKER_JOBS" ]]; then
+    formatter_command+=(--jobs "$FORMATTER_WORKER_JOBS")
+  fi
+  if [[ -n "$runtime_dynlibs" ]]; then
+    runtime_environment+=("LEANFMT_LOAD_DYNLIBS=$runtime_dynlibs")
+  fi
+  if [[ -n "$runtime_plugins" ]]; then
+    runtime_environment+=("LEANFMT_LOAD_PLUGINS=$runtime_plugins")
+  fi
+
+  (
+    cd "$project_dir" || exit 1
+    if ((${#runtime_environment[@]} == 0)); then
+      xargs -0 "${formatter_command[@]}" "$@" < "$list_file"
+    else
+      xargs -0 env "${runtime_environment[@]}" \
+        "${formatter_command[@]}" "$@" < "$list_file"
+    fi
+  )
+}
+
 write_file_batch() {
   local output_file="$1"
   local first_index="$2"
@@ -329,39 +531,22 @@ write_file_batch() {
   done
 }
 
-run_formatter_file_list() {
-  local project_dir="$1"
-  local list_file="$2"
-  local formatter="$3"
-  shift 3
-
-  local -a formatter_command=(lake env "$formatter")
-  if [[ -n "$FORMATTER_LINE_WIDTH" ]]; then
-    formatter_command+=(--line-width "$FORMATTER_LINE_WIDTH")
-  fi
-  if [[ -n "$FORMATTER_WORKER_JOBS" ]]; then
-    formatter_command+=(--jobs "$FORMATTER_WORKER_JOBS")
-  fi
-
-  (
-    cd "$project_dir" || exit 1
-    xargs -0 "${formatter_command[@]}" "$@" < "$list_file"
-  )
-}
-
 run_logged_formatter_file_list() {
   local project_dir="$1"
   local list_file="$2"
   local log_file="$3"
   local formatter="$4"
-  shift 4
+  local runtime_dynlibs="$5"
+  local runtime_plugins="$6"
+  shift 6
 
   {
     printf 'Project directory: %s\n' "$project_dir"
     printf 'File list: %s\n' "$list_file"
     printf 'Formatter: %s\n' "$formatter"
     printf 'Formatter invocations: serial; formatter workers: concurrent\n'
-    run_formatter_file_list "$project_dir" "$list_file" "$formatter" "$@"
+    run_formatter_file_group "$project_dir" "$list_file" "$formatter" \
+      "$runtime_dynlibs" "$runtime_plugins" "$@"
   } 2>&1 | tee "$log_file"
 }
 
@@ -377,7 +562,9 @@ run_project_validation_batches() {
   shift 8
   local -a build_targets=("$@")
   local -a build_command=(build_project "$project_dir")
+  local -a selected_files=()
   local -a files=()
+  local -a staged_files=()
   local file
 
   if ((${#build_targets[@]} > 0)); then
@@ -385,13 +572,126 @@ run_project_validation_batches() {
   fi
 
   while IFS= read -r -d '' file; do
-    files+=("$file")
+    selected_files+=("$file")
   done < <(collect_selected_lean_files "$project_dir" "$file_selector")
 
-  if ((${#files[@]} == 0)); then
+  if ((${#selected_files[@]} == 0)); then
     printf 'No files matched %q in %s.\n' "$file_selector" "$project_dir"
     return 0
   fi
+
+  local log_dir="$WORK_DIR/logs/$project_name"
+  local state_file="$log_dir/state"
+  local selected_file="$log_dir/selected-sources"
+  local owned_file="$log_dir/owned-sources"
+  local unowned_file="$log_dir/unowned-sources"
+  local setup_file="$log_dir/setup-files"
+  local runtime_file="$log_dir/runtime-library-manifest"
+  local changed_file="$log_dir/changed-sources"
+  local stage_dir="$project_dir/.lake/leanfmt-validation/staging"
+  local batch first_index count last_index list_file log_file
+  local formatter_status build_status status
+  local source runtime_line runtime_dynlibs runtime_plugins
+  local unowned_count=0 reuse_stage=0
+
+  mkdir -p "$log_dir"
+  printf 'Formatter batch logs: %s\n' "$log_dir"
+  : > "$selected_file"
+  for file in "${selected_files[@]}"; do
+    printf '%s\n' "${file#"$project_dir/"}" >> "$selected_file"
+  done
+
+  if ((skip_initial_build == 1)); then
+    section "Skip initial build of $project_name before formatting ($file_selector)"
+    printf 'SKIPPED: initial build disabled by --skip-initial-build.\n'
+  else
+    if run_phase_result \
+        "Build $project_name before formatting ($file_selector)" \
+        "${build_command[@]}"; then
+      :
+    else
+      status=$?
+      printf 'Stopping before formatter batches after the initial build failed.\n' >&2
+      return "$status"
+    fi
+  fi
+
+  if run_phase_result \
+      "Resolve and build selected Lake modules for $project_name ($file_selector)" \
+      classify_and_build_project_sources "$project_dir" "$selected_file" \
+        "$owned_file" "$unowned_file" "$setup_file"; then
+    :
+  else
+    status=$?
+    printf 'Stopping before formatter batches after Lake source resolution failed.\n' >&2
+    return "$status"
+  fi
+
+  while IFS= read -r source; do
+    if [[ -z "$source" ]]; then
+      continue
+    fi
+    files+=("$project_dir/$source")
+    staged_files+=("$stage_dir/$source")
+  done < "$owned_file"
+  while IFS= read -r source; do
+    if [[ -n "$source" ]]; then
+      unowned_count=$((unowned_count + 1))
+    fi
+  done < "$unowned_file"
+
+  if ((unowned_count > 0)); then
+    printf 'Skipping %d selected Lean source(s) without Lake module ownership:\n' \
+      "$unowned_count"
+    while IFS= read -r source; do
+      if [[ -n "$source" ]]; then
+        printf '  %s\n' "$source"
+      fi
+    done < "$unowned_file"
+  fi
+
+  if ((${#files[@]} == 0)); then
+    printf 'No selected Lean files are owned by Lake module targets.\n'
+    return 0
+  fi
+
+  if run_phase_result \
+      "Collect Lake setup runtime for $project_name" \
+      collect_setup_runtime_manifest "$project_dir" "$setup_file" \
+        "$runtime_file"; then
+    :
+  else
+    status=$?
+    printf 'Stopping before formatter batches after Lake setup discovery failed.\n' >&2
+    return "$status"
+  fi
+  IFS= read -r runtime_line < "$runtime_file" || runtime_line=""
+  if [[ "$runtime_line" != *$'\t'* ]]; then
+    printf 'Invalid Lake setup runtime line: %s\n' "$runtime_line" >&2
+    return 1
+  fi
+  runtime_dynlibs="${runtime_line%%$'\t'*}"
+  runtime_plugins="${runtime_line#*$'\t'}"
+  if [[ -n "${LEANFMT_LOAD_DYNLIBS:-}" ]]; then
+    if [[ -n "$runtime_dynlibs" ]]; then
+      runtime_dynlibs="$LEANFMT_LOAD_DYNLIBS:$runtime_dynlibs"
+    else
+      runtime_dynlibs="$LEANFMT_LOAD_DYNLIBS"
+    fi
+  fi
+  if [[ -n "${LEANFMT_LOAD_PLUGINS:-}" ]]; then
+    if [[ -n "$runtime_plugins" ]]; then
+      runtime_plugins="$LEANFMT_LOAD_PLUGINS:$runtime_plugins"
+    else
+      runtime_plugins="$LEANFMT_LOAD_PLUGINS"
+    fi
+  fi
+
+  if [[ -n "$start_batch" ]]; then
+    reuse_stage=1
+  fi
+  prepare_staged_sources "$project_dir" "$stage_dir" "$owned_file" \
+    "$reuse_stage" || return $?
 
   local total_files="${#files[@]}"
   local total_batches=$(((total_files + VALIDATION_FILES_PER_BATCH - 1) / VALIDATION_FILES_PER_BATCH))
@@ -416,9 +716,14 @@ run_project_validation_batches() {
   fi
 
   printf 'Formatter file set: %s\n' "$file_selector"
-  printf 'Total Lean files: %d\n' "$total_files"
+  printf 'Selected Lean files: %d; Lake-owned files: %d; unowned files: %d\n' \
+    "${#selected_files[@]}" "$total_files" "$unowned_count"
   printf 'Validation batch size: %d file(s); total batches: %d\n' \
     "$VALIDATION_FILES_PER_BATCH" "$total_batches"
+  printf 'Setup runtime: native libraries %s; plugins %s\n' \
+    "$([[ -n "$runtime_dynlibs" ]] && printf enabled || printf none)" \
+    "$([[ -n "$runtime_plugins" ]] && printf enabled || printf none)"
+  printf 'Staged formatter output: %s\n' "$stage_dir"
   if [[ -n "$FORMATTER_WORKER_JOBS" ]]; then
     printf 'Formatter worker jobs override: %d\n' "$FORMATTER_WORKER_JOBS"
   else
@@ -437,29 +742,6 @@ run_project_validation_batches() {
     printf 'Lake build targets: project defaults\n'
   fi
 
-  local log_dir="$WORK_DIR/logs/$project_name"
-  local state_file="$log_dir/state"
-  local batch first_index count last_index list_file log_file
-  local formatter_status build_status status
-
-  mkdir -p "$log_dir"
-  printf 'Formatter batch logs: %s\n' "$log_dir"
-
-  if ((skip_initial_build == 1)); then
-    section "Skip initial build of $project_name before formatting ($file_selector)"
-    printf 'SKIPPED: initial build disabled by --skip-initial-build.\n'
-  else
-    if run_phase_result \
-        "Build $project_name before formatting ($file_selector)" \
-        "${build_command[@]}"; then
-      :
-    else
-      status=$?
-      printf 'Stopping before formatter batches after the initial build failed.\n' >&2
-      return "$status"
-    fi
-  fi
-
   for ((batch = first_batch; batch <= last_batch; batch++)); do
     first_index=$(((batch - 1) * VALIDATION_FILES_PER_BATCH))
     count="$VALIDATION_FILES_PER_BATCH"
@@ -469,7 +751,7 @@ run_project_validation_batches() {
     last_index=$((first_index + count - 1))
 
     list_file="$(mktemp "$WORK_DIR/$project_name-batch-$batch.XXXXXX")" || return 1
-    write_file_batch "$list_file" "$first_index" "$count" "${files[@]}"
+    write_file_batch "$list_file" "$first_index" "$count" "${staged_files[@]}"
     log_file="$log_dir/batch-$batch.log"
 
     printf '\n-- Formatter batch %d/%d: %d file(s), indexes %d-%d --\n' \
@@ -485,7 +767,8 @@ run_project_validation_batches() {
     if run_phase_result \
         "Format and check $project_name batch $batch/$total_batches ($file_selector)" \
         run_logged_formatter_file_list "$project_dir" "$list_file" "$log_file" \
-          "$formatter" --check-exception --check-idempotent; then
+          "$formatter" "$runtime_dynlibs" "$runtime_plugins" \
+          --check-exception --check-idempotent; then
       :
     else
       formatter_status=$?
@@ -512,10 +795,37 @@ run_project_validation_batches() {
     fi
   done
 
+  if run_phase_result \
+      "Apply staged formatter output for $project_name ($file_selector)" \
+      apply_staged_sources "$project_dir" "$stage_dir" "$owned_file" \
+        "$changed_file"; then
+    :
+  else
+    status=$?
+    printf 'Stopping before the final build after staged output could not be applied.\n' >&2
+    return "$status"
+  fi
+
   if ((skip_final_build == 1)); then
     section "Skip final build of $project_name after all requested formatter batches passed ($file_selector)"
     printf 'SKIPPED: final build disabled by --skip-final-build.\n'
+    rm -rf "$stage_dir"
     return 0
+  fi
+
+  if [[ -s "$changed_file" ]]; then
+    if run_phase_result \
+        "Build changed Lake modules in $project_name ($file_selector)" \
+        build_project_source_file "$project_dir" "$changed_file"; then
+      :
+    else
+      status=$?
+      printf 'Stopping before the final project build after a changed module failed.\n' >&2
+      return "$status"
+    fi
+  else
+    section "Build changed Lake modules in $project_name ($file_selector)"
+    printf 'SKIPPED: formatter output did not change any Lake-owned sources.\n'
   fi
 
   build_status=0
@@ -532,6 +842,7 @@ run_project_validation_batches() {
     return "$build_status"
   fi
 
+  rm -rf "$stage_dir"
   return 0
 }
 

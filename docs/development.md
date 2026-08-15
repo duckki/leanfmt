@@ -441,10 +441,20 @@ Do not commit before review unless the reviewer explicitly asks for a commit.
 ## External validation
 
 The external validator clones one or more explicitly provided Git repositories,
-downloads their Lake build caches, builds each complete project, then formats every
-tracked Lean file from that project's `lake env` while checking preservation, unknown
-rules, and idempotence. It builds the complete project again only after every requested
-formatter batch succeeds:
+downloads their Lake build caches, and builds each complete project. It resolves
+selected sources through Lake, builds module targets outside the project's default
+build, and formats staged copies of every Lake-owned source from that project's
+`lake env` while checking preservation, unknown rules, and idempotence. Selected
+Lean files without a Lake module target are listed and skipped. Only after every
+requested formatter batch succeeds does the validator apply the staged output,
+build changed modules in large internal batches, and build the complete project
+again.
+
+Staging keeps the clean build artifacts usable while later formatter batches import
+files formatted by earlier batches. Lake setup files also identify the project-wide
+set of native libraries and parser plugins required by the selected source
+environments. The validator preserves Lake's load order: native libraries first,
+then plugins.
 
 Before formatting, the validator compares the project's `lean-toolchain` with
 leanfmt's. A matching project uses the formatter built in the main checkout. For
@@ -506,15 +516,18 @@ of the source being validated. Both the initial and final builds use the same
 target list.
 
 Validation runs in batches of 100 files by default. The validator first runs one
-complete project build. Each validation batch then formats its files directly with
-the exception and idempotency checks enabled. Batches continue until all are formatted
-or one reports a diagnostic failure. After every requested batch succeeds, the
-validator runs one complete project build over all formatted candidates. A formatter
-failure stops validation immediately without running that build. Within each batch,
+complete project build, resolves and builds every selected Lake module, and copies
+the owned sources to its staging tree. Each validation batch formats staged files
+with the exception and idempotency checks enabled. Batches continue until all are
+formatted or one reports a diagnostic failure. A formatter failure leaves the
+project sources untouched and stops validation immediately without a final build.
+After every requested batch succeeds, the validator applies all staged output, builds
+changed module targets, and runs one complete project build. Within each batch,
 leanfmt manages formatter worker processes and batch sizing. The validator prints the
-total file count, total batch count, selected batch, batch index range, first/last file
-for each batch, and any worker-job override. Without `--batch`,
-it runs batches in order and stops formatting at the first failed batch.
+selected, Lake-owned, and unowned file counts; total batch count; selected batch;
+batch index range; first/last file; setup-runtime count; and any
+worker-job override. Without `--batch`, it runs batches in order and stops formatting
+at the first failed batch.
 Pass `--batch N` to run only a specific 1-based validation batch:
 
 ```sh
@@ -525,9 +538,10 @@ scripts/validate-external-projects.sh \
 ```
 
 To resume an interrupted scratch validation, pass `--start-batch N` with
-`--reuse-clone`. The validator keeps the existing clone and validates batch `N`
-and every later batch. Add `--skip-initial-build` only when that same clone
-already completed the clean pre-format build:
+`--reuse-clone`. The validator keeps the existing clone and staging tree, then
+validates batch `N` and every later batch for the same file selection. Add
+`--skip-initial-build` only when that same clone already completed the clean
+pre-format build:
 
 ```sh
 scripts/validate-external-projects.sh \
@@ -543,12 +557,14 @@ Validation batches remain serial so a failure has one unambiguous stopping point
 Within each formatter invocation, worker batches run concurrently up to the configured
 job limit. Each validation batch writes its formatter output to
 `.scratch/external-validation/logs/PROJECT/batch-N.log` and updates the adjacent
-`state` file with the running, passed, or failed batch, so interrupted runs can
-be diagnosed and resumed without overlapping formatter invocations.
+`state` file with the running, passed, or failed batch. The same log directory records
+the selected, Lake-owned, unowned, changed, setup, and runtime paths, so
+interrupted runs can be diagnosed and resumed without overlapping formatter
+invocations.
 
 For formatter-only iteration, pass `--skip-final-build`. The initial clean build
-still runs, but the validator omits the complete build after every requested formatter
-batch succeeds:
+still runs, and successful staged output is still applied, but the validator omits
+the changed-module and complete builds:
 
 ```sh
 scripts/validate-external-projects.sh \
