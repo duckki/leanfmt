@@ -13287,8 +13287,8 @@ def assertCliSkipsHiddenPathsByDefault : IO Unit :=
           ] do
         assertTrue s!"CLI --include-hidden discovers {file}" (includedFiles.contains file)
 
-def assertCliLoadsImportedSyntax
-    (loader : LeanFmt.Driver.EnvironmentLoader) : IO Unit := do
+def assertFormatsImportedSyntaxWithProjectEnvironment
+    (env : Lean.Environment) : IO Unit := do
   let root : FilePath := ".scratch/leanfmt-cli-test/project-env"
   IO.FS.createDirAll root
   let firstFile := root / "ImportedSyntax.lean"
@@ -13299,11 +13299,14 @@ def assertCliLoadsImportedSyntax
     "import LeanFmt\nimport LeanFmt.Tests.ProjectSyntax\n\n#check ∀ᵉ x ∈ xs, project_syntax\n"
   IO.FS.writeFile firstFile firstSource
   IO.FS.writeFile secondFile secondSource
-  for file in [firstFile, secondFile] do
-    let exitCode ←
-      LeanFmt.Driver.runOptionsWithLoader loader
-        { includeHidden := true, files := [file] }
-    assertTrue s!"CLI loads imported syntax for {file}" (exitCode == 0)
+  let firstFormatted ←
+    Formatter.formatSourceWithEnv env firstSource firstFile.toString
+  let secondFormatted ←
+    Formatter.formatSourceWithEnv env secondSource secondFile.toString
+  assertEq "formatter preserves first imported-syntax source"
+    firstSource firstFormatted
+  assertEq "formatter preserves second imported-syntax source"
+    secondSource secondFormatted
   assertEq "CLI preserves first imported-syntax source"
     firstSource (← IO.FS.readFile firstFile)
   assertEq "CLI preserves second imported-syntax source"
@@ -16210,9 +16213,9 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   IO.eprintln "leanfmt-test: begin CLI hidden path test"
   assertCliSkipsHiddenPathsByDefault
   IO.eprintln "leanfmt-test: end CLI hidden path test"
-  IO.eprintln "leanfmt-test: begin CLI imported syntax test"
-  assertCliLoadsImportedSyntax loader
-  IO.eprintln "leanfmt-test: end CLI imported syntax test"
+  IO.eprintln "leanfmt-test: begin imported syntax formatting test"
+  assertFormatsImportedSyntaxWithProjectEnvironment projectSyntaxEnv
+  IO.eprintln "leanfmt-test: end imported syntax formatting test"
   assertFmtExecutableConfigured
   assertRendererTraceIncludesPathAndState env
   assertCliFixtureUpdate env
