@@ -13085,7 +13085,12 @@ def assertCliChecksStillFormatUnlessCheck
   IO.FS.writeFile preservingFile preservingSource
   let preservingExitCode ←
     LeanFmt.Driver.runOptionsWithLoader loader
-      { checkException := true, includeHidden := true, files := [preservingFile] }
+      {
+        checkException := true
+        workerDefaultEnvironment := true
+        includeHidden := true
+        files := [preservingFile]
+      }
   assertTrue "CLI exception check still formats" (preservingExitCode == 0)
   let preservingFormatted ←
     Formatter.formatSourceWithEnv env preservingSource preservingFile.toString
@@ -13112,6 +13117,7 @@ def assertCliChecksStillFormatUnlessCheck
     LeanFmt.Driver.runOptionsWithLoader loader
       {
         checkException := true
+        workerDefaultEnvironment := true
         formatterOptions := { lineWidth := 60 }
         includeHidden := true
         files := [overflowFile, afterExceptionFile]
@@ -13132,6 +13138,7 @@ def assertCliChecksStillFormatUnlessCheck
       {
         check := true
         checkException := true
+        workerDefaultEnvironment := true
         formatterOptions := { lineWidth := 60 }
         includeHidden := true
         files := [overflowFile]
@@ -13145,7 +13152,12 @@ def assertCliChecksStillFormatUnlessCheck
   IO.FS.writeFile idempotentFile idempotentSource
   let idempotentExitCode ←
     LeanFmt.Driver.runOptionsWithLoader loader
-      { checkIdempotent := true, includeHidden := true, files := [idempotentFile] }
+      {
+        checkIdempotent := true
+        workerDefaultEnvironment := true
+        includeHidden := true
+        files := [idempotentFile]
+      }
   assertTrue "CLI idempotence check still formats" (idempotentExitCode == 0)
   let idempotentFormatted ←
     Formatter.formatSourceWithEnv env idempotentSource idempotentFile.toString
@@ -13161,6 +13173,7 @@ def assertCliChecksStillFormatUnlessCheck
         check := true
         checkException := true
         checkIdempotent := true
+        workerDefaultEnvironment := true
         includeHidden := true
         files := [checkedFile]
       }
@@ -13170,7 +13183,12 @@ def assertCliChecksStillFormatUnlessCheck
 
   let ordinaryCheckExitCode ←
     LeanFmt.Driver.runOptionsWithLoader loader
-      { check := true, includeHidden := true, files := [checkedFile] }
+      {
+        check := true
+        workerDefaultEnvironment := true
+        includeHidden := true
+        files := [checkedFile]
+      }
   assertTrue "CLI ordinary --check still fails on formatting changes"
     (ordinaryCheckExitCode == 1)
 
@@ -13187,7 +13205,8 @@ def assertCliFormatsDirectory
   IO.FS.writeFile topFile topSource
   IO.FS.writeFile nestedFile nestedSource
   let exitCode ←
-    LeanFmt.Driver.runOptionsWithLoader loader { includeHidden := true, files := [root] }
+    LeanFmt.Driver.runOptionsWithLoader loader
+      { workerDefaultEnvironment := true, includeHidden := true, files := [root] }
   assertTrue "CLI directory format succeeds" (exitCode == 0)
   let topFormatted ← Formatter.formatSourceWithEnv env topSource topFile.toString
   assertEq "CLI formats direct Lean files in directory" topFormatted
@@ -13209,7 +13228,9 @@ def assertCliFormatsDirectoryRecursively
   IO.FS.writeFile nestedFile nestedSource
   match LeanFmt.Cli.parseArgs ["-r", "--include-hidden", root.toString] with
   | .run options =>
-      let exitCode ← LeanFmt.Driver.runOptionsWithLoader loader options
+      let exitCode ←
+        LeanFmt.Driver.runOptionsWithLoader loader
+          { options with workerDefaultEnvironment := true }
       assertTrue "CLI recursive directory format succeeds" (exitCode == 0)
       let topFormatted ← Formatter.formatSourceWithEnv env topSource topFile.toString
       let nestedFormatted ←
