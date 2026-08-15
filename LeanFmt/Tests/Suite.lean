@@ -1683,6 +1683,14 @@ def assertGroupedEqualPrecedenceInfixChain (env : Lean.Environment) : IO Unit :=
     Formatter.formatSourceWithEnv env source "grouped-equal-precedence-infix.lean"
       { lineWidth := 55 }
   assertEq "equal-precedence infix continuations share one base" expected formatted
+  let spacingSource :=
+    "def infixSpacing := ready &&  if enabled then available else waiting\n"
+  let spacingExpected :=
+    "def infixSpacing := ready && if enabled then available else waiting\n"
+  let spacingFormatted ←
+    Formatter.formatSourceWithEnv env spacingSource "inline-infix-spacing.lean"
+  assertEq "inline infix boundaries use one separating space"
+    spacingExpected spacingFormatted
 
 def assertLeadingParserArgumentsFlow (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -2874,8 +2882,7 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
       ++ "  | return .text "
       ++ "\"A long fallback message that cannot share the fallback separator line at all\"")
     ("  let .leaf comma := commaTree\n"
-      ++ "  |\n"
-      ++ "    return .text\n"
+      ++ "  | return .text\n"
       ++ "      \"A long fallback message that cannot share the fallback separator line at all\"")
   let trailingCommentSource :=
     "def fallbackComment (depth : Nat) : Id Bool := do\n"
@@ -3296,6 +3303,39 @@ def assertDoTrySuffixFollowsShiftedTry (env : Lean.Environment) : IO Unit := do
     Formatter.formatSourceWithEnv env formatted
       "do-try-suffix-shift-formatted.lean" { lineWidth := 60 }
   assertEq "shifted do-try suffix is idempotent" formatted formattedAgain
+
+  let termSource :=
+    "def tryAfterPipe := do\n"
+    ++ "  let result ←\n"
+    ++ "    wrapperWithEnoughCharactersToForceThePipeGroupOntoANewLine <| try\n"
+    ++ "      action\n"
+    ++ "    catch error =>\n"
+    ++ "      fallback error\n"
+    ++ "    finally\n"
+    ++ "      cleanup\n"
+    ++ "  pure result\n"
+  let termExpected :=
+    "def tryAfterPipe := do\n"
+    ++ "  let result ←\n"
+    ++ "    wrapperWithEnoughCharactersToForceThePipeGroupOntoANewLine\n"
+    ++ "    <| try\n"
+    ++ "      action\n"
+    ++ "    catch error =>\n"
+    ++ "      fallback error\n"
+    ++ "    finally cleanup\n"
+    ++ "  pure result\n"
+  let termResult ←
+    Formatter.formatSourceWithEnvDetailed env termSource
+      "term-try-suffix-shift.lean" { lineWidth := 60 }
+  assertTrue "shifted term try does not fall back" (!termResult.fellBack)
+  assertEq "term try clauses follow the shifted try base"
+    termExpected termResult.formatted
+  assertTrue "shifted term try preserves code"
+    (← codePreservedIgnoringWhitespace env termSource termResult.formatted)
+  let termAgain ←
+    Formatter.formatSourceWithEnv env termResult.formatted
+      "term-try-suffix-shift-formatted.lean" { lineWidth := 60 }
+  assertEq "shifted term try is idempotent" termResult.formatted termAgain
 
 def assertReturnDoesNotBreakBeforeValue (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -15754,6 +15794,35 @@ def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
     Formatter.formatSourceWithEnv env fallbackResult.formatted
       "attached-fallback-suffix-formatted.lean" { lineWidth := 100 }
   assertEq "attached fallback suffix is idempotent" fallbackResult.formatted fallbackAgain
+
+  let multilineFallbackSource :=
+    "def multilineFallback := do\n"
+    ++ "  let some value ← action\n"
+    ++ "  |\n"
+    ++ "    throwError\n"
+    ++ "      \"long fallback message with enough characters to break\"\n"
+    ++ "  pure value\n"
+  let multilineFallbackExpected :=
+    "def multilineFallback := do\n"
+    ++ "  let some value ← action\n"
+    ++ "  | throwError\n"
+    ++ "      \"long fallback message with enough characters to break\"\n"
+    ++ "  pure value\n"
+  let multilineFallbackResult ←
+    Formatter.formatSourceWithEnvDetailed env multilineFallbackSource
+      "attached-multiline-fallback-suffix.lean" { lineWidth := 50 }
+  assertTrue "multiline fallback suffix does not fall back"
+    (!multilineFallbackResult.fellBack)
+  assertEq "a fallback bar stays with the first movable body token"
+    multilineFallbackExpected multilineFallbackResult.formatted
+  assertTrue "multiline fallback suffix preserves code"
+    (← codePreservedIgnoringWhitespace env multilineFallbackSource
+        multilineFallbackResult.formatted)
+  let multilineFallbackAgain ←
+    Formatter.formatSourceWithEnv env multilineFallbackResult.formatted
+      "attached-multiline-fallback-suffix-formatted.lean" { lineWidth := 50 }
+  assertEq "multiline fallback suffix is idempotent"
+    multilineFallbackResult.formatted multilineFallbackAgain
 
   let conditionalSource :=
     "def conditionalSuffix :=\n"

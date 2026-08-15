@@ -2124,6 +2124,12 @@ def doFallbackClauseBodyRequiresBreak (segment : Segment) (index : Nat) : Bool :
       children[1]?.any fun fallback => 1 < directDoSequenceItemCount fallback
   | _ => false
 
+def doFallbackClauseKeepsPrefixWithBody (segment : Segment) (index : Nat) : Bool :=
+  segment.start < index
+  && (segment.child? index).any
+      fun fallback =>
+        directDoSequenceItemCount fallback <= 1
+
 def doFallbackBodyRequiresBreak (segment : Segment) : Bool :=
   doFallbackClauseIndex? segment
   |>.any fun index => doFallbackClauseBodyRequiresBreak segment index
@@ -2313,6 +2319,8 @@ def doFallbackClauseRule : LineBreakRule :=
       fun _ segment index => segment.start < index
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index => doFallbackClauseKeepsPrefixWithBody segment index
     breakPoints := doFallbackClauseBreaks
   }
 
@@ -4605,6 +4613,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.doLetElse) _ => some doLetElseRule
   | .node (.raw `Lean.Parser.Term.doMatch) _ => some matchExpressionRule
   | .node (.raw `Lean.Parser.Term.doTry) _ => some doTryRule
+  | .node (.raw `Lean.Parser.Term.termTry) _ => some doTryRule
   | .node (.raw `Lean.Parser.Term.doCatch) _ => some doCatchRule
   | .node (.raw `Lean.Parser.Term.doCatchMatch) _ => some doRule
   | .node (.raw `Lean.Parser.Term.doFor) _ => some doForRule

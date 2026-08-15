@@ -556,10 +556,10 @@ def runMixedWorkerBatches
   let (process?, setupMs) ←
     timeIO
     <| try
-        some <$> loadWorkerProcessContext cwd?
-        catch error =>
-          IO.eprintln s!"leanfmt: could not establish target Lake environment: {error}"
-          pure none
+      some <$> loadWorkerProcessContext cwd?
+    catch error =>
+      IO.eprintln s!"leanfmt: could not establish target Lake environment: {error}"
+      pure none
   let some process := process? | return 1
   profileLine options
     s!"worker-process-environment: variables={process.environment.size} elapsed={setupMs}ms"

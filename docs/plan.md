@@ -28,17 +28,6 @@ command wrapper alone does not distinguish a parser-owned clause from an
 optional direct term, so attachment must wait for explicit parser-category
 ownership rather than inferring it from tokens or spaces.
 
-### Try clause bases
-
-```lean
-try
-  action
-  catch error => fallback
-```
-
-`catch` can inherit the `try` body's indentation after its enclosing declaration
-moves. Peer `catch` and `finally` clauses should align with `try`.
-
 ### Parser-owned `do` suffix attachment
 
 ```lean
@@ -56,51 +45,6 @@ some term-level loops, alternatives, assignments, and tactic clauses still
 detach their introducer. Their parser-owned header and body must be exposed by
 the syntax tree before the shared suffix and body-base policies can apply.
 
-### Refutable fallback attachment
-
-```lean
-let some value ← action
-|
-  throwError
-    "long fallback message"
-```
-
-The fallback bar now aligns with its owning `let`, but a protected multiline
-fallback can still leave `|` alone. When the first fallback token can accept the
-boundary, it should remain attached to the bar without changing the fallback's
-internal layout.
-
-### Infix horizontal spacing
-
-```lean
-ready &&  if enabled then available else waiting
-```
-
-Structural indentation can leak into horizontal trivia after an infix operator.
-Inline operator boundaries should emit exactly one separating space.
-
-### Infix continuation bases
-
-```lean
-first
-  ++ second
-    ++ third
-```
-
-Nested infix and `<|` chains can staircase. Operators in one logical chain
-should share the expression's structural continuation base.
-
-### Low-priority operand attachment
-
-```lean
-transform
-  <|
-  build value
-```
-
-An avoidable standalone `<|` remains when an ordinary operand does not expose a
-movable first-line boundary. Protected and comment-led boundaries remain valid.
-
 ### Nested match ownership
 
 ```lean
@@ -113,27 +57,6 @@ match
 An outer `with` can stay on the final inner branch line, obscuring which `match`
 owns the following alternatives. Nested match suffixes and bodies should move
 with their parser-owned match node.
-
-### Comment-owned structural bases
-
-```lean
-  /-- Explanation. -/
-    | constructor
-```
-
-A leading comment and its lambda or constructor case can use different bases.
-Both should move with the same structural owner. Source-significant diagnostic
-comment payloads must retain their relative indentation as one protected block.
-
-### Protected inline body bases
-
-```lean
-wrapper (by
-          exact proof)
-```
-
-Some inline `by` and `match` bodies retain the introducer's source column after
-their owner moves. Protected bodies should use the nearest structural base.
 
 ### Tactic continuation bases
 
@@ -165,20 +88,12 @@ formatting rules in third-party syntax.
 
 ## Progress
 
-### Checkpoint 12: expression bases
-
-Infix spacing is stable, nested chains share one base, and `<|` is not left alone
-when an ordinary operand can accept the break. Refutable fallback bars attach to
-their first movable token, and comment-owned and protected inline bodies use
-structural bases without weakening source preservation. `try`, `catch`, and
-`finally` retain one peer clause base when their owner moves.
-
 ### Checkpoint 13: declaration and proof ownership
 
-Extension command suffixes, declaration continuations, nested matches, and
-tactic continuations use explicit parser ownership. Remaining parser-owned `do`
-suffixes obey their grouped structure. No renderer policy or token spelling
-substitutes for missing syntax-tree structure.
+Extension command suffixes, nested matches, and tactic continuations use
+explicit parser ownership. Remaining parser-owned `do` suffixes obey their
+grouped structure. No renderer policy or token spelling substitutes for missing
+syntax-tree structure.
 
 ### Checkpoint 14: external validation environments
 
