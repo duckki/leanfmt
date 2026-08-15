@@ -16198,11 +16198,21 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertImportFilesGroupByHeader
   assertRecursiveWorkerChecksTargetToolchain
   assertFormattingExceptionChecks projectSyntaxEnv
+  IO.eprintln "leanfmt-test: begin CLI check-mode tests"
   assertCliChecksStillFormatUnlessCheck env loader
+  IO.eprintln "leanfmt-test: end CLI check-mode tests"
+  IO.eprintln "leanfmt-test: begin CLI directory test"
   assertCliFormatsDirectory env loader
+  IO.eprintln "leanfmt-test: end CLI directory test"
+  IO.eprintln "leanfmt-test: begin CLI recursive directory test"
   assertCliFormatsDirectoryRecursively env loader
+  IO.eprintln "leanfmt-test: end CLI recursive directory test"
+  IO.eprintln "leanfmt-test: begin CLI hidden path test"
   assertCliSkipsHiddenPathsByDefault
+  IO.eprintln "leanfmt-test: end CLI hidden path test"
+  IO.eprintln "leanfmt-test: begin CLI imported syntax test"
   assertCliLoadsImportedSyntax loader
+  IO.eprintln "leanfmt-test: end CLI imported syntax test"
   assertFmtExecutableConfigured
   assertRendererTraceIncludesPathAndState env
   assertCliFixtureUpdate env
