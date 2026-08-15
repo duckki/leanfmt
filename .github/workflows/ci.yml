@@ -31,7 +31,7 @@ jobs:
             echo "lake test still running..."
           done &
           heartbeat=$!
-          trap 'kill "$heartbeat"' EXIT
+          trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
           lake test --wfail
       - name: Run local environment linters
         run: lake -d tools/linter exe runLinter
