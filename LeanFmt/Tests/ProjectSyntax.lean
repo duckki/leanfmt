@@ -13,6 +13,7 @@ syntax (name := projectPrefixedDeclaration) "project_haveI' " letDecl : doElem
 syntax (name := projectTermCommand) "#project_term " ident term : command
 syntax (name := projectWrappedTerm) "project_wrapped " term : term
 syntax (name := projectOptionalTermCommand) "#project_optional " ident (term)? : command
+syntax (name := projectWhereTermCommand) "#project_where " ident " where " term : command
 elab (name := projectNoteCommand) "#project_note " (docComment)? : command =>
   pure ()
 

@@ -323,13 +323,15 @@ private def isBatteriesLibraryNoteSyntaxTree : SyntaxTree.Tree → Bool
 
 private def macroPatternHasLineStructure : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Command.macro) children =>
-      match children.findIdx?
-              fun child => LineBreakRules.treeFirstLexeme? child == some "macro",
-            children.findIdx?
-              fun child =>
-                match child with
-                | .node (.raw `Lean.Parser.Command.macroTail) _ => true
-                | _ => false with
+      match
+          children.findIdx?
+            fun child => LineBreakRules.treeFirstLexeme? child == some "macro",
+          children.findIdx?
+            fun child =>
+              match child with
+              | .node (.raw `Lean.Parser.Command.macroTail) _ => true
+              | _ => false
+      with
       | some macroIndex, some tailIndex =>
           let tokens :=
             List.range' (macroIndex + 1) (tailIndex - (macroIndex + 1))
@@ -722,9 +724,18 @@ def planForKind (kind : LayoutIslandKind) : IslandPlan :=
 def plan? (tree : SyntaxTree.Tree) : Option IslandPlan :=
   (classify? tree).map planForKind
 
+private partial def wrapsBracketedCollection : SyntaxTree.Tree → Bool
+  | .node _ children =>
+      if SyntaxTree.outerDelimiterKind? children == some .bracket then
+        true
+      else
+        let content := children.filter fun child => child.firstToken?.isSome
+        content.size == 1 && content[0]?.any wrapsBracketedCollection
+  | _ => false
+
 def canUseStructuralOverflowFallback : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _ => true
-  | _ => false
+  | tree => classify? tree == some .mathlibTactic && wrapsBracketedCollection tree
 
 def canUseStructuralLayoutAfterParentMove : SyntaxTree.Tree → Bool
   | .node .application _

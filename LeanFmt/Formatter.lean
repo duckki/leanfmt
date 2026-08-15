@@ -128,10 +128,11 @@ def buildModule
     (letBodyParserFacts : Array SyntaxTree.LetBodyParserFact := #[])
     (infixPrecedences : SyntaxTree.InfixPrecedenceMap := {})
     (spacedApplicationKinds : SyntaxTree.SpacedApplicationKindSet := {})
+    (parserOwnedBodies : SyntaxTree.ParserOwnedBodyMap := {})
     : SyntaxTree.Module :=
   let tree :=
     SyntaxTree.extractTree source rawSyntax letBodyParserFacts infixPrecedences
-      spacedApplicationKinds
+      spacedApplicationKinds parserOwnedBodies
   { source, rawSyntax, tree, tokens := tree.tokens }
 
 def parseModuleWithEnv (env : Environment) (source fileName : String)
@@ -141,7 +142,7 @@ def parseModuleWithEnv (env : Environment) (source fileName : String)
       (updateParserState := true)
   pure
   <| buildModule source parsed.rawSyntax parsed.letBodyParserFacts parsed.infixPrecedences
-      parsed.spacedApplicationKinds
+      parsed.spacedApplicationKinds parsed.parserOwnedBodies
 
 def formatPassWithEnv
     (env : Environment) (source fileName : String) (options : Options := {})
@@ -286,7 +287,7 @@ def formatSourceProfiledWithEnv
       let moduleTree :=
         Internal.buildModule normalizedSource parsedSyntax.rawSyntax
           parsedSyntax.letBodyParserFacts parsedSyntax.infixPrecedences
-          parsedSyntax.spacedApplicationKinds
+          parsedSyntax.spacedApplicationKinds parsedSyntax.parserOwnedBodies
       let tokenCount := moduleTree.tokens.size
       IO.eprintln s!"leanfmt profile: {fileName}: tokens: {tokenCount}"
       pure moduleTree

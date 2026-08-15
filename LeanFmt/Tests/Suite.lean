@@ -15768,6 +15768,112 @@ def assertStructuralHeadersOwnAttachedBodies (env : Lean.Environment) : IO Unit 
       ++ "  this\n")
     80
 
+def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let source :=
+    "#project_where sampleGeneratorWithLongName\n"
+    ++ "where\n"
+    ++ "  { field := value, anotherField := anotherValue }\n"
+    ++ "\n"
+    ++ "def nestedMatch :=\n"
+    ++ "  match\n"
+    ++ "      match value with\n"
+    ++ "      | none => false with\n"
+    ++ "  | false => fallback\n"
+    ++ "  | true => available\n"
+    ++ "\n"
+    ++ "def catchSuffix := do\n"
+    ++ "  try\n"
+    ++ "    action\n"
+    ++ "  catch error =>\n"
+    ++ "    do\n"
+    ++ "      fallback error\n"
+    ++ "\n"
+    ++ "theorem tacticUsing : True := by\n"
+    ++ "  simpa [firstLemma, secondLemma, thirdLemma] using\n"
+    ++ "                     veryLongProofTerm firstArgument secondArgument\n"
+  let expected :=
+    "#project_where sampleGeneratorWithLongName where\n"
+    ++ "  { field := value, anotherField := anotherValue }\n"
+    ++ "\n"
+    ++ "def nestedMatch :=\n"
+    ++ "  match\n"
+    ++ "      match value with\n"
+    ++ "      | none => false\n"
+    ++ "  with\n"
+    ++ "  | false => fallback\n"
+    ++ "  | true => available\n"
+    ++ "\n"
+    ++ "def catchSuffix := do\n"
+    ++ "  try\n"
+    ++ "    action\n"
+    ++ "  catch error => do\n"
+    ++ "    fallback error\n"
+    ++ "\n"
+    ++ "theorem tacticUsing : True := by\n"
+    ++ "  simpa\n"
+    ++ "    [firstLemma, secondLemma, thirdLemma] using\n"
+    ++ "    veryLongProofTerm firstArgument secondArgument\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "parser-owned-clause-bodies.lean" { lineWidth := 50 }
+  assertTrue "parser-owned clause bodies do not fall back" (!result.fellBack)
+  assertEq "parser-owned clauses use their structural header and body bases"
+    expected result.formatted
+  assertTrue "parser-owned clause formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env result.formatted
+      "parser-owned-clause-bodies-formatted.lean"
+  assertTrue "parser-described and attached bodies share one semantic owner"
+    (3 <= countTreeNodes .parserOwnedBody moduleTree.tree)
+  assertTrue "a nested match exposes its complete header"
+    ((findTreeNode? .matchHeader moduleTree.tree).isSome)
+  assertTrue "parser-owned clause syntax has complete rule coverage"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule moduleTree).isEmpty
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "parser-owned-clause-bodies-formatted-again.lean" { lineWidth := 50 }
+  assertEq "parser-owned clause formatting is idempotent" result.formatted formattedAgain
+  let longSuffixSource :=
+    "theorem collectSubfields_pairKeysNodup : True := by\n"
+    ++ "  simpa [GraphQL.NormalForm.collectSubfields_eq_collectFields_mergedFieldSelectionSet]\n"
+    ++ "    using\n"
+    ++ "      collectFields_pairKeysNodup schema variableValues objectType objectValue\n"
+    ++ "        (GraphQL.Execution.mergedFieldSelectionSet fields)\n"
+  let longSuffixFormatted ←
+    Formatter.formatSourceWithEnv env longSuffixSource
+      "parser-owned-long-suffix-header.lean" { lineWidth := 90 }
+  let longSuffixExpected :=
+    "theorem collectSubfields_pairKeysNodup : True := by\n"
+    ++ "  simpa\n"
+    ++ "    [GraphQL.NormalForm.collectSubfields_eq_collectFields_mergedFieldSelectionSet] using\n"
+    ++ "    collectFields_pairKeysNodup schema variableValues objectType objectValue\n"
+    ++ "      (GraphQL.Execution.mergedFieldSelectionSet fields)\n"
+  assertEq "an owned suffix stays with the final wrapping header piece"
+    longSuffixExpected longSuffixFormatted
+  let manyArgumentsSource :=
+    "theorem tacticManySimpArguments : True := by\n"
+    ++ "  simpa [completeFrames, scheduleExpectedScope, groups, keyedGroups, expectedEntries, baseStack] using\n"
+    ++ "    proof\n"
+  let manyArgumentsExpected :=
+    "theorem tacticManySimpArguments : True := by\n"
+    ++ "  simpa\n"
+    ++ "    [\n"
+    ++ "      completeFrames,\n"
+    ++ "      scheduleExpectedScope,\n"
+    ++ "      groups,\n"
+    ++ "      keyedGroups,\n"
+    ++ "      expectedEntries,\n"
+    ++ "      baseStack\n"
+    ++ "    ] using\n"
+    ++ "    proof\n"
+  let manyArgumentsFormatted ←
+    Formatter.formatSourceWithEnv env manyArgumentsSource
+      "parser-owned-many-header-arguments.lean" { lineWidth := 90 }
+  assertEq "a protected bracketed header uses structural overflow fallback"
+    manyArgumentsExpected manyArgumentsFormatted
+
 def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
     : IO Unit := do
   let fallbackSource :=
@@ -16178,6 +16284,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
 def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertOwnedTerminalSuffixesStayAttached env
   assertStructuralHeadersOwnAttachedBodies env
+  assertParserOwnedClauseBodies env
   assertFallbackAndConditionalSuffixesStayAttached env
   assertIfThenElseRuleBreaksBalancedShape env
   assertShortIfThenElseStaysFlatInEquationArm env

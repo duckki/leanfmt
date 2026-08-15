@@ -473,7 +473,7 @@ def segmentContentCount (segment : Segment) : Nat :=
 
 def suffixKeywordLexeme (lexeme : String) : Bool :=
   lexemeIn lexeme
-    ["by", "calc", "do", "from", "where", "with", "deriving", "then", "else"]
+    ["by", "calc", "do", "from", "using", "where", "with", "deriving", "then", "else"]
 
 def suffixOpeningDelimiterLexeme (lexeme : String) : Bool :=
   SyntaxTree.lexemeEndsWithOpeningDelimiter lexeme
@@ -1656,14 +1656,19 @@ def matchDiscriminantBreaks (_context : RuleContext) (segment : Segment)
       | none => none
 
 def matchDiscriminantsFollowMotive (context : RuleContext) : Bool :=
-  match context.ancestors with
-  | parent :: _ =>
+  let parent? : Option Frame :=
+    match context.ancestors with
+    | header :: parent :: _ =>
+        if header.nodeKind? == some .matchHeader then some parent else some header
+    | [parent] => some parent
+    | [] => none
+  parent?.any
+    fun parent =>
       parent.rawKind? == some `Lean.Parser.Term.match
       && (List.range parent.childIndex).any
           fun index =>
             parent.segment.parentChild? index
             |>.any (treeContainsRawKind `Lean.Parser.Term.motive)
-  | _ => false
 
 def exportItemBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   if exportIdentifierList context then
@@ -2954,6 +2959,24 @@ def firstMatchAlternativesIndex? (segment : Segment) : Option Nat :=
   | some index => some index
   | none => firstChildRawKind? segment `Lean.Parser.Term.matchExprAlts
 
+def parserOwnedBodyBreaks (_context : RuleContext) (segment : Segment)
+    : List BreakPoint :=
+  [boundaryBreak? segment 1 1].filterMap id
+
+def parserOwnedHeaderBreaks (_context : RuleContext) (segment : Segment)
+    : List BreakPoint :=
+  defaultChildBreaks _context segment
+
+def matchHeaderBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
+  if segment.size <= 1 then
+    []
+  else
+    [
+      leadingBreak? segment segment.start 2,
+      boundaryBreak? segment (segment.start + 1) 0
+    ].filterMap
+      id
+
 def matchExpressionBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
   match firstMatchAlternativesIndex? segment with
@@ -3676,6 +3699,31 @@ def matchExpressionRule : LineBreakRule :=
     name := "matchExpression"
     mandatory := fun _ _ => true
     breakPoints := matchExpressionBreaks
+  }
+
+def parserOwnedBodyRule : LineBreakRule :=
+  {
+    name := "parserOwnedBody"
+    flow := fun _ _ => true
+    inheritBase := fun _ _ => true
+    breakPoints := parserOwnedBodyBreaks
+  }
+
+def parserOwnedHeaderRule : LineBreakRule :=
+  {
+    name := "parserOwnedHeader"
+    flow := fun _ _ => true
+    inheritBase := fun _ _ => true
+    breakPoints := parserOwnedHeaderBreaks
+  }
+
+def matchHeaderRule : LineBreakRule :=
+  {
+    name := "matchHeader"
+    mandatory := fun context segment => !(matchHeaderBreaks context segment).isEmpty
+    flow := fun _ _ => true
+    inheritBase := fun _ _ => true
+    breakPoints := matchHeaderBreaks
   }
 
 def quantifierRule : LineBreakRule :=
@@ -4551,6 +4599,9 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node .structureDeriving _ => some structureDerivingRule
   | .node .calcBody _ => some calcBodyRule
   | .node .calcStep _ => some calcStepRule
+  | .node .parserOwnedHeader _ => some parserOwnedHeaderRule
+  | .node .parserOwnedBody _ => some parserOwnedBodyRule
+  | .node .matchHeader _ => some matchHeaderRule
   | .node (.raw `Lean.Parser.Command.export) _ => some exportRule
   | .node .definition _ => some definitionRule
   | .node (.raw `Lean.Parser.Command.definition) _ => some rawDefinitionRule

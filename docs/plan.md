@@ -11,96 +11,32 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ## Open Issues
 
-### Extension command suffix ownership
-
-```lean
-setup_generator sample
-  where
-    { field := value }
-
-run_meta
-  do
-    action
-```
-
-Generated command clauses and bodies can detach from their headers. An optional
-command wrapper alone does not distinguish a parser-owned clause from an
-optional direct term, so attachment must wait for explicit parser-category
-ownership rather than inferring it from tokens or spaces.
-
-### Parser-owned `do` suffix attachment
-
-```lean
-for item in items
-do
-  action item
-
-catch error =>
-  do
-    fallback error
-```
-
-Direct `do` and `by` suffixes are grouped for several structural headers, but
-some term-level loops, alternatives, assignments, and tactic clauses still
-detach their introducer. Their parser-owned header and body must be exposed by
-the syntax tree before the shared suffix and body-base policies can apply.
-
-### Nested match ownership
-
-```lean
-match
-    match value with
-    | none => false with
-| false => fallback
-```
-
-An outer `with` can stay on the final inner branch line, obscuring which `match`
-owns the following alternatives. Nested match suffixes and bodies should move
-with their parser-owned match node.
-
-### Tactic continuation bases
-
-```lean
-simpa [lemmas] using
-                     proof
-
-refine goal <;>
-| branch => exact result
-```
-
-Operands after tactic introducers and branches after tactic combinators can
-inherit a distant source column. They should use the tactic's structural
-continuation base without treating tactic names as generic prefix operators.
-
 ### External validator project environments
 
 ```text
-import all Project.Module
-external declaration 'Project.nativeParser'
+import all HexBerlekamp.DelayedKernel
+unknown module prefix 'HexLLLBench'
+external declaration 'MD4Lean.parse' has no code
 ```
 
-Formatting an imported source in an earlier batch can invalidate private object
-data needed by a later `import all`. Projects with native parser extensions can
-also require symbols that an externally built formatter executable does not
-link. The validator needs a target-project-aware execution path and a
-dependency-safe artifact policy; these are infrastructure failures, not missing
-formatting rules in third-party syntax.
+Formatting an imported source invalidates `.olean` files needed by later files,
+including later files in the same formatter invocation. Hex also has bench-only
+module roots outside its default environment and native parser or external
+symbols, such as `MD4Lean.parse` and `Hex.ZMod64.inv`, that an externally built
+formatter executable does not link. The validator needs a target-project-aware
+execution path and a dependency-safe artifact policy. These are infrastructure
+failures, not missing formatting rules in third-party syntax.
 
 ## Progress
-
-### Checkpoint 13: declaration and proof ownership
-
-Extension command suffixes, nested matches, and tactic continuations use
-explicit parser ownership. Remaining parser-owned `do` suffixes obey their
-grouped structure. No renderer policy or token spelling substitutes for missing
-syntax-tree structure.
 
 ### Checkpoint 14: external validation environments
 
 The validator can run against project-native parser extensions and preserve
-usable `import all` artifacts across batches. Target-toolchain fallback remains
-automatic, and the project-aware path does not penalize ordinary Mathlib-style
-validation.
+usable imported artifacts while formatting source files. It discovers all
+requested module roots, builds or runs the formatter in the target project when
+native parser code requires it, and rebuilds invalidated dependencies at safe
+boundaries. Target-toolchain fallback remains automatic, and the project-aware
+path does not penalize ordinary Mathlib-style validation.
 
 ### Checkpoint 15: release validation
 

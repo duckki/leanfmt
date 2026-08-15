@@ -1324,6 +1324,30 @@ apply veryLongProofFunction
 The same parser-context rule covers `exact`, `refine`, and extension tactics;
 structural proof operands remain governed by the existing proof-island rules.
 
+When a registered tactic parser ends a header with a keyword-owned term body,
+the keyword stays with the final header piece. A long header wraps through its
+ordinary arguments, while the body uses the tactic continuation base:
+
+```lean
+simpa
+  [veryLongNormalizationLemmaNameForTheCurrentGoal] using
+  veryLongProofTerm firstArgument secondArgument thirdArgument
+```
+
+If the protected header contains a bracketed collection that cannot fit with its
+attached suffix, the collection uses its ordinary structural layout while `using`
+remains attached to the closing bracket:
+
+```lean
+simpa
+  [
+    firstNormalizationLemma,
+    secondNormalizationLemma,
+    thirdNormalizationLemma
+  ] using
+  proof
+```
+
 ## Conditionals
 
 A fitting conditional stays on one line. A multiline conditional breaks as a
@@ -1424,6 +1448,18 @@ match veryLongFunctionName child children additionalArgumentOne
         additionalArgumentTwo with
 | [] => 0
 | _ :: rest => rest.length
+```
+
+When the discriminant is itself a match, the outer `with` returns to the outer
+match base instead of remaining on the final inner alternative:
+
+```lean
+match
+    match value with
+    | none => false
+with
+| false => fallback
+| true => available
 ```
 
 Multiple match discriminants are grouped as peers. They use flow layout with
