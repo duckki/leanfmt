@@ -16216,6 +16216,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   IO.eprintln "leanfmt-test: begin imported syntax formatting test"
   assertFormatsImportedSyntaxWithProjectEnvironment projectSyntaxEnv
   IO.eprintln "leanfmt-test: end imported syntax formatting test"
+  IO.eprintln "leanfmt-test: begin cli-architecture tail 1"
   assertFmtExecutableConfigured
   assertRendererTraceIncludesPathAndState env
   assertCliFixtureUpdate env
@@ -16225,6 +16226,8 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertBracketedNotationRulesKeepDelimitersAttached
   assertIndexedTermsRenderWithAttachedClosingDelimiter env
   assertIndexedInfixRendersWithLeadingOperator env
+  IO.eprintln "leanfmt-test: end cli-architecture tail 1"
+  IO.eprintln "leanfmt-test: begin cli-architecture tail 2"
   assertGeneratedIdentifierSuffixOwnsApplicationArguments env
   assertGeneratedSpacedSyntaxOwnsApplicationArguments projectSyntaxEnv
   assertStructuralExtensionShapesReuseExistingOwners projectSyntaxEnv
@@ -16234,6 +16237,8 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertMissingRuleCheckUsesDispatch env loader
   assertCheckCommandHasRule env
   assertGuardMsgsCommandUsesCommandInLayout env
+  IO.eprintln "leanfmt-test: end cli-architecture tail 2"
+  IO.eprintln "leanfmt-test: begin cli-architecture tail 3"
   assertBinderTacticProofBodyHasNoMissingRules env
   assertInstanceValueInheritsDeclarationBase env
   assertSufficesBodyBreaksAfterFromProof env
@@ -16246,12 +16251,15 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertCustomBracedTermSyntaxKeepsNestedSourceLayout env
   assertTightIndexedExtensionUsesStructuralRule env
   assertPrefixedTermWrappersHaveRules env
+  IO.eprintln "leanfmt-test: end cli-architecture tail 3"
+  IO.eprintln "leanfmt-test: begin cli-architecture tail 4"
   assertIgnoredRegionsPreserveSourceLines env
   assertIgnoredRegionMayContinueToEnd env
   assertIgnoreNextPreservesNextCommand env
   assertIgnoreNextPreservesAttributedCommand env
   assertIgnoreNextPreservesNestedTerm env
   assertCslibStyleCoreSyntaxHasRules env
+  IO.eprintln "leanfmt-test: end cli-architecture tail 4"
 
 def runTestGroups (env : Lean.Environment) : IO Unit := do
   let projectSyntaxEnv ←
