@@ -14753,7 +14753,7 @@ def assertMathlibLowRiskSyntaxKindsHaveRules : IO Unit := do
     (Formatter.Diagnostics.missingRuleOccurrences "" none jsonTree).isEmpty
 
 def assertMissingRuleCheckUsesDispatch
-    (env : Lean.Environment) (loader : LeanFmt.Driver.EnvironmentLoader)
+    (env projectSyntaxEnv : Lean.Environment)
     : IO Unit := do
   let unknownTree :=
     SyntaxTree.Tree.node
@@ -14821,12 +14821,9 @@ def assertMissingRuleCheckUsesDispatch
     (Formatter.Diagnostics.leanFormatterAvailability env
         (some `Lean.Parser.Term.syntheticUnknownForTest)
       == .unavailable)
-  let projectImports ←
-    LeanFmt.LeanEnvironment.importsForSource
-      "import LeanFmt.Tests.ProjectSyntax\n" "project-syntax-import.lean"
-  let projectEnv ← loader.environmentForImports projectImports
   assertTrue "parser description fallback is identified"
-    (Formatter.Diagnostics.leanFormatterAvailability projectEnv (some `projectSyntax)
+    (Formatter.Diagnostics.leanFormatterAvailability projectSyntaxEnv
+        (some `projectSyntax)
       == .parserDescription)
 
 def assertSyntaxDeclarationsHaveRules (env : Lean.Environment) : IO Unit := do
@@ -16201,22 +16198,11 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertImportFilesGroupByHeader
   assertRecursiveWorkerChecksTargetToolchain
   assertFormattingExceptionChecks projectSyntaxEnv
-  IO.eprintln "leanfmt-test: begin CLI check-mode tests"
   assertCliChecksStillFormatUnlessCheck env loader
-  IO.eprintln "leanfmt-test: end CLI check-mode tests"
-  IO.eprintln "leanfmt-test: begin CLI directory test"
   assertCliFormatsDirectory env loader
-  IO.eprintln "leanfmt-test: end CLI directory test"
-  IO.eprintln "leanfmt-test: begin CLI recursive directory test"
   assertCliFormatsDirectoryRecursively env loader
-  IO.eprintln "leanfmt-test: end CLI recursive directory test"
-  IO.eprintln "leanfmt-test: begin CLI hidden path test"
   assertCliSkipsHiddenPathsByDefault
-  IO.eprintln "leanfmt-test: end CLI hidden path test"
-  IO.eprintln "leanfmt-test: begin imported syntax formatting test"
   assertFormatsImportedSyntaxWithProjectEnvironment projectSyntaxEnv
-  IO.eprintln "leanfmt-test: end imported syntax formatting test"
-  IO.eprintln "leanfmt-test: begin cli-architecture tail 1"
   assertFmtExecutableConfigured
   assertRendererTraceIncludesPathAndState env
   assertCliFixtureUpdate env
@@ -16226,37 +16212,15 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertBracketedNotationRulesKeepDelimitersAttached
   assertIndexedTermsRenderWithAttachedClosingDelimiter env
   assertIndexedInfixRendersWithLeadingOperator env
-  IO.eprintln "leanfmt-test: end cli-architecture tail 1"
-  IO.eprintln "leanfmt-test: begin cli-architecture tail 2"
-  IO.eprintln "leanfmt-test: begin generated identifier suffix"
   assertGeneratedIdentifierSuffixOwnsApplicationArguments env
-  IO.eprintln "leanfmt-test: end generated identifier suffix"
-  IO.eprintln "leanfmt-test: begin generated spaced syntax"
   assertGeneratedSpacedSyntaxOwnsApplicationArguments projectSyntaxEnv
-  IO.eprintln "leanfmt-test: end generated spaced syntax"
-  IO.eprintln "leanfmt-test: begin structural extension shapes"
   assertStructuralExtensionShapesReuseExistingOwners projectSyntaxEnv
-  IO.eprintln "leanfmt-test: end structural extension shapes"
-  IO.eprintln "leanfmt-test: begin qq application argument"
   assertQqApplicationArgumentUsesStructuralBoundary projectSyntaxEnv
-  IO.eprintln "leanfmt-test: end qq application argument"
-  IO.eprintln "leanfmt-test: begin Lake DSL formatting"
   assertLakeDslFormatting
-  IO.eprintln "leanfmt-test: end Lake DSL formatting"
-  IO.eprintln "leanfmt-test: begin mathlib low-risk syntax kinds"
   assertMathlibLowRiskSyntaxKindsHaveRules
-  IO.eprintln "leanfmt-test: end mathlib low-risk syntax kinds"
-  IO.eprintln "leanfmt-test: begin missing-rule dispatch"
-  assertMissingRuleCheckUsesDispatch env loader
-  IO.eprintln "leanfmt-test: end missing-rule dispatch"
-  IO.eprintln "leanfmt-test: begin check command rule"
+  assertMissingRuleCheckUsesDispatch env projectSyntaxEnv
   assertCheckCommandHasRule env
-  IO.eprintln "leanfmt-test: end check command rule"
-  IO.eprintln "leanfmt-test: begin guard_msgs command layout"
   assertGuardMsgsCommandUsesCommandInLayout env
-  IO.eprintln "leanfmt-test: end guard_msgs command layout"
-  IO.eprintln "leanfmt-test: end cli-architecture tail 2"
-  IO.eprintln "leanfmt-test: begin cli-architecture tail 3"
   assertBinderTacticProofBodyHasNoMissingRules env
   assertInstanceValueInheritsDeclarationBase env
   assertSufficesBodyBreaksAfterFromProof env
@@ -16269,15 +16233,12 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertCustomBracedTermSyntaxKeepsNestedSourceLayout env
   assertTightIndexedExtensionUsesStructuralRule env
   assertPrefixedTermWrappersHaveRules env
-  IO.eprintln "leanfmt-test: end cli-architecture tail 3"
-  IO.eprintln "leanfmt-test: begin cli-architecture tail 4"
   assertIgnoredRegionsPreserveSourceLines env
   assertIgnoredRegionMayContinueToEnd env
   assertIgnoreNextPreservesNextCommand env
   assertIgnoreNextPreservesAttributedCommand env
   assertIgnoreNextPreservesNestedTerm env
   assertCslibStyleCoreSyntaxHasRules env
-  IO.eprintln "leanfmt-test: end cli-architecture tail 4"
 
 def runTestGroups (env : Lean.Environment) : IO Unit := do
   let projectSyntaxEnv ←
