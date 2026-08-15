@@ -63,7 +63,7 @@ unsafe def leanFormatterAvailabilityUnsafe
 
 @[implemented_by leanFormatterAvailabilityUnsafe]
 opaque leanFormatterAvailability
-  (env : Environment) (kind? : Option SyntaxNodeKind) : LeanFormatterAvailability
+    (env : Environment) (kind? : Option SyntaxNodeKind) : LeanFormatterAvailability
 
 structure OverflowOccurrence where
   line : Nat

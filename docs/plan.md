@@ -101,18 +101,6 @@ transform
 An avoidable standalone `<|` remains when an ordinary operand does not expose a
 movable first-line boundary. Protected and comment-led boundaries remain valid.
 
-### Declaration continuation bases
-
-```lean
-def veryLongDeclarationName
-                           (value : Nat) :=
-  value
-```
-
-Some declaration parameters and typeclass arguments inherit the declaration
-name's ending column instead of the command's structural base. This also affects
-long `opaque` signatures.
-
 ### Nested match ownership
 
 ```lean

@@ -4012,7 +4012,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Command.public) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.meta) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.unsafe) _ => some defaultRule
-  | .node (.raw `Lean.Parser.Command.opaque) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.opaque) _ => some rawDefinitionRule
   | .node (.raw `Lean.Parser.Command.noncomputable) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.protected) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.partial) _ => some defaultRule

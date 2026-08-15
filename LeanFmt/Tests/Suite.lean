@@ -6728,6 +6728,33 @@ def assertSignatureParametersUseLeadingSourceBreakAfterFlatFails (env : Lean.Env
   assertEq "signature parameters use leading source break after flat fails"
     expected formatted
 
+def assertDeclarationParametersUseCommandBase (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def declarationNameLongEnoughToForceAParameterContinuation\n"
+    ++ "                           (first : Nat) (second : Nat) := first\n"
+    ++ "\n"
+    ++ "opaque opaqueNameLongEnoughToForceAParameterContinuation\n"
+    ++ "                               (first : Nat) (second : Nat) : Nat\n"
+  let expected :=
+    "def declarationNameLongEnoughToForceAParameterContinuation\n"
+    ++ "    (first : Nat) (second : Nat) :=\n"
+    ++ "  first\n"
+    ++ "\n"
+    ++ "opaque opaqueNameLongEnoughToForceAParameterContinuation\n"
+    ++ "    (first : Nat) (second : Nat) : Nat\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "declaration-parameter-command-base.lean" { lineWidth := 72 }
+  assertTrue "declaration parameter command bases do not fall back" (!result.fellBack)
+  assertEq "declaration parameters use the command base" expected result.formatted
+  assertTrue "declaration parameter command bases preserve code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "declaration-parameter-command-base-formatted.lean" { lineWidth := 72 }
+  assertEq "declaration parameter command bases are idempotent"
+    result.formatted formattedAgain
+
 def assertDefinitionSourceBreakAfterAssignOverridesFlat (env : Lean.Environment)
     : IO Unit := do
   let source := "def definitionSourceBreakAfterAssign : Nat :=\n" ++ "  value\n"
@@ -15985,6 +16012,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertGeneratedTightNotationPiecesStayAttached env
   assertNotExistsIdentifiersFlow env
   assertSignatureParametersUseLeadingSourceBreakAfterFlatFails env
+  assertDeclarationParametersUseCommandBase env
   assertDefinitionSourceBreakAfterAssignOverridesFlat env
 
 def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do

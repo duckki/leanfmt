@@ -726,7 +726,7 @@ unsafe def parserPrecedenceUnsafe
 
 @[implemented_by parserPrecedenceUnsafe]
 opaque parserPrecedence
-  (env : Environment) (options : Options) (kind : SyntaxNodeKind) : Option (Nat × Nat)
+    (env : Environment) (options : Options) (kind : SyntaxNodeKind) : Option (Nat × Nat)
 
 abbrev SpacedApplicationKindSet := NameSet
 
@@ -803,7 +803,7 @@ unsafe def parserDescribesSpacedApplicationUnsafe
 
 @[implemented_by parserDescribesSpacedApplicationUnsafe]
 opaque parserDescribesSpacedApplication
-  (env : Environment) (options : Options) (kind : SyntaxNodeKind) : Bool
+    (env : Environment) (options : Options) (kind : SyntaxNodeKind) : Bool
 
 structure ParserLayoutFacts where
   checkedKinds : NameSet := {}
@@ -1175,6 +1175,25 @@ def flattenDeclarationIdentifierChild : Tree → Array Tree
 
 def regroupDeclarationIdentifierChildren (children : Array Tree) : Array Tree :=
   children.flatMap flattenDeclarationIdentifierChild
+
+def regroupSeparatedDeclarationSignatureChildren (children : Array Tree) : Array Tree :=
+  match children.findIdx?
+          fun child => rawKind? child == some `Lean.Parser.Command.declId with
+  | some identifierIndex =>
+      match children[identifierIndex]?, children[identifierIndex + 1]? with
+      | some (.node (.raw `Lean.Parser.Command.declId) identifierChildren),
+        some signature =>
+          if rawKind? signature == some `Lean.Parser.Command.optDeclSig
+              || rawKind? signature == some `Lean.Parser.Command.declSig then
+            children
+            |>.set! identifierIndex
+                (.node (.raw `Lean.Parser.Command.declId)
+                  (identifierChildren ++ flattenDeclarationIdentifierChild signature))
+            |>.set! (identifierIndex + 1) .missing
+          else
+            children
+      | _, _ => children
+  | none => children
 
 def regroupUnifHintChildren (children : Array Tree) : Array Tree :=
   let children :=
@@ -2637,6 +2656,11 @@ def regroupRawNode
           else if kind == `Lean.Parser.Command.definition
                   || kind == `Lean.Parser.Command.abbrev
                   || kind == `Lean.Parser.Command.opaque then
+            let children :=
+              if kind == `Lean.Parser.Command.opaque then
+                regroupSeparatedDeclarationSignatureChildren children
+              else
+                children
             let children := regroupEquationTrailingClauseChildren children
             match regroupDefinitionChildren children with
             | some definitionChildren => .node .definition definitionChildren
