@@ -25,14 +25,16 @@ jobs:
           build-args: --wfail
           test: false
           lint: false
+      - name: Build tests
+        run: lake build testSuite --wfail
       - name: Run tests
         run: |
           while sleep 20; do
-            echo "lake test still running..."
+            echo "testSuite still running..."
           done &
           heartbeat=$!
           trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
-          lake test --wfail
+          lake exe testSuite
       - name: Run local environment linters
         run: lake -d tools/linter exe runLinter
       - name: Check fixtures and formatter invariants
