@@ -23,8 +23,10 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           build-args: --wfail
-          test-args: --wfail
+          test: false
           lint: false
+      - name: Run tests
+        run: lake test --wfail
       - name: Run local environment linters
         run: lake -d tools/linter exe runLinter
       - name: Check fixtures and formatter invariants
