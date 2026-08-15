@@ -951,16 +951,17 @@ indentation levels, never past its original source column. That fit calculation 
 any closing delimiters and other tight parent suffix that must remain on the island's
 last line; excluding that suffix would undercount the actual completed-line width.
 
-Anonymous constructors remain structural even when an item contains a proof. The
-balanced-delimiter rule owns item and closing-delimiter indentation, while nested proof
-bodies retain their own protected source layout. An application's first proof-bearing
-lambda is likewise structural; the narrower compound case in which a later proof lambda
-follows an earlier multiline proof-bearing argument remains one application-level island.
+Anonymous constructors and structure instances remain structural even when an item or
+field contains a proof. Their ordinary rules own item, field, and closing-delimiter
+indentation, while nested proof bodies retain their own protected source layout. An
+application's first proof-bearing lambda is likewise structural; the narrower compound
+case in which a later proof lambda follows an earlier multiline proof-bearing argument
+remains one application-level island.
 More generally, a rule with a zero-level breakpoint cannot be skipped when a nested
 protected island retains a source line. The rule applies its complete structural layout
 so closing delimiters and peer boundaries cannot drift. If a parent break moves a
-protected proof-bearing application, structure instance, or other supported braced proof
-layout away from its parent-relative source column, the renderer uses that tree's ordinary
+protected proof-bearing application or other supported braced proof layout away from its
+parent-relative source column, the renderer uses that tree's ordinary
 structural rule. Equation clauses and other protected proof-layout shapes remain source
 islands. The renderer also may retry an otherwise source-emitted complete delimiter island
 structurally when doing so removes an avoidable overflow. Each structural path recomputes

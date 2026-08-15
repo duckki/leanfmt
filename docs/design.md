@@ -730,11 +730,13 @@ theorem theoremArrowChain (h : HypothesisWithEnoughCharactersForLayoutTesting)
   exact proof
 ```
 
-The source text of theorem proof values is preserved. Definitions and
-abbreviations containing proof subtrees are preserved as a whole. The tactic
-body after `decreasing_by` is protected separately from the formatted
-termination-clause keywords and measure. leanfmt can therefore format
-surrounding declarations and propositions without imposing a tactic style.
+The source text of theorem proof values and nested proof bodies is preserved.
+Their surrounding declarations and structure instances remain structural when
+the parser exposes those proof subtrees separately. Equation blocks whose parser
+layout ties their arms together remain compound islands. The tactic body after
+`decreasing_by` is protected separately from the formatted termination-clause
+keywords and measure. leanfmt can therefore format surrounding declarations and
+propositions without imposing a tactic style.
 
 Equation-style theorem and definition arms begin on their own lines and use the
 declaration body indentation.
@@ -1654,9 +1656,9 @@ closing delimiter break together.
 ]
 ```
 
-A protected proof body does not protect its surrounding anonymous constructor.
-When the proof retains a source line break, the constructor still applies its
-balanced item and closing-delimiter breaks around that proof.
+A protected proof body does not protect its surrounding anonymous constructor or
+structure instance. When the proof retains a source line break, the surrounding
+construct still applies its balanced item, field, and closing-delimiter breaks.
 
 For generated two-operand notation, a comma-like trailing separator remains
 attached to the first operand and the continuation starts after it:

@@ -490,10 +490,6 @@ private def isProofLayoutIsland (tree : SyntaxTree.Tree) : Bool :=
       | first :: rest => laterArgumentHasProofLambda [first] rest
   | .node (.raw `Lean.Parser.Command.declValEqns) _ =>
       containsProofTree tree
-  | .node (.raw `Lean.Parser.Term.structInst) _ =>
-      containsProofTree tree
-  | .node (.raw `Lean.Parser.Term.structInstFields) _ =>
-      containsProofTree tree
   | .node (.raw `«term{_}») _ =>
       containsProofTree tree
   | .node (.raw `Lean.Parser.Term.show) _ =>
@@ -501,8 +497,6 @@ private def isProofLayoutIsland (tree : SyntaxTree.Tree) : Bool :=
   | _ => false
 
 private def proofLayoutRebasesFromFirstToken : SyntaxTree.Tree → Bool
-  | .node (.raw `Lean.Parser.Term.structInst) _
-  | .node (.raw `Lean.Parser.Term.structInstFields) _
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _
   | .node (.raw `«term{_}») _ => true
   | _ => false
@@ -729,15 +723,12 @@ def plan? (tree : SyntaxTree.Tree) : Option IslandPlan :=
   (classify? tree).map planForKind
 
 def canUseStructuralOverflowFallback : SyntaxTree.Tree → Bool
-  | .node (.raw `Lean.Parser.Term.anonymousCtor) _
-  | .node (.raw `Lean.Parser.Term.structInst) _ => true
+  | .node (.raw `Lean.Parser.Term.anonymousCtor) _ => true
   | _ => false
 
 def canUseStructuralLayoutAfterParentMove : SyntaxTree.Tree → Bool
   | .node .application _
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _
-  | .node (.raw `Lean.Parser.Term.structInst) _
-  | .node (.raw `Lean.Parser.Term.structInstFields) _
   | .node (.raw `«term{_}») _ => true
   | _ => false
 

@@ -142,18 +142,10 @@ comment payloads must retain their relative indentation as one protected block.
 ```lean
 wrapper (by
           exact proof)
-
-replay := fun context =>
-  if h :
-      longCondition context then
-    result
 ```
 
 Some inline `by` and `match` bodies retain the introducer's source column after
-their owner moves. A proof-bearing structure instance can also protect an entire
-field value, preventing an otherwise grouped named condition from replacing a
-source break after `:`. Protected bodies should use the nearest structural base,
-and proof islands should expose non-proof surrounding syntax to structural rules.
+their owner moves. Protected bodies should use the nearest structural base.
 
 ### Tactic continuation bases
 

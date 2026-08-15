@@ -4375,8 +4375,11 @@ def assertNestedProofLayoutFollowsPendingIndent (env : Lean.Environment) : IO Un
     ++ "  <| {\n"
     ++ "    object :=\n"
     ++ "      anotherVeryLongConstructorNameForProofFieldTesting\n"
-    ++ "        { nestedValue := selectedValue\n"
-    ++ "          anotherNestedValue := selectedValue }\n"
+    ++ "        {\n"
+    ++ "          nestedValue := selectedValue\n"
+    ++ "          anotherNestedValue :=\n"
+    ++ "            selectedValue\n"
+    ++ "        }\n"
     ++ "    proof selectedValue := by\n"
     ++ "      cases selectedValue with\n"
     ++ "      | zero => exact True.intro\n"
@@ -5532,11 +5535,12 @@ def assertProofValuesRemainLayoutIslands (env : Lean.Environment) : IO Unit := d
   let whereExpected :=
     "theorem whereStructInstProofField (h : VeryLongHypothesisNameForLayoutTesting)\n"
     ++ "    : VeryLongTargetTypeNameForLayoutTesting where\n"
-    ++ "  field := fun s t hsA htA hs ht hEq => by\n"
-    ++ "    exact proof\n"
+    ++ "  field :=\n"
+    ++ "    fun s t hsA htA hs ht hEq => by\n"
+    ++ "      exact proof\n"
   let whereFormatted ←
     Formatter.formatSourceWithEnv env whereSource "where-struct-inst-proof-value.lean"
-  assertEq "where struct instance proof field remains layout island"
+  assertEq "where struct instance formats around its protected proof field"
     whereExpected whereFormatted
   let _ ←
     SyntaxTree.parseModuleStringWithEnv env whereFormatted
@@ -5558,19 +5562,21 @@ def assertProofValuesRemainLayoutIslands (env : Lean.Environment) : IO Unit := d
   let termStructExpected :=
     "noncomputable instance [DecidableEq K]\n"
     ++ "    : ProjectivePlane (ProjectivePoint K (Fin 3 → K)) (ProjectiveLine K (Fin 3 → K)) :=\n"
-    ++ "  { mkPoint := by\n"
+    ++ "  {\n"
+    ++ "    mkPoint := by\n"
     ++ "      intro v w _\n"
     ++ "      exact cross v w\n"
     ++ "    mkPoint_ax := fun h ↦ ⟨cross_orthogonal_left h, cross_orthogonal_right h⟩\n"
     ++ "    mkLine := by\n"
     ++ "      intro v w _\n"
-    ++ "      exact cross v w }\n"
+    ++ "      exact cross v w\n"
+    ++ "  }\n"
   let termStructResult ←
     Formatter.formatSourceWithEnvDetailed env termStructSource
       "term-struct-inst-proof-value.lean"
   assertTrue "term struct instance proof field does not fall back"
     (!termStructResult.fellBack)
-  assertEq "term struct instance proof field remains layout island"
+  assertEq "term struct instance formats around its protected proof fields"
     termStructExpected termStructResult.formatted
   let _ ←
     SyntaxTree.parseModuleStringWithEnv env termStructResult.formatted
@@ -5580,6 +5586,48 @@ def assertProofValuesRemainLayoutIslands (env : Lean.Environment) : IO Unit := d
       "term-struct-inst-proof-value-formatted.lean"
   assertEq "term struct instance proof layout is idempotent"
     termStructResult.formatted termStructFormattedAgain
+
+  let structuralHeaderSource :=
+    "def proofBearingSchema :=\n"
+    ++ "  { replay := fun context =>\n"
+    ++ "      if conditionProof :\n"
+    ++ "          firstConditionWithEnoughCharacters context ∧\n"
+    ++ "            secondConditionWithEnoughCharacters context then\n"
+    ++ "        some\n"
+    ++ "          { proof := by\n"
+    ++ "              exact conditionProof }\n"
+    ++ "      else none }\n"
+  let structuralHeaderResult ←
+    Formatter.formatSourceWithEnvDetailed env structuralHeaderSource
+      "proof-bearing-structure-header.lean" { lineWidth := 80 }
+  let structuralHeaderExpected :=
+    "def proofBearingSchema :=\n"
+    ++ "  {\n"
+    ++ "    replay :=\n"
+    ++ "      fun context =>\n"
+    ++ "        if conditionProof\n"
+    ++ "            : firstConditionWithEnoughCharacters context\n"
+    ++ "              ∧ secondConditionWithEnoughCharacters context then\n"
+    ++ "          some\n"
+    ++ "            {\n"
+    ++ "              proof := by\n"
+    ++ "                exact conditionProof\n"
+    ++ "            }\n"
+    ++ "        else\n"
+    ++ "          none\n"
+    ++ "  }\n"
+  assertTrue "a proof-bearing structure header does not fall back"
+    (!structuralHeaderResult.fellBack)
+  assertEq "a proof-bearing structure exposes structural non-proof syntax"
+    structuralHeaderExpected structuralHeaderResult.formatted
+  assertTrue "structural formatting around a protected field preserves code"
+    (← codePreservedIgnoringWhitespace
+        env structuralHeaderSource structuralHeaderResult.formatted)
+  let structuralHeaderAgain ←
+    Formatter.formatSourceWithEnv env structuralHeaderResult.formatted
+      "proof-bearing-structure-header-formatted.lean" { lineWidth := 80 }
+  assertEq "structural formatting around a protected field is idempotent"
+    structuralHeaderResult.formatted structuralHeaderAgain
 
 def assertOriginalLayoutValueHonorsDeclarationBreak (env : Lean.Environment)
     : IO Unit := do
@@ -12797,16 +12845,13 @@ def assertFormattingExceptionChecks (env : Lean.Environment) : IO Unit := do
     (Formatter.linesFit fittingProofLayout 100)
   assertTrue "structurally moved proof layout demonstrates an unbreakable overflow"
     (!Formatter.linesFit movedProofLayout 100)
-  assertTrue "moved compound proof layout does not report actionable overflow"
-    (!(Formatter.Diagnostics.formattingExceptions
+  assertTrue "moved proof-bearing structure reports structurally actionable overflow"
+    ((Formatter.Diagnostics.formattingExceptions
         fittingProofLayoutModule movedProofLayoutModule { lineWidth := 100 }).any
-        fun exception =>
-          match exception with
-          | .lineOverflow _ => true
-          | _ => false)
-  assertTrue "structure instance original layout may fall back structurally"
-    (Formatter.OriginalTree.canUseStructuralOverflowFallback
-      <| SyntaxTree.Tree.node (.raw `Lean.Parser.Term.structInst) #[])
+      fun exception =>
+        match exception with
+        | .lineOverflow _ => true
+        | _ => false)
   let jsxPayload := String.ofList (List.replicate 85 'x')
   let jsxText := "<div>" ++ jsxPayload ++ "</div>"
   let sourceJsxTree :=
