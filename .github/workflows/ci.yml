@@ -26,7 +26,13 @@ jobs:
           test: false
           lint: false
       - name: Run tests
-        run: lake test --wfail
+        run: |
+          while sleep 20; do
+            echo "lake test still running..."
+          done &
+          heartbeat=$!
+          trap 'kill "$heartbeat"' EXIT
+          lake test --wfail
       - name: Run local environment linters
         run: lake -d tools/linter exe runLinter
       - name: Check fixtures and formatter invariants
