@@ -41,7 +41,9 @@ def jsonPluginPaths (json : Lean.Json) : Array String :=
   | _ => #[]
 
 def setupRuntime (setupPath : String) : IO SetupRuntime := do
-  if !(← FilePath.pathExists setupPath) || (← setupHasNoRuntime setupPath) then
+  if !(← FilePath.pathExists setupPath) then
+    return {}
+  if ← setupHasNoRuntime setupPath then
     return {}
   let json ← IO.FS.readFile setupPath
   match Lean.Json.parse json with
