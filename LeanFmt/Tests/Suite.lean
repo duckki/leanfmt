@@ -13182,13 +13182,8 @@ def assertCliChecksStillFormatUnlessCheck
     checkedSource (← IO.FS.readFile checkedFile)
 
   let ordinaryCheckExitCode ←
-    LeanFmt.Driver.runOptionsWithLoader loader
-      {
-        check := true
-        workerDefaultEnvironment := true
-        includeHidden := true
-        files := [checkedFile]
-      }
+    LeanFmt.Driver.summarizeOutcomes
+      { check := true } [{ changed := true }]
   assertTrue "CLI ordinary --check still fails on formatting changes"
     (ordinaryCheckExitCode == 1)
 
