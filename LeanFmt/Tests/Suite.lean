@@ -16228,15 +16228,33 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertIndexedInfixRendersWithLeadingOperator env
   IO.eprintln "leanfmt-test: end cli-architecture tail 1"
   IO.eprintln "leanfmt-test: begin cli-architecture tail 2"
+  IO.eprintln "leanfmt-test: begin generated identifier suffix"
   assertGeneratedIdentifierSuffixOwnsApplicationArguments env
+  IO.eprintln "leanfmt-test: end generated identifier suffix"
+  IO.eprintln "leanfmt-test: begin generated spaced syntax"
   assertGeneratedSpacedSyntaxOwnsApplicationArguments projectSyntaxEnv
+  IO.eprintln "leanfmt-test: end generated spaced syntax"
+  IO.eprintln "leanfmt-test: begin structural extension shapes"
   assertStructuralExtensionShapesReuseExistingOwners projectSyntaxEnv
+  IO.eprintln "leanfmt-test: end structural extension shapes"
+  IO.eprintln "leanfmt-test: begin qq application argument"
   assertQqApplicationArgumentUsesStructuralBoundary projectSyntaxEnv
+  IO.eprintln "leanfmt-test: end qq application argument"
+  IO.eprintln "leanfmt-test: begin Lake DSL formatting"
   assertLakeDslFormatting
+  IO.eprintln "leanfmt-test: end Lake DSL formatting"
+  IO.eprintln "leanfmt-test: begin mathlib low-risk syntax kinds"
   assertMathlibLowRiskSyntaxKindsHaveRules
+  IO.eprintln "leanfmt-test: end mathlib low-risk syntax kinds"
+  IO.eprintln "leanfmt-test: begin missing-rule dispatch"
   assertMissingRuleCheckUsesDispatch env loader
+  IO.eprintln "leanfmt-test: end missing-rule dispatch"
+  IO.eprintln "leanfmt-test: begin check command rule"
   assertCheckCommandHasRule env
+  IO.eprintln "leanfmt-test: end check command rule"
+  IO.eprintln "leanfmt-test: begin guard_msgs command layout"
   assertGuardMsgsCommandUsesCommandInLayout env
+  IO.eprintln "leanfmt-test: end guard_msgs command layout"
   IO.eprintln "leanfmt-test: end cli-architecture tail 2"
   IO.eprintln "leanfmt-test: begin cli-architecture tail 3"
   assertBinderTacticProofBodyHasNoMissingRules env
