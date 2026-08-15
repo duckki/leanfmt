@@ -16240,7 +16240,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertIgnoreNextPreservesNestedTerm env
   assertCslibStyleCoreSyntaxHasRules env
 
-def runTestGroups (env : Lean.Environment) : IO Unit := do
+def runTestGroups (env : Lean.Environment) (selected : List String := []) : IO Unit := do
   let projectSyntaxEnv ←
     SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
   let groups :=
@@ -16254,7 +16254,11 @@ def runTestGroups (env : Lean.Environment) : IO Unit := do
       ("collection-declaration", runCollectionAndDeclarationTests env),
       ("cli-architecture", runCliAndArchitectureTests env projectSyntaxEnv)
     ]
-  for (_name, group) in groups do
-    group
+  for name in selected do
+    unless groups.any (fun (groupName, _) => groupName == name) do
+      throw <| IO.userError s!"unknown test group: {name}"
+  for (name, group) in groups do
+    if selected.isEmpty || selected.contains name then
+      group
 
 end LeanFmt.Tests

@@ -27,14 +27,25 @@ jobs:
           lint: false
       - name: Build tests
         run: lake build testSuite --wfail
-      - name: Run tests
+      - name: Run core tests
         run: |
           while sleep 20; do
             echo "testSuite still running..."
           done &
           heartbeat=$!
           trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
-          lake exe testSuite
+          lake exe testSuite \
+            syntax-tree documented-examples layout-architecture \
+            basic-formatting expression-renderer control-flow \
+            collection-declaration
+      - name: Run CLI and architecture tests
+        run: |
+          while sleep 20; do
+            echo "testSuite cli-architecture still running..."
+          done &
+          heartbeat=$!
+          trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
+          lake exe testSuite cli-architecture
       - name: Run local environment linters
         run: lake -d tools/linter exe runLinter
       - name: Check fixtures and formatter invariants
