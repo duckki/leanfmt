@@ -13078,7 +13078,7 @@ def assertFormattingExceptionChecks (env : Lean.Environment) : IO Unit := do
 def assertCliChecksStillFormatUnlessCheck
     (env : Lean.Environment) (loader : LeanFmt.Driver.EnvironmentLoader)
     : IO Unit := do
-  let root : FilePath := ".lake/leanfmt-cli-test/checks"
+  let root : FilePath := ".scratch/leanfmt-cli-test/checks"
   IO.FS.createDirAll root
   let preservingFile := root / "Preserving.lean"
   let preservingSource := "def  preserving  : Nat := 0\n"
@@ -13177,7 +13177,7 @@ def assertCliChecksStillFormatUnlessCheck
 def assertCliFormatsDirectory
     (env : Lean.Environment) (loader : LeanFmt.Driver.EnvironmentLoader)
     : IO Unit := do
-  let root : FilePath := ".lake/leanfmt-cli-test/nonrecursive"
+  let root : FilePath := ".scratch/leanfmt-cli-test/nonrecursive"
   let nested : FilePath := root / "nested"
   IO.FS.createDirAll nested
   let topFile := root / "Top.lean"
@@ -13198,7 +13198,7 @@ def assertCliFormatsDirectory
 def assertCliFormatsDirectoryRecursively
     (env : Lean.Environment) (loader : LeanFmt.Driver.EnvironmentLoader)
     : IO Unit := do
-  let root : FilePath := ".lake/leanfmt-cli-test/recursive"
+  let root : FilePath := ".scratch/leanfmt-cli-test/recursive"
   let nested : FilePath := root / "nested"
   IO.FS.createDirAll nested
   let topFile := root / "Top.lean"
@@ -13272,7 +13272,7 @@ def assertCliSkipsHiddenPathsByDefault : IO Unit :=
         assertTrue s!"CLI --include-hidden discovers {file}" (includedFiles.contains file)
 
 def assertCliLoadsImportedSyntax : IO Unit := do
-  let root : FilePath := ".lake/leanfmt-cli-test/project-env"
+  let root : FilePath := ".scratch/leanfmt-cli-test/project-env"
   IO.FS.createDirAll root
   let firstFile := root / "ImportedSyntax.lean"
   let firstSource :=
