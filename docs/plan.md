@@ -11,25 +11,9 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ## Open Issues
 
-### Syntax-comment continuation indentation
-
-```text
-/-- error: diagnostic detail
-  continuation -/
-```
-
-Syntax-comment islands currently infer their rebase origin from the least-indented
-continuation. A short two-line doc comment can therefore lose intentional internal
-indentation even when its opening delimiter does not move. This violates the
-comment-relative-whitespace guarantee and can break `#guard_msgs` fixtures.
+None currently known.
 
 ## Progress
-
-### Checkpoint 15: syntax-comment relative indentation
-
-Syntax and module doc comments preserve every continuation line relative to the
-opening delimiter, including two-line diagnostic fixtures. Hex's complete
-post-format build passes.
 
 ### Checkpoint 16: release validation
 

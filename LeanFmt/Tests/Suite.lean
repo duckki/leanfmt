@@ -468,6 +468,26 @@ def assertBlockCommentInternalWhitespacePreservedByFormatting (env : Lean.Enviro
     Formatter.formatSourceWithEnv env nestedSource "nested-block-comment-spacing.lean"
   assertEq "nested block comment whitespace is preserved" nestedSource nestedFormatted
 
+def assertSyntaxCommentContinuationIndentPreserved (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "module\n"
+    ++ "\n"
+    ++ "public import Init\n"
+    ++ "\n"
+    ++ "public section\n"
+    ++ "\n"
+    ++ "/-! # Diagnostics -/\n"
+    ++ "\n"
+    ++ "/-- error: a diagnostic line long enough to make the comment structurally multiline\n"
+    ++ "  indented detail -/\n"
+    ++ "#guard_msgs in\n"
+    ++ "#check_failure unknownName\n"
+  let formatted ←
+    Formatter.formatSourceWithEnv env source "syntax-comment-continuation.lean"
+  assertEq "syntax comment continuation stays relative to its opening delimiter"
+    source formatted
+
 def assertIndentedCommentTriviaDoesNotPadBlankLines : IO Unit := do
   let trivia := "\n\n          -- Search through the local context.\n          "
   let expected := "\n\n    -- Search through the local context.\n    "
@@ -16029,6 +16049,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertOptionalAccessSuffixPropagatesApplicationFit env
   assertPostfixSuperscriptSpacingPreservesParse env
   assertBlockCommentInternalWhitespacePreservedByFormatting env
+  assertSyntaxCommentContinuationIndentPreserved env
   assertIndentedCommentTriviaDoesNotPadBlankLines
   assertOnlyIntrinsicCommentLinesForceBreaks env
   assertMovedStandaloneCommentsKeepSiblingIndent env

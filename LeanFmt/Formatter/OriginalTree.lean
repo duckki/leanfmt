@@ -194,10 +194,8 @@ private def rebaseTreeText
           | .syntaxComment span =>
               let comment := SyntaxTree.sourceText source span.start span.stop
               let rebased :=
-                if SpaceRules.hasLineStructure trivia then
-                  rebaseMultilineSourceSlice outputColumn comment
-                else
-                  rebaseTextIndent (sourceMap.columnAt span.start) outputColumn comment
+                SpaceRules.reindentCommentLexeme comment
+                  (sourceMap.columnAt span.start) outputColumn
               if (sourceContinuationIndent? comment).any (· < sourceColumn) then
                 floorContinuationIndent targetColumn rebased
               else
@@ -1074,7 +1072,14 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
         let outputColumn :=
           lineWidth <| currentLineAfterAppend request.currentLine leading
         if SpaceRules.hasLineStructure leading then
-          rebaseMultilineSourceSlice outputColumn sourceText
+          let commentSourceColumn :=
+            tree.syntaxCommentSpans.head?.map
+              (fun span => request.sourceMap.columnAt span.start)
+            |>.getD sourceColumn
+          if (sourceContinuationIndent? sourceText).any (· < commentSourceColumn) then
+            rebaseMultilineSourceSlice outputColumn sourceText
+          else
+            SpaceRules.reindentCommentLexeme sourceText commentSourceColumn outputColumn
         else
           rebaseTextIndent sourceColumn outputColumn sourceText
     | _ =>
