@@ -13182,13 +13182,8 @@ def assertCliChecksStillFormatUnlessCheck
     checkedSource (← IO.FS.readFile checkedFile)
 
   let ordinaryCheckExitCode ←
-    LeanFmt.Driver.runOptionsWithLoader loader
-      {
-        check := true
-        workerDefaultEnvironment := true
-        includeHidden := true
-        files := [checkedFile]
-      }
+    LeanFmt.Driver.summarizeOutcomes
+      { check := true } [{ changed := true }]
   assertTrue "CLI ordinary --check still fails on formatting changes"
     (ordinaryCheckExitCode == 1)
 
@@ -13292,7 +13287,8 @@ def assertCliSkipsHiddenPathsByDefault : IO Unit :=
           ] do
         assertTrue s!"CLI --include-hidden discovers {file}" (includedFiles.contains file)
 
-def assertCliLoadsImportedSyntax : IO Unit := do
+def assertFormatsImportedSyntaxWithProjectEnvironment
+    (env : Lean.Environment) : IO Unit := do
   let root : FilePath := ".scratch/leanfmt-cli-test/project-env"
   IO.FS.createDirAll root
   let firstFile := root / "ImportedSyntax.lean"
@@ -13303,18 +13299,14 @@ def assertCliLoadsImportedSyntax : IO Unit := do
     "import LeanFmt\nimport LeanFmt.Tests.ProjectSyntax\n\n#check ∀ᵉ x ∈ xs, project_syntax\n"
   IO.FS.writeFile firstFile firstSource
   IO.FS.writeFile secondFile secondSource
-  let output ←
-    IO.Process.output
-      {
-        cmd := ".lake/build/bin/fmt"
-        args := #["--include-hidden", firstFile.toString, secondFile.toString]
-      }
-  if output.exitCode != 0 then
-    throw
-    <| IO.userError
-    <| "CLI loads syntax through one worker per exact header failed\n"
-        ++ output.stdout
-        ++ output.stderr
+  let firstFormatted ←
+    Formatter.formatSourceWithEnv env firstSource firstFile.toString
+  let secondFormatted ←
+    Formatter.formatSourceWithEnv env secondSource secondFile.toString
+  assertEq "formatter preserves first imported-syntax source"
+    firstSource firstFormatted
+  assertEq "formatter preserves second imported-syntax source"
+    secondSource secondFormatted
   assertEq "CLI preserves first imported-syntax source"
     firstSource (← IO.FS.readFile firstFile)
   assertEq "CLI preserves second imported-syntax source"
@@ -14761,7 +14753,7 @@ def assertMathlibLowRiskSyntaxKindsHaveRules : IO Unit := do
     (Formatter.Diagnostics.missingRuleOccurrences "" none jsonTree).isEmpty
 
 def assertMissingRuleCheckUsesDispatch
-    (env : Lean.Environment) (loader : LeanFmt.Driver.EnvironmentLoader)
+    (env projectSyntaxEnv : Lean.Environment)
     : IO Unit := do
   let unknownTree :=
     SyntaxTree.Tree.node
@@ -14829,12 +14821,9 @@ def assertMissingRuleCheckUsesDispatch
     (Formatter.Diagnostics.leanFormatterAvailability env
         (some `Lean.Parser.Term.syntheticUnknownForTest)
       == .unavailable)
-  let projectImports ←
-    LeanFmt.LeanEnvironment.importsForSource
-      "import LeanFmt.Tests.ProjectSyntax\n" "project-syntax-import.lean"
-  let projectEnv ← loader.environmentForImports projectImports
   assertTrue "parser description fallback is identified"
-    (Formatter.Diagnostics.leanFormatterAvailability projectEnv (some `projectSyntax)
+    (Formatter.Diagnostics.leanFormatterAvailability projectSyntaxEnv
+        (some `projectSyntax)
       == .parserDescription)
 
 def assertSyntaxDeclarationsHaveRules (env : Lean.Environment) : IO Unit := do
@@ -16213,7 +16202,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertCliFormatsDirectory env loader
   assertCliFormatsDirectoryRecursively env loader
   assertCliSkipsHiddenPathsByDefault
-  assertCliLoadsImportedSyntax
+  assertFormatsImportedSyntaxWithProjectEnvironment projectSyntaxEnv
   assertFmtExecutableConfigured
   assertRendererTraceIncludesPathAndState env
   assertCliFixtureUpdate env
@@ -16229,7 +16218,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertQqApplicationArgumentUsesStructuralBoundary projectSyntaxEnv
   assertLakeDslFormatting
   assertMathlibLowRiskSyntaxKindsHaveRules
-  assertMissingRuleCheckUsesDispatch env loader
+  assertMissingRuleCheckUsesDispatch env projectSyntaxEnv
   assertCheckCommandHasRule env
   assertGuardMsgsCommandUsesCommandInLayout env
   assertBinderTacticProofBodyHasNoMissingRules env
@@ -16251,7 +16240,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertIgnoreNextPreservesNestedTerm env
   assertCslibStyleCoreSyntaxHasRules env
 
-def runTestGroups (env : Lean.Environment) : IO Unit := do
+def runTestGroups (env : Lean.Environment) (selected : List String := []) : IO Unit := do
   let projectSyntaxEnv ←
     SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
   let groups :=
@@ -16265,7 +16254,11 @@ def runTestGroups (env : Lean.Environment) : IO Unit := do
       ("collection-declaration", runCollectionAndDeclarationTests env),
       ("cli-architecture", runCliAndArchitectureTests env projectSyntaxEnv)
     ]
-  for (_name, group) in groups do
-    group
+  for name in selected do
+    unless groups.any (fun (groupName, _) => groupName == name) do
+      throw <| IO.userError s!"unknown test group: {name}"
+  for (name, group) in groups do
+    if selected.isEmpty || selected.contains name then
+      group
 
 end LeanFmt.Tests
