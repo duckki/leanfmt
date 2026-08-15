@@ -13292,7 +13292,8 @@ def assertCliSkipsHiddenPathsByDefault : IO Unit :=
           ] do
         assertTrue s!"CLI --include-hidden discovers {file}" (includedFiles.contains file)
 
-def assertCliLoadsImportedSyntax : IO Unit := do
+def assertCliLoadsImportedSyntax
+    (loader : LeanFmt.Driver.EnvironmentLoader) : IO Unit := do
   let root : FilePath := ".scratch/leanfmt-cli-test/project-env"
   IO.FS.createDirAll root
   let firstFile := root / "ImportedSyntax.lean"
@@ -13303,18 +13304,11 @@ def assertCliLoadsImportedSyntax : IO Unit := do
     "import LeanFmt\nimport LeanFmt.Tests.ProjectSyntax\n\n#check ∀ᵉ x ∈ xs, project_syntax\n"
   IO.FS.writeFile firstFile firstSource
   IO.FS.writeFile secondFile secondSource
-  let output ←
-    IO.Process.output
-      {
-        cmd := ".lake/build/bin/fmt"
-        args := #["--include-hidden", firstFile.toString, secondFile.toString]
-      }
-  if output.exitCode != 0 then
-    throw
-    <| IO.userError
-    <| "CLI loads syntax through one worker per exact header failed\n"
-        ++ output.stdout
-        ++ output.stderr
+  for file in [firstFile, secondFile] do
+    let exitCode ←
+      LeanFmt.Driver.runOptionsWithLoader loader
+        { includeHidden := true, files := [file] }
+    assertTrue s!"CLI loads imported syntax for {file}" (exitCode == 0)
   assertEq "CLI preserves first imported-syntax source"
     firstSource (← IO.FS.readFile firstFile)
   assertEq "CLI preserves second imported-syntax source"
@@ -16213,7 +16207,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertCliFormatsDirectory env loader
   assertCliFormatsDirectoryRecursively env loader
   assertCliSkipsHiddenPathsByDefault
-  assertCliLoadsImportedSyntax
+  assertCliLoadsImportedSyntax loader
   assertFmtExecutableConfigured
   assertRendererTraceIncludesPathAndState env
   assertCliFixtureUpdate env
