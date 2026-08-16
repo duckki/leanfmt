@@ -576,9 +576,10 @@ is never split across workers, even when it contains many files, and every group
 one worker process. The work-conserving queue keeps the configured job count active.
 Each imported worker skips leanfmt's default environment, imports its one exact header
 with `leakEnv := true`, shares that environment across the group's files, and exits.
-Worker output is buffered independently and emitted in batch order after all workers
-complete, preventing concurrent diagnostics from interleaving. Files with a `module`
-header use exported `.olean` data; scripts use private data, matching Lean's frontend.
+Worker stdout and stderr are inherited by the parent so formatting messages and
+diagnostics are visible while workers run; concurrent worker output may interleave.
+Files with a `module` header use exported `.olean` data; scripts use private data,
+matching Lean's frontend.
 Lean itself computes every transitive import, IR phase, initializer, and persistent
 extension; leanfmt does not derive environments from a superset. Lowering the worker-job
 count reduces peak memory. `--env-cache-size N` remains an internal compatibility

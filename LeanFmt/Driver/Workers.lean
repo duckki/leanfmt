@@ -376,8 +376,6 @@ def loadWorkerProcessContext (cwd? : Option FilePath) : IO WorkerProcessContext 
 
 structure WorkerBatchResult where
   exitCode : UInt32
-  stdout : String
-  stderr : String
   elapsedMs : Nat
 
 structure WorkerBatch where
@@ -400,22 +398,22 @@ def runEnvironmentWorkerBatch
     (inputFiles : List FilePath)
     : IO WorkerBatchResult := do
   let files ← pathsForWorkerCwd cwd? inputFiles
-  let (output, elapsedMs) ←
+  let (exitCode, elapsedMs) ←
     timeIO
-    <| IO.Process.output
-        {
-          cmd := process.executable.toString
-          args := options.workerArgs environment files
-          cwd := cwd?
-          env := process.environment
-        }
-  pure
-    {
-      exitCode := output.exitCode
-      stdout := output.stdout
-      stderr := output.stderr
-      elapsedMs
-    }
+    <| do
+      let child ←
+        IO.Process.spawn
+          {
+            cmd := process.executable.toString
+            args := options.workerArgs environment files
+            cwd := cwd?
+            env := process.environment
+            stdin := .null
+            stdout := .inherit
+            stderr := .inherit
+          }
+      child.wait
+  pure { exitCode, elapsedMs }
 
 def reportWorkerBatchResult
     (options : Options) (environment : WorkerEnvironment)
@@ -424,13 +422,9 @@ def reportWorkerBatchResult
     : IO Bool := do
   match result with
   | .ok result =>
-      if !result.stdout.isEmpty then
-        IO.print result.stdout
-      if !result.stderr.isEmpty then
-        IO.eprint result.stderr
-      if result.exitCode != 0 && result.stdout.isEmpty && result.stderr.isEmpty then
+      if result.exitCode != 0 then
         IO.eprintln
-          s!"leanfmt: worker batch {batchIndex}/{totalBatches} exited with code {result.exitCode} without output"
+          s!"leanfmt: worker batch {batchIndex}/{totalBatches} exited with code {result.exitCode}"
       profileLine options
         s!"worker-batch: index={batchIndex}/{totalBatches} environment={environment.description} environments={environmentCount} files={fileCount} exit={result.exitCode} elapsed={result.elapsedMs}ms"
       pure (result.exitCode != 0)

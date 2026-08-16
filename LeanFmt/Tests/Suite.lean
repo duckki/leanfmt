@@ -13182,8 +13182,7 @@ def assertCliChecksStillFormatUnlessCheck
     checkedSource (← IO.FS.readFile checkedFile)
 
   let ordinaryCheckExitCode ←
-    LeanFmt.Driver.summarizeOutcomes
-      { check := true } [{ changed := true }]
+    LeanFmt.Driver.summarizeOutcomes { check := true } [{ changed := true }]
   assertTrue "CLI ordinary --check still fails on formatting changes"
     (ordinaryCheckExitCode == 1)
 
@@ -13287,8 +13286,8 @@ def assertCliSkipsHiddenPathsByDefault : IO Unit :=
           ] do
         assertTrue s!"CLI --include-hidden discovers {file}" (includedFiles.contains file)
 
-def assertFormatsImportedSyntaxWithProjectEnvironment
-    (env : Lean.Environment) : IO Unit := do
+def assertFormatsImportedSyntaxWithProjectEnvironment (env : Lean.Environment)
+    : IO Unit := do
   let root : FilePath := ".scratch/leanfmt-cli-test/project-env"
   IO.FS.createDirAll root
   let firstFile := root / "ImportedSyntax.lean"
@@ -13299,12 +13298,9 @@ def assertFormatsImportedSyntaxWithProjectEnvironment
     "import LeanFmt\nimport LeanFmt.Tests.ProjectSyntax\n\n#check ∀ᵉ x ∈ xs, project_syntax\n"
   IO.FS.writeFile firstFile firstSource
   IO.FS.writeFile secondFile secondSource
-  let firstFormatted ←
-    Formatter.formatSourceWithEnv env firstSource firstFile.toString
-  let secondFormatted ←
-    Formatter.formatSourceWithEnv env secondSource secondFile.toString
-  assertEq "formatter preserves first imported-syntax source"
-    firstSource firstFormatted
+  let firstFormatted ← Formatter.formatSourceWithEnv env firstSource firstFile.toString
+  let secondFormatted ← Formatter.formatSourceWithEnv env secondSource secondFile.toString
+  assertEq "formatter preserves first imported-syntax source" firstSource firstFormatted
   assertEq "formatter preserves second imported-syntax source"
     secondSource secondFormatted
   assertEq "CLI preserves first imported-syntax source"
@@ -14752,8 +14748,7 @@ def assertMathlibLowRiskSyntaxKindsHaveRules : IO Unit := do
   assertTrue "Lean JSON syntax is skipped by missing-rule reporting"
     (Formatter.Diagnostics.missingRuleOccurrences "" none jsonTree).isEmpty
 
-def assertMissingRuleCheckUsesDispatch
-    (env projectSyntaxEnv : Lean.Environment)
+def assertMissingRuleCheckUsesDispatch (env projectSyntaxEnv : Lean.Environment)
     : IO Unit := do
   let unknownTree :=
     SyntaxTree.Tree.node
