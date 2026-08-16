@@ -2486,6 +2486,38 @@ def assertParenthesizedProofIgnoresStaleSourceColumn (env : Lean.Environment)
   assertEq "parenthesized proof structural indentation is idempotent"
     result.formatted formattedAgain
 
+def assertMovedInlineProofBodiesUseStructuralBase (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "theorem movedInlinePipeProofBodyWithEnoughCharactersToBreak\n"
+    ++ "    (hb : True -> True) : True := fun proofArgument => hb <| by\n"
+    ++ "  exact proofArgument\n"
+    ++ "\n"
+    ++ "def parenthesizedInlineProofBodyWithEnoughCharactersToBreak :=\n"
+    ++ "  veryLongOuterFunctionName firstArgument (fun value => (by\n"
+    ++ "                                             exact value))\n"
+  let expected :=
+    "theorem movedInlinePipeProofBodyWithEnoughCharactersToBreak (hb : True -> True) : True :=\n"
+    ++ "  fun proofArgument =>\n"
+    ++ "    hb <| by\n"
+    ++ "      exact proofArgument\n"
+    ++ "\n"
+    ++ "def parenthesizedInlineProofBodyWithEnoughCharactersToBreak :=\n"
+    ++ "  veryLongOuterFunctionName firstArgument\n"
+    ++ "    (fun value => (by\n"
+    ++ "      exact value))\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "moved-inline-proof-structural-base.lean" { lineWidth := 100 }
+  assertTrue "moved inline proof bodies do not fall back" (!result.fellBack)
+  assertEq "moved inline proof bodies use their structural base" expected result.formatted
+  assertTrue "moved inline proof body formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "moved-inline-proof-structural-base-formatted.lean" { lineWidth := 100 }
+  assertEq "moved inline proof body formatting is idempotent"
+    result.formatted formattedAgain
+
 def assertMultitokenChildKeepsStructuralBase (env : Lean.Environment) : IO Unit := do
   let source :=
     "instance (i j : J) :\n"
@@ -16091,6 +16123,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertQuotationIslandRetainsFittingSourceIndent env
   assertQuotationBodyUsesStructuralIndentFloor env
   assertParenthesizedProofIgnoresStaleSourceColumn env
+  assertMovedInlineProofBodiesUseStructuralBase env
   assertMultitokenChildKeepsStructuralBase env
   assertOverflowRecoveryKeepsNestedCommandIndent env
   assertFittingTrailingLineCommentStaysAttached env

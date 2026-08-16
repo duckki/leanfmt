@@ -991,7 +991,13 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     if proof && originalLeadingHasLineStructure then
       targetColumn?.map
         fun targetColumn =>
-          max (max (request.segmentIndentation * indentationSpaces) indentationSpaces)
+          let minimumColumn :=
+            max (request.segmentIndentation * indentationSpaces) indentationSpaces
+          let maximumColumn :=
+            max minimumColumn (request.currentIndent + indentationSpaces)
+          if targetColumn < minimumColumn || maximumColumn < targetColumn then
+            (request.segmentIndentation + 1) * indentationSpaces
+          else
             targetColumn
     else
       targetColumn?
