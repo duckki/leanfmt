@@ -578,8 +578,9 @@ Each imported worker skips leanfmt's default environment, imports its one exact 
 with `leakEnv := true`, shares that environment across the group's files, and exits.
 Worker stdout and stderr are inherited by the parent so formatting messages and
 diagnostics are visible while workers run; concurrent worker output may interleave.
-Files with a `module` header use exported `.olean` data; scripts use private data,
-matching Lean's frontend.
+When stderr is a terminal, the parent also renders a Lake-style in-place status
+line for worker file and batch progress. Files with a `module` header use exported
+`.olean` data; scripts use private data, matching Lean's frontend.
 Lean itself computes every transitive import, IR phase, initializer, and persistent
 extension; leanfmt does not derive environments from a superset. Lowering the worker-job
 count reduces peak memory. `--env-cache-size N` remains an internal compatibility

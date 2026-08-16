@@ -1,4 +1,5 @@
 import LeanFmt.Driver.Files
+import LeanFmt.Driver.Status
 
 open System
 
@@ -391,6 +392,12 @@ structure IndexedWorkerBatchResult where
   environmentCount : Nat
   result : Except IO.Error WorkerBatchResult
 
+def workerProgressMessage
+    (environment : WorkerEnvironment)
+    (completedFiles totalFiles completedBatches totalBatches runningBatches : Nat)
+    : String :=
+  s!"leanfmt: formatting {environment.description} environments: {completedFiles}/{totalFiles} files, {completedBatches}/{totalBatches} batches, {runningBatches} running"
+
 def runEnvironmentWorkerBatch
     (process : WorkerProcessContext)
     (options : Options) (environment : WorkerEnvironment)
@@ -440,10 +447,13 @@ def runEnvironmentWorkerBatches
   if batches.isEmpty then
     return 0
   let workerJobs := min (max 1 workerJobs) batches.length
+  let totalFiles := batches.foldl (fun count batch => count + batch.files.length) 0
   let mut remaining := batches.zipIdx
   let mut active : List (Task IndexedWorkerBatchResult) := []
-  let mut completed : Array (Option IndexedWorkerBatchResult) :=
-    Array.replicate batches.length none
+  let mut completedFiles := 0
+  let mut completedBatches := 0
+  let mut failed := false
+  let mut status ← StatusRenderer.create
   while !remaining.isEmpty || !active.isEmpty do
     while active.length < workerJobs && !remaining.isEmpty do
       match remaining with
@@ -463,21 +473,25 @@ def runEnvironmentWorkerBatches
                 })
             :: active
           remaining := rest
+    status ←
+      status.render
+      <| workerProgressMessage environment completedFiles totalFiles
+          completedBatches batches.length active.length
     match active with
     | [] => pure ()
     | task :: rest =>
         let (result, unfinished) ← IO.waitAny' (task :: rest)
-        completed := completed.set! result.batchIndex (some result)
+        status ← status.clear
+        failed :=
+          (← reportWorkerBatchResult options
+              environment
+              (result.batchIndex + 1) batches.length result.fileCount
+              result.environmentCount result.result)
+          || failed
+        completedFiles := completedFiles + result.fileCount
+        completedBatches := completedBatches + 1
         active := unfinished
-  let mut failed := false
-  for result? in completed do
-    if let some result := result? then
-      failed :=
-        (← reportWorkerBatchResult options
-            environment
-            (result.batchIndex + 1) batches.length result.fileCount
-            result.environmentCount result.result)
-        || failed
+  status ← status.clear
   pure <| if failed then 1 else 0
 
 def runExactEnvironmentWorkerBatches
