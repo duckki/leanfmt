@@ -38,7 +38,7 @@ def LeanFormatterAvailability.description : LeanFormatterAvailability → String
 def syntaxNodeKind? : SyntaxTree.NodeKind → Option SyntaxNodeKind
   | .raw kind => some kind
   | .command kind => some kind
-  | .tactic kind _ _ _ => some kind
+  | .tactic kind _ _ _ _ => some kind
   | .letExpression kind _ => some kind
   | _ => none
 
@@ -452,6 +452,29 @@ def atomicWithCommaSpans : List SyntaxTree.Tree → List SyntaxTree.Span
       current ++ atomicWithCommaSpans (commaTree :: rest)
   | _ => []
 
+def attachedSuffixApplicationHeadSpan? : SyntaxTree.Tree → Option SyntaxTree.Span
+  | tree@(.node .suffixGroup children) => do
+      if children.any SyntaxTree.Tree.isProofBodyEnvelope then
+        none
+      let application ←
+        children.findSomeRev?
+          fun child =>
+            match child with
+            | .node .application _ => some child
+            | _ => none
+      let .node .application applicationChildren := application | none
+      let head ← applicationChildren.find? fun child => child.firstToken?.isSome
+      let first ← tree.firstToken?
+      let last ← head.lastToken?
+      some { start := first.span.start, stop := last.span.stop }
+  | _ => none
+
+partial def attachedSuffixApplicationHeadSpans : SyntaxTree.Tree → List SyntaxTree.Span
+  | .missing | .leaf _ => []
+  | tree@(.node _ children) =>
+      (attachedSuffixApplicationHeadSpan? tree).toList
+      ++ children.toList.flatMap attachedSuffixApplicationHeadSpans
+
 partial def indivisibleOverflowSpans : SyntaxTree.Tree → List SyntaxTree.Span
   | .missing | .leaf _ => []
   | tree@(.node _ children) =>
@@ -461,6 +484,7 @@ partial def indivisibleOverflowSpans : SyntaxTree.Tree → List SyntaxTree.Span
         else
           []
       current
+      ++ (attachedSuffixApplicationHeadSpan? tree).toList
       ++ atomicWithCommaSpans children.toList
       ++ children.toList.flatMap indivisibleOverflowSpans
 
@@ -752,6 +776,8 @@ def formattingExceptions (sourceModule formattedModule : SyntaxTree.Module)
       let sourceTokens := realTokens sourceModule
       let formattedTokens := realTokens formattedModule
       let formattedAtomicSpans := indivisibleOverflowSpans formattedModule.tree
+      let formattedAttachedSuffixHeadSpans :=
+        attachedSuffixApplicationHeadSpans formattedModule.tree
       let formattedUnbreakableOriginalSpans :=
         unbreakableOriginalSpans formattedModule.tree
       let formattedSyntaxCommentSpans := formattedModule.tree.syntaxCommentSpans
@@ -769,6 +795,8 @@ def formattingExceptions (sourceModule formattedModule : SyntaxTree.Module)
                   occurrence options.lineWidth
               || overflowContainedInUnbreakableLineHead formattedMap formattedTokens
                   occurrence options.lineWidth
+              || overflowCoveredBySpans formattedMap formattedTokens
+                  formattedAttachedSuffixHeadSpans occurrence options.lineWidth
               || sourceOverflowTexts.contains occurrence.text.trimAscii
               || commentOnlyOverflowMatchesSource formattedMap formattedTokens
                   formattedSyntaxCommentSpans sourceCommentLineTexts occurrence

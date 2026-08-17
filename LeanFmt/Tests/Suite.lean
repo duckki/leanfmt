@@ -55,7 +55,7 @@ partial def containsNestedProofBody : SyntaxTree.Tree → Bool
 
 partial def findTacticTree? (target : Lean.SyntaxNodeKind)
     : SyntaxTree.Tree → Option SyntaxTree.Tree
-  | tree@(.node (.tactic kind _ _ _) children) =>
+  | tree@(.node (.tactic kind _ _ _ _) children) =>
       if kind == target then
         some tree
       else
@@ -2495,6 +2495,10 @@ def assertMovedInlineProofBodiesUseStructuralBase (env : Lean.Environment) : IO 
     ++ "def parenthesizedInlineProofBodyWithEnoughCharactersToBreak :=\n"
     ++ "  veryLongOuterFunctionName firstArgument (fun value => (by\n"
     ++ "                                             exact value))\n"
+    ++ "\n"
+    ++ "theorem inlineShowProofBody : True := by\n"
+    ++ "  exact (show True by\n"
+    ++ "                              exact True.intro)\n"
   let expected :=
     "theorem movedInlinePipeProofBodyWithEnoughCharactersToBreak (hb : True -> True) : True :=\n"
     ++ "  fun proofArgument =>\n"
@@ -2505,6 +2509,10 @@ def assertMovedInlineProofBodiesUseStructuralBase (env : Lean.Environment) : IO 
     ++ "  veryLongOuterFunctionName firstArgument\n"
     ++ "    (fun value => (by\n"
     ++ "      exact value))\n"
+    ++ "\n"
+    ++ "theorem inlineShowProofBody : True := by\n"
+    ++ "  exact (show True by\n"
+    ++ "    exact True.intro)\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "moved-inline-proof-structural-base.lean" { lineWidth := 100 }
@@ -2516,6 +2524,183 @@ def assertMovedInlineProofBodiesUseStructuralBase (env : Lean.Environment) : IO 
     Formatter.formatSourceWithEnv env result.formatted
       "moved-inline-proof-structural-base-formatted.lean" { lineWidth := 100 }
   assertEq "moved inline proof body formatting is idempotent"
+    result.formatted formattedAgain
+
+def assertProtectedBodiesUseStructuralIndentation (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "theorem proofAfterFromBy (h : True) : True :=\n"
+    ++ "  suffices h' : True from by\n"
+    ++ "            exact h'\n"
+    ++ "  h\n"
+    ++ "\n"
+    ++ "def proofAfterElseBy (condition : Bool) : Nat :=\n"
+    ++ "  if condition then\n"
+    ++ "    0\n"
+    ++ "  else by\n"
+    ++ "  exact 1\n"
+    ++ "\n"
+    ++ "theorem projectedProof : True := by\n"
+    ++ "  exact (completeValue_sourceAligned schema resolvers variableValues\n"
+    ++ "          completionFuel fieldDefinition.outputType field.selectionSet\n"
+    ++ "          previousSource (some (.object previousSource fields))\n"
+    ++ "          (by\n"
+    ++ "            intro cached h\n"
+    ++ "            cases h\n"
+    ++ "            exact FieldCacheSourceAligned.object previousSource fields extraArgument)).internallyAligned\n"
+    ++ "\n"
+    ++ "def nestedElseProof (n : Nat) : Nat :=\n"
+    ++ "  id\n"
+    ++ "    (if h : n = 0 then\n"
+    ++ "                    0\n"
+    ++ "                  else by\n"
+    ++ "                  exact n)\n"
+    ++ "\n"
+    ++ "theorem nestedPipeProof (h : True -> True) : True :=\n"
+    ++ "  id\n"
+    ++ "  <| h\n"
+    ++ "  <| by\n"
+    ++ "  exact True.intro\n"
+    ++ "\n"
+    ++ "def structureFieldProof : Subtype fun _ : Nat => True where\n"
+    ++ "  val := 0\n"
+    ++ "  property := by\n"
+    ++ "   exact True.intro\n"
+    ++ "\n"
+    ++ "theorem calcStepProof (n : Nat) : n = n := by\n"
+    ++ "  calc\n"
+    ++ "    n = n := by\n"
+    ++ "          rfl\n"
+    ++ "\n"
+    ++ "theorem matchArmBody (n : Nat) : True := by\n"
+    ++ "  match n with\n"
+    ++ "    | 0 =>\n"
+    ++ "    exact True.intro\n"
+    ++ "    | _ =>\n"
+    ++ "      exact True.intro\n"
+    ++ "\n"
+    ++ "theorem inlinePipeProof : True := by\n"
+    ++ "  exact (longProofFunction firstArgument secondArgument).trans <| by\n"
+    ++ "    exact proof\n"
+  let expected :=
+    "theorem proofAfterFromBy (h : True) : True :=\n"
+    ++ "  suffices h' : True from by\n"
+    ++ "    exact h'\n"
+    ++ "  h\n"
+    ++ "\n"
+    ++ "def proofAfterElseBy (condition : Bool) : Nat :=\n"
+    ++ "  if condition then\n"
+    ++ "    0\n"
+    ++ "  else by\n"
+    ++ "    exact 1\n"
+    ++ "\n"
+    ++ "theorem projectedProof : True := by\n"
+    ++ "  exact (completeValue_sourceAligned schema resolvers variableValues\n"
+    ++ "          completionFuel fieldDefinition.outputType field.selectionSet\n"
+    ++ "          previousSource (some (.object previousSource fields))\n"
+    ++ "          (by\n"
+    ++ "            intro cached h\n"
+    ++ "            cases h\n"
+    ++ "            exact FieldCacheSourceAligned.object previousSource fields extraArgument)\n"
+    ++ "        ).internallyAligned\n"
+    ++ "\n"
+    ++ "def nestedElseProof (n : Nat) : Nat :=\n"
+    ++ "  id\n"
+    ++ "    (if h : n = 0 then\n"
+    ++ "        0\n"
+    ++ "      else by\n"
+    ++ "        exact n)\n"
+    ++ "\n"
+    ++ "theorem nestedPipeProof (h : True -> True) : True :=\n"
+    ++ "  id\n"
+    ++ "  <| h\n"
+    ++ "  <| by\n"
+    ++ "    exact True.intro\n"
+    ++ "\n"
+    ++ "def structureFieldProof : Subtype fun _ : Nat => True where\n"
+    ++ "  val := 0\n"
+    ++ "  property := by\n"
+    ++ "    exact True.intro\n"
+    ++ "\n"
+    ++ "theorem calcStepProof (n : Nat) : n = n := by\n"
+    ++ "  calc\n"
+    ++ "    n = n := by\n"
+    ++ "      rfl\n"
+    ++ "\n"
+    ++ "theorem matchArmBody (n : Nat) : True := by\n"
+    ++ "  match n with\n"
+    ++ "  | 0 =>\n"
+    ++ "      exact True.intro\n"
+    ++ "  | _ =>\n"
+    ++ "      exact True.intro\n"
+    ++ "\n"
+    ++ "theorem inlinePipeProof : True := by\n"
+    ++ "  exact (longProofFunction firstArgument secondArgument).trans <| by exact proof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "protected-body-structural-indentation.lean" { lineWidth := 90 }
+  assertTrue "protected body structural indentation does not fall back" (!result.fellBack)
+  assertEq "protected bodies use structural indentation" expected result.formatted
+  assertTrue "protected body structural indentation preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "protected-body-structural-indentation-formatted.lean" { lineWidth := 90 }
+  assertEq "protected body structural indentation is idempotent"
+    result.formatted formattedAgain
+
+def assertBracketedTacticSequenceUsesStructuralBreaks (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "theorem bracketedTacticSequence (h : True) : True := by\n"
+    ++ "  calc\n"
+    ++ "    True = True := by\n"
+    ++ "      { refine ?_\n"
+    ++ "        rw [show True = True from rfl] at h\n"
+    ++ "        exact (by simpa using h) }\n"
+  let expected :=
+    "theorem bracketedTacticSequence (h : True) : True := by\n"
+    ++ "  calc\n"
+    ++ "    True = True := by {\n"
+    ++ "      refine ?_\n"
+    ++ "      rw [show True = True from rfl] at h\n"
+    ++ "      exact (by simpa using h) }\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "bracketed-tactic-sequence-structural-breaks.lean"
+  assertTrue "bracketed tactic sequence does not fall back" (!result.fellBack)
+  assertEq "bracketed tactic sequence uses structural breaks" expected result.formatted
+  assertTrue "bracketed tactic sequence formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "bracketed-tactic-sequence-structural-breaks-formatted.lean"
+  assertEq "bracketed tactic sequence formatting is idempotent"
+    result.formatted formattedAgain
+
+def assertStructureSpreadStaysAfterProofField (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def structureSpreadAfterProof :=\n"
+    ++ "  { value := by\n"
+    ++ "      exact sourceValue\n"
+    ++ "    .. }\n"
+  let expected :=
+    "def structureSpreadAfterProof :=\n"
+    ++ "  {\n"
+    ++ "    value := by\n"
+    ++ "      exact sourceValue\n"
+    ++ "    ..\n"
+    ++ "  }\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "structure-spread-after-proof-field.lean"
+  assertTrue "structure spread after proof field does not fall back" (!result.fellBack)
+  assertEq "structure spread remains a separate field entry" expected result.formatted
+  assertTrue "structure spread after proof field preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "structure-spread-after-proof-field-formatted.lean"
+  assertEq "structure spread after proof field formatting is idempotent"
     result.formatted formattedAgain
 
 def assertMultitokenChildKeepsStructuralBase (env : Lean.Environment) : IO Unit := do
@@ -3904,10 +4089,16 @@ def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit
       ] do
     assertTrue s!"{tactic} retains its tactic ownership"
       ((findTacticTree? kind moduleTree.tree).isSome)
+    assertTrue s!"{tactic} records its parser-derived spaced application"
+      ((findTacticTree? kind moduleTree.tree).any
+        SyntaxTree.Tree.isSpacedApplicationTactic)
     assertTrue s!"{tactic} does not become an outer application"
       ((findTreeNodeStartingWith? .application tactic moduleTree.tree).isNone)
   assertTrue "extension term-taking tactic retains its tactic ownership"
     ((findTacticTree? `contextTermTactic moduleTree.tree).isSome)
+  assertTrue "extension term-taking tactic records its spaced application"
+    ((findTacticTree? `contextTermTactic moduleTree.tree).any
+      SyntaxTree.Tree.isSpacedApplicationTactic)
   assertTrue "extension term-taking tactic does not become an outer application"
     ((findTreeNodeStartingWith? .application
         "context_term_tactic" moduleTree.tree).isNone)
@@ -3943,6 +4134,183 @@ def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit
       "term-taking-tactic-application-formatted.lean" { lineWidth := 60 }
   assertEq "term-taking tactic application formatting is idempotent"
     result.formatted formattedAgain
+
+  let nestedProofSource :=
+    "theorem extensionTacticWithNestedProof : True := by\n"
+    ++ "  context_term_tactic extensionFunction firstArgument secondArgument\n"
+    ++ "    (by exact True.intro)\n"
+  let nestedProofExpected :=
+    "theorem extensionTacticWithNestedProof : True := by\n"
+    ++ "  context_term_tactic extensionFunction firstArgument\n"
+    ++ "    secondArgument (by exact True.intro)\n"
+  let nestedProofResult ←
+    Formatter.formatSourceWithEnvDetailed env nestedProofSource
+      "extension-tactic-with-nested-proof.lean" { lineWidth := 60 }
+  assertTrue "extension tactic with nested proof does not fall back"
+    (!nestedProofResult.fellBack)
+  assertEq "extension tactic stays with a multiline proof operand"
+    nestedProofExpected nestedProofResult.formatted
+  assertTrue "extension tactic with nested proof preserves code"
+    (← codePreservedIgnoringWhitespace env nestedProofSource nestedProofResult.formatted)
+  let nestedProofTree ←
+    SyntaxTree.parseModuleStringWithEnv env nestedProofResult.formatted
+      "extension-tactic-with-nested-proof-formatted.lean"
+  assertTrue "parser-described tactic application has complete rule coverage"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule nestedProofTree).isEmpty
+  let nestedProofFormattedAgain ←
+    Formatter.formatSourceWithEnv env nestedProofResult.formatted
+      "extension-tactic-with-nested-proof-formatted-again.lean" { lineWidth := 60 }
+  assertEq "extension tactic with nested proof formatting is idempotent"
+    nestedProofResult.formatted nestedProofFormattedAgain
+
+  let nestedBulletProofSource :=
+    "theorem nestedProofBodyUnderBullet : True := by\n"
+    ++ "  · intro hypothesis\n"
+    ++ "    exact (by\n"
+    ++ "      simpa [firstRewrite, secondRewrite] using\n"
+    ++ "        longFunctionName firstArgument secondArgument\n"
+    ++ "          (by simpa [nestedRewrite] using nestedProof))\n"
+  let nestedBulletProofExpected :=
+    "theorem nestedProofBodyUnderBullet : True := by\n"
+    ++ "  · intro hypothesis\n"
+    ++ "    exact (by\n"
+    ++ "      simpa [firstRewrite, secondRewrite]\n"
+    ++ "        using longFunctionName firstArgument secondArgument\n"
+    ++ "                (by simpa [nestedRewrite] using nestedProof))\n"
+  let nestedBulletProofResult ←
+    Formatter.formatSourceWithEnvDetailed env nestedBulletProofSource
+      "nested-proof-body-under-bullet.lean"
+  assertTrue "a nested proof body under a bullet does not fall back"
+    (!nestedBulletProofResult.fellBack)
+  assertEq "a nested proof body uses its spaced tactic base under a bullet"
+    nestedBulletProofExpected nestedBulletProofResult.formatted
+  assertTrue "a nested proof body under a bullet preserves code"
+    (← codePreservedIgnoringWhitespace env nestedBulletProofSource
+        nestedBulletProofResult.formatted)
+  let nestedBulletProofAgain ←
+    Formatter.formatSourceWithEnv env nestedBulletProofResult.formatted
+      "nested-proof-body-under-bullet-formatted.lean"
+  assertEq "a nested proof body under a bullet is idempotent"
+    nestedBulletProofResult.formatted nestedBulletProofAgain
+
+  let nestedCasesProof :=
+    "theorem nestedCasesProof : True := by\n"
+    ++ "  cases first with\n"
+    ++ "  | none =>\n"
+    ++ "      cases second with\n"
+    ++ "      | none => exact True.intro\n"
+    ++ "      | some value =>\n"
+    ++ "          let head := longFunctionNameForNestedCasesProof value\n"
+    ++ "          have result : True := by exact True.intro\n"
+    ++ "          exact veryLongProofFunctionForNestedCases head\n"
+    ++ "            result\n"
+    ++ "            (by\n"
+    ++ "              simpa [rewriteLemmaForNestedCases]\n"
+    ++ "                using proof)\n"
+    ++ "  | some value => exact True.intro\n"
+  let nestedCasesProofResult ←
+    Formatter.formatSourceWithEnvDetailed env nestedCasesProof
+      "nested-cases-trailing-proof.lean" { lineWidth := 60 }
+  assertTrue "an extracted proof argument in nested cases does not fall back"
+    (!nestedCasesProofResult.fellBack)
+  assertEq "an extracted proof argument retains the nested alternative base"
+    nestedCasesProof nestedCasesProofResult.formatted
+
+  let compactNestedProofSource :=
+    "theorem compactNestedProof : True := by\n"
+    ++ "  exact ih (fuel + 1) value pending (by\n"
+    ++ "    simpa [typeRefCompleteValueFuelBound] using hfuel)\n"
+  let compactNestedProofExpected :=
+    "theorem compactNestedProof : True := by\n"
+    ++ "  exact ih (fuel + 1) value pending (by simpa [typeRefCompleteValueFuelBound] using hfuel)\n"
+  let compactNestedProofResult ←
+    Formatter.formatSourceWithEnvDetailed env compactNestedProofSource
+      "compact-nested-parser-owned-proof.lean" { lineWidth := 100 }
+  assertTrue "a compact nested parser-owned proof does not fall back"
+    (!compactNestedProofResult.fellBack)
+  assertEq "a detached compact nested proof rejoins its by introducer"
+    compactNestedProofExpected compactNestedProofResult.formatted
+
+  let proofArgumentsSource :=
+    "theorem tacticWithProofArguments : True := by\n"
+    ++ "  exact mergeResponseField.induct responseMotive listMotive fieldsMotive fieldMotive (by\n"
+    ++ "    intro right\n"
+    ++ "    exact firstProof) (by\n"
+    ++ "    intro left\n"
+    ++ "    exact secondProof)\n"
+  let proofArgumentsExpected :=
+    "theorem tacticWithProofArguments : True := by\n"
+    ++ "  exact mergeResponseField.induct responseMotive listMotive fieldsMotive fieldMotive\n"
+    ++ "    (by\n"
+    ++ "      intro right\n"
+    ++ "      exact firstProof)\n"
+    ++ "    (by\n"
+    ++ "      intro left\n"
+    ++ "      exact secondProof)\n"
+  let proofArgumentsResult ←
+    Formatter.formatSourceWithEnvDetailed env proofArgumentsSource
+      "tactic-multiline-proof-arguments.lean" { lineWidth := 100 }
+  assertTrue "tactic multiline proof arguments do not fall back"
+    (!proofArgumentsResult.fellBack)
+  assertEq "tactic proof arguments remain peer application arguments"
+    proofArgumentsExpected proofArgumentsResult.formatted
+  assertTrue "tactic proof argument formatting preserves code"
+    (← codePreservedIgnoringWhitespace env proofArgumentsSource
+        proofArgumentsResult.formatted)
+
+  let compactProofArguments :=
+    "theorem compactProofArguments : True := by\n"
+    ++ "  exact hgroups responseName [field] field (by simp [hcollect]) (by simp)\n"
+  let compactProofArgumentsResult ←
+    Formatter.formatSourceWithEnvDetailed env compactProofArguments
+      "compact-tactic-proof-arguments.lean" { lineWidth := 100 }
+  assertTrue "compact tactic proof arguments do not fall back"
+    (!compactProofArgumentsResult.fellBack)
+  assertEq "compact tactic proof arguments stay on one line"
+    compactProofArguments compactProofArgumentsResult.formatted
+
+  let trailingProofSource :=
+    "theorem trailingProofArgument : True ∧ True := by\n"
+    ++ "  constructor\n"
+    ++ "  · exact True.intro\n"
+    ++ "  · exact id <| by exact True.intro\n"
+    ++ "\n"
+    ++ "/-- The following declaration stays outside the preceding proof. -/\n"
+    ++ "theorem afterTrailingProofArgument : True := by exact True.intro\n"
+  let trailingProofResult ←
+    Formatter.formatSourceWithEnvDetailed env trailingProofSource
+      "tactic-sequence-trailing-proof-argument.lean" { lineWidth := 100 }
+  assertTrue "a trailing proof argument does not capture its tactic sequence"
+    (!trailingProofResult.fellBack)
+  assertEq "a following doc comment remains outside the preceding proof"
+    trailingProofSource trailingProofResult.formatted
+  assertTrue "a tactic sequence with a trailing proof argument preserves code"
+    (← codePreservedIgnoringWhitespace env trailingProofSource
+        trailingProofResult.formatted)
+  let trailingProofAgain ←
+    Formatter.formatSourceWithEnv env trailingProofResult.formatted
+      "tactic-sequence-trailing-proof-argument-formatted.lean" { lineWidth := 100 }
+  assertEq "a tactic sequence with a trailing proof argument is idempotent"
+    trailingProofResult.formatted trailingProofAgain
+
+  let multiTacticPipeSource :=
+    "theorem multiTacticPipeProof : True := by\n"
+    ++ "  have result : True := id <| by\n"
+    ++ "    rw [show True = True from rfl]\n"
+    ++ "    exact True.intro\n"
+    ++ "  exact result\n"
+    ++ "\n"
+    ++ "private theorem afterMultiTacticPipeProof : True := by exact True.intro\n"
+  let multiTacticPipeResult ←
+    Formatter.formatSourceWithEnvDetailed env multiTacticPipeSource
+      "unparenthesized-multi-tactic-pipe-proof.lean" { lineWidth := 100 }
+  assertTrue "an unparenthesized multi-tactic pipe proof does not fall back"
+    (!multiTacticPipeResult.fellBack)
+  assertEq "a multi-tactic pipe proof keeps its structural body break"
+    multiTacticPipeSource multiTacticPipeResult.formatted
+  assertTrue "a multi-tactic pipe proof preserves the following declaration"
+    (← codePreservedIgnoringWhitespace env multiTacticPipeSource
+        multiTacticPipeResult.formatted)
 
 def assertAttachedProofLambdaUsesStructuralLayout (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -6148,6 +6516,37 @@ def assertLowPriorityPipeBoundaryPolicy (env : Lean.Environment) : IO Unit := do
       "low-priority-pipe-boundary-policy-formatted.lean" { lineWidth := 70 }
   assertEq "low-priority pipe boundary policy is idempotent"
     result.formatted formattedAgain
+  let tacticSource :=
+    "theorem tacticPipeProofFitsWidth : True := by\n"
+    ++ "  obtain ⟨e₂, he₂⟩ := (MulEquiv.prodComm.toMonoidHom.comp f).exists_mrange_eq_mgraph (by simpa) <|\n"
+    ++ "    by simp [hf]\n"
+  let tacticExpected :=
+    "theorem tacticPipeProofFitsWidth : True := by\n"
+    ++ "  obtain ⟨e₂, he₂⟩ := (MulEquiv.prodComm.toMonoidHom.comp f).exists_mrange_eq_mgraph\n"
+    ++ "    (by simpa) <| by simp [hf]\n"
+  let tacticResult ←
+    Formatter.formatSourceWithEnvDetailed env tacticSource
+      "low-priority-tactic-pipe-width.lean" { lineWidth := 100 }
+  assertTrue "low-priority tactic pipe fits width" (!tacticResult.fellBack)
+  assertEq "a tactic keeps the attached pipe proof as one suffix"
+    tacticExpected tacticResult.formatted
+  assertTrue "low-priority tactic pipe preserves code"
+    (← codePreservedIgnoringWhitespace env tacticSource tacticResult.formatted)
+  let nestedTacticSource :=
+    "theorem nestedTacticPipeProofIndent : True := by\n"
+    ++ "  exact (DivisionMonoid.inv_eq_of_mul _ (invOneSubPow S (d + 1)) <| by\n"
+    ++ "    rw [← Units.val_eq_one, Units.val_mul, Units.val_pow_eq_pow_val]\n"
+    ++ "    exact (invOneSubPow S (d + 1)).inv_val).symm\n"
+  let nestedTacticResult ←
+    Formatter.formatSourceWithEnvDetailed env nestedTacticSource
+      "nested-low-priority-tactic-pipe.lean" { lineWidth := 100 }
+  assertTrue "nested low-priority tactic pipe does not fall back"
+    (!nestedTacticResult.fellBack)
+  assertEq "nested tactic pipe proof body uses the tactic base"
+    nestedTacticSource nestedTacticResult.formatted
+  assertTrue "nested low-priority tactic pipe preserves code"
+    (← codePreservedIgnoringWhitespace env nestedTacticSource
+        nestedTacticResult.formatted)
 
 def assertLowPriorityPipeApplicationKeepsOperandBase (env : Lean.Environment)
     : IO Unit := do
@@ -8595,6 +8994,38 @@ def assertMultiItemArrayBreaksBalanced (env : Lean.Environment) : IO Unit := do
     Formatter.formatSourceWithEnv env source "multi-item-array-balanced.lean"
   assertEq "multi-item array breaks balanced" expected formatted
 
+def assertParserOwnedBracketCollectionUsesDelimitedLayout : IO Unit := do
+  let rawCollection :=
+    SyntaxTree.Tree.node (.raw `null)
+      #[
+        .leaf (syntheticAtomToken ""),
+        .leaf (syntheticAtomToken "["),
+        .leaf (syntheticIdentToken "first"),
+        .leaf (syntheticAtomToken ","),
+        .leaf (syntheticIdentToken "second"),
+        .leaf (syntheticAtomToken "]"),
+        .leaf (syntheticAtomToken "")
+      ]
+  let collection := SyntaxTree.regroupTree rawCollection
+  let isDelimitedCollection :=
+    match collection with
+    | .node (.delimitedCollection .bracket) _ => true
+    | _ => false
+  assertTrue "parser-owned bracket collection is classified during regrouping"
+    isDelimitedCollection
+  match Formatter.LineBreakRules.ruleFor collection with
+  | some rule =>
+      assertEq "parser-owned bracket collection uses the array rule" "array" rule.name
+      let segment := Formatter.LineBreakRules.Segment.ofTree collection
+      assertTrue "parser-owned bracket collection exposes balanced item breaks"
+        (rule.breakPoints {} segment
+          == [
+            { index := 2, indentLevels := 1 },
+            { index := 4, indentLevels := 1 },
+            { index := 5, indentLevels := 0 }
+          ])
+  | none => throw <| IO.userError "parser-owned bracket collection has no rule"
+
 def assertCommentedArrayKeepsDelimitedLayout (env : Lean.Environment) : IO Unit := do
   let source :=
     "def many : Array Char := #[\n"
@@ -9547,7 +9978,7 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
       "multiline-cases-body.lean"
   let ownedAlternativeHasDirectBody :=
     match findTreeNode?
-            (.tactic `Lean.Parser.Tactic.inductionAlt true true true)
+            (.tactic `Lean.Parser.Tactic.inductionAlt true true true false)
             multilineCasesBodyTree.tree with
     | some (.node _ children) =>
         match children[0]?, children[1]? with
@@ -9968,10 +10399,9 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
     ++ "  cases o with simp only\n"
     ++ "  | push value =>\n"
     ++ "      have h : True := True.intro\n"
-    ++ "      refine\n"
-    ++ "        by\n"
-    ++ "          -- Preserve this comment inside the branch body.\n"
-    ++ "          exact h\n"
+    ++ "      refine by\n"
+    ++ "        -- Preserve this comment inside the branch body.\n"
+    ++ "        exact h\n"
     ++ "  | pop =>\n"
     ++ "      trivial\n"
   let defaultCasesAlternativeResult ←
@@ -10182,21 +10612,21 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
     ++ "  exact\n"
     ++ "    match n with\n"
     ++ "    | _ => by\n"
-    ++ "      have h : True := by\n"
-    ++ "        cases n with\n"
-    ++ "        | zero => exact True.intro\n"
-    ++ "        | succ n => exact True.intro\n"
-    ++ "      exact h\n"
+    ++ "        have h : True := by\n"
+    ++ "          cases n with\n"
+    ++ "          | zero => exact True.intro\n"
+    ++ "          | succ n => exact True.intro\n"
+    ++ "        exact h\n"
   let matchArmProofExpected :=
     "theorem matchArmProofOwnership (n : Nat) : True := by\n"
     ++ "  exact\n"
     ++ "    match n with\n"
     ++ "    | _ => by\n"
-    ++ "      have h : True := by\n"
-    ++ "        cases n with\n"
-    ++ "        | zero => exact True.intro\n"
-    ++ "        | succ n => exact True.intro\n"
-    ++ "      exact h\n"
+    ++ "        have h : True := by\n"
+    ++ "          cases n with\n"
+    ++ "          | zero => exact True.intro\n"
+    ++ "          | succ n => exact True.intro\n"
+    ++ "        exact h\n"
   let matchArmProofResult ←
     Formatter.formatSourceWithEnvDetailed env matchArmProofSource
       "match-arm-proof-ownership.lean"
@@ -11788,6 +12218,20 @@ def assertAnonymousConstructorBreakBalanced (env : Lean.Environment) : IO Unit :
   assertTrue "anonymous constructor original layout may fall back structurally"
     (Formatter.OriginalTree.canUseStructuralOverflowFallback
       <| SyntaxTree.Tree.node (.raw `Lean.Parser.Term.anonymousCtor) #[])
+  let nestedCollectionTactic :=
+    SyntaxTree.Tree.node
+      (.tactic `Mathlib.Tactic.synthetic false false false false)
+      #[
+        .leaf (syntheticAtomToken "rw"),
+        .node (.raw `null)
+          #[
+            .leaf (syntheticAtomToken "["),
+            .leaf (syntheticIdentToken "rule"),
+            .leaf (syntheticAtomToken "]")
+          ]
+      ]
+  assertTrue "a nested collection does not structurally expose a protected tactic"
+    (!Formatter.OriginalTree.canUseStructuralOverflowFallback nestedCollectionTactic)
   let setoidSource :=
     "def stronglyConnectedSetoid : Setoid V :=\n"
     ++ "  ⟨fun a b => (Nonempty (Path a b)) ∧ (Nonempty (Path b a)), fun _ => ⟨⟨Path.nil⟩, ⟨Path.nil⟩⟩, fun ⟨hab, hba⟩ => ⟨hba, hab⟩, fun ⟨hab, hba⟩ ⟨hbc, hcb⟩ => ⟨⟨hab.some.comp hbc.some⟩, ⟨hcb.some.comp hba.some⟩⟩⟩\n"
@@ -13484,7 +13928,7 @@ def assertFormatterArchitecture : IO Unit := do
         #[.node (.raw `null) #[extensionTactic]]
   assertTrue "extension syntax inside a tactic sequence is annotated as a tactic"
     (annotatedTacticSequence.containsNodeKind
-      (.tactic `Test.Tactic.extensionTactic false false false))
+      (.tactic `Test.Tactic.extensionTactic false false false false))
   let extensionTacticChain :=
     SyntaxTree.Tree.node (.infixChain `Lean.Parser.Tactic.«tactic_<;>_»)
       #[
@@ -13498,7 +13942,7 @@ def assertFormatterArchitecture : IO Unit := do
         #[.node (.raw `null) #[extensionTacticChain]]
   assertTrue "extension tactic operands inside tactic infix chains are annotated"
     (annotatedTacticChain.containsNodeKind
-      (.tactic `Test.Tactic.extensionTactic false false false))
+      (.tactic `Test.Tactic.extensionTactic false false false false))
   let extensionCommand :=
     SyntaxTree.Tree.node (.command `Test.Command.generatedExtension)
       #[.leaf (syntheticAtomToken "generated_extension")]
@@ -13568,7 +14012,7 @@ def assertFormatterArchitecture : IO Unit := do
     SyntaxTree.Tree.node (.raw `Test.Term.atomicWithEmptyParserState)
       #[
         .leaf (syntheticIdentToken "custom"),
-        .node (.tactic `Lean.Parser.Tactic.optConfig false false false)
+        .node (.tactic `Lean.Parser.Tactic.optConfig false false false false)
           #[.node (.raw `null) #[]]
       ]
   assertTrue "token-empty parser-state wrappers do not create layout content"
@@ -14759,7 +15203,8 @@ def assertMathlibLowRiskSyntaxKindsHaveRules : IO Unit := do
   assertTrue "non-term guillemet syntax kind still needs an explicit rule"
     (!Formatter.Diagnostics.missingRuleReportIgnoresKindName "«tacticFoo»")
   let tacticTree :=
-    SyntaxTree.Tree.node (.tactic `Mathlib.Tactic.extensionTactic false false false) #[]
+    SyntaxTree.Tree.node
+      (.tactic `Mathlib.Tactic.extensionTactic false false false false) #[]
   assertTrue "annotated extension tactic syntax keeps original formatting"
     (Formatter.OriginalTree.shouldEmit tacticTree)
   assertTrue "annotated extension tactic syntax is skipped by missing-rule reporting"
@@ -15498,8 +15943,8 @@ def assertOwnedTerminalSuffixesStayAttached (_env : Lean.Environment) : IO Unit 
     "example : True := by\n"
     ++ "  exact (veryLongProofFunction firstArgument\n"
     ++ "          secondArgument).trans\n"
-    ++ "          anotherVeryLongProofFunction thirdArgument\n"
-    ++ "          fourthArgument\n"
+    ++ "    anotherVeryLongProofFunction thirdArgument\n"
+    ++ "    fourthArgument\n"
   let parenthesizedTacticResult ←
     Formatter.formatSourceWithEnvDetailed env parenthesizedTacticSource
       "terminal-parenthesized-tactic-operand.lean" { lineWidth := 60 }
@@ -15863,9 +16308,9 @@ def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
     ++ "    fallback error\n"
     ++ "\n"
     ++ "theorem tacticUsing : True := by\n"
-    ++ "  simpa\n"
-    ++ "    [firstLemma, secondLemma, thirdLemma] using\n"
-    ++ "    veryLongProofTerm firstArgument secondArgument\n"
+    ++ "  simpa [firstLemma, secondLemma, thirdLemma]\n"
+    ++ "    using veryLongProofTerm firstArgument\n"
+    ++ "            secondArgument\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "parser-owned-clause-bodies.lean" { lineWidth := 50 }
@@ -15898,10 +16343,9 @@ def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
       "parser-owned-long-suffix-header.lean" { lineWidth := 90 }
   let longSuffixExpected :=
     "theorem collectSubfields_pairKeysNodup : True := by\n"
-    ++ "  simpa\n"
-    ++ "    [GraphQL.NormalForm.collectSubfields_eq_collectFields_mergedFieldSelectionSet] using\n"
-    ++ "    collectFields_pairKeysNodup schema variableValues objectType objectValue\n"
-    ++ "      (GraphQL.Execution.mergedFieldSelectionSet fields)\n"
+    ++ "  simpa [GraphQL.NormalForm.collectSubfields_eq_collectFields_mergedFieldSelectionSet]\n"
+    ++ "    using collectFields_pairKeysNodup schema variableValues objectType objectValue\n"
+    ++ "            (GraphQL.Execution.mergedFieldSelectionSet fields)\n"
   assertEq "an owned suffix stays with the final wrapping header piece"
     longSuffixExpected longSuffixFormatted
   let manyArgumentsSource :=
@@ -15910,21 +16354,83 @@ def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
     ++ "    proof\n"
   let manyArgumentsExpected :=
     "theorem tacticManySimpArguments : True := by\n"
-    ++ "  simpa\n"
-    ++ "    [\n"
-    ++ "      completeFrames,\n"
-    ++ "      scheduleExpectedScope,\n"
-    ++ "      groups,\n"
-    ++ "      keyedGroups,\n"
-    ++ "      expectedEntries,\n"
-    ++ "      baseStack\n"
-    ++ "    ] using\n"
-    ++ "    proof\n"
+    ++ "  simpa [completeFrames, scheduleExpectedScope, groups, keyedGroups, expectedEntries,\n"
+    ++ "    baseStack]\n"
+    ++ "    using proof\n"
   let manyArgumentsFormatted ←
     Formatter.formatSourceWithEnv env manyArgumentsSource
       "parser-owned-many-header-arguments.lean" { lineWidth := 90 }
-  assertEq "a protected bracketed header uses structural overflow fallback"
+  assertEq "a protected bracketed header flows from the tactic base"
     manyArgumentsExpected manyArgumentsFormatted
+  let movedUsingBangSource :=
+    "theorem movedUsingBang : True := by\n"
+    ++ "  have : True := by exact True.intro\n"
+    ++ "  simpa only [OrderIso.trans_apply, OrderIso.apply_symm_apply, OrderIso.refl_apply, Subtype.ext_iff]\n"
+    ++ "    using! proof\n"
+  let movedUsingBangExpected :=
+    "theorem movedUsingBang : True := by\n"
+    ++ "  have : True := by exact True.intro\n"
+    ++ "  simpa only [OrderIso.trans_apply, OrderIso.apply_symm_apply, OrderIso.refl_apply, Subtype.ext_iff]\n"
+    ++ "    using! proof\n"
+  let movedUsingBangResult ←
+    Formatter.formatSourceWithEnvDetailed env movedUsingBangSource
+      "parser-owned-using-bang-fit.lean" { lineWidth := 100 }
+  assertTrue "using! suffix formatting does not fall back"
+    (!movedUsingBangResult.fellBack)
+  assertEq "a moved using! body starts from its tactic continuation base"
+    movedUsingBangExpected movedUsingBangResult.formatted
+  let movedUsingBangTree ←
+    SyntaxTree.parseModuleStringWithEnv env movedUsingBangResult.formatted
+      "parser-owned-using-bang-fit-formatted.lean"
+  assertTrue "a moved using! suffix leaves no actionable overflow"
+    (Formatter.Diagnostics.overflowOccurrences movedUsingBangTree
+      { lineWidth := 100 }).isEmpty
+  let attachedHead := String.ofList (List.replicate 46 'x')
+  let attachedHeadSource :=
+    "theorem attachedApplicationHead : True := by\n"
+    ++ "  simpa [rewriteLemma] using\n"
+    ++ s!"    {attachedHead}\n"
+    ++ "      firstArgument\n"
+  let attachedHeadExpected :=
+    "theorem attachedApplicationHead : True := by\n"
+    ++ "  simpa [rewriteLemma]\n"
+    ++ s!"    using {attachedHead}\n"
+    ++ "            firstArgument\n"
+  let attachedHeadResult ←
+    Formatter.formatSourceWithEnvDetailed env attachedHeadSource
+      "parser-owned-attached-head-overflow.lean" { lineWidth := 50 }
+  assertEq "an indivisible attached application head may overflow"
+    attachedHeadExpected attachedHeadResult.formatted
+  assertTrue "an indivisible attached application head is not actionable overflow"
+    (!attachedHeadResult.fellBack)
+  let attachedHeadSourceTree ←
+    SyntaxTree.parseModuleStringWithEnv env attachedHeadSource
+      "parser-owned-attached-head-overflow-source.lean"
+  let attachedHeadFormattedTree ←
+    SyntaxTree.parseModuleStringWithEnv env attachedHeadResult.formatted
+      "parser-owned-attached-head-overflow-formatted.lean"
+  assertTrue "an attached application head has no formatting overflow exception"
+    (!(Formatter.Diagnostics.formattingExceptions
+        attachedHeadSourceTree attachedHeadFormattedTree { lineWidth := 50 }).any
+        fun
+        | .lineOverflow _ => true
+        | _ => false)
+  let tacticHead := attachedHead ++ "x"
+  let tacticHeadSource :=
+    "theorem attachedTacticApplicationHead : True := by\n"
+    ++ "  exact\n"
+    ++ s!"    {tacticHead}\n"
+    ++ "      firstArgument\n"
+  let tacticHeadExpected :=
+    "theorem attachedTacticApplicationHead : True := by\n"
+    ++ "  exact\n"
+    ++ s!"    {tacticHead}\n"
+    ++ "      firstArgument\n"
+  let tacticHeadResult ←
+    Formatter.formatSourceWithEnvDetailed env tacticHeadSource
+      "tactic-attached-application-head-overflow.lean" { lineWidth := 50 }
+  assertEq "a spaced tactic breaks before its application head when that helps"
+    tacticHeadExpected tacticHeadResult.formatted
 
 def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
     : IO Unit := do
@@ -16124,6 +16630,9 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertQuotationBodyUsesStructuralIndentFloor env
   assertParenthesizedProofIgnoresStaleSourceColumn env
   assertMovedInlineProofBodiesUseStructuralBase env
+  assertProtectedBodiesUseStructuralIndentation env
+  assertBracketedTacticSequenceUsesStructuralBreaks env
+  assertStructureSpreadStaysAfterProofField env
   assertMultitokenChildKeepsStructuralBase env
   assertOverflowRecoveryKeepsNestedCommandIndent env
   assertFittingTrailingLineCommentStaysAttached env
@@ -16310,6 +16819,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertSingletonArrayKeepsBodyBase env
   assertSingletonProofRecordIndentsField env
   assertMultiItemArrayBreaksBalanced env
+  assertParserOwnedBracketCollectionUsesDelimitedLayout
   assertCommentedArrayKeepsDelimitedLayout env
   assertCommentedStructureItemKeepsFieldBase env
   assertParenthesizedArrayItemsUseBalancedDelimiters env

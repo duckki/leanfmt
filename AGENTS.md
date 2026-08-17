@@ -160,6 +160,14 @@ complete builds while retaining the initial clean build. To resume an existing
 scratch clone and staging tree after a successful batch, combine `--start-batch N`,
 `--reuse-clone`, and `--skip-initial-build`; the validator then continues from batch
 `N` without recloning or repeating the completed pre-format build.
+
+For routine large-project checkpoints, pass `--checkpoint`. A successful complete
+validation records a baseline bound to the clone revision, Lean toolchain, selector,
+and selected sources. Checkpoint mode reuses that clone plus the recorded Lake
+ownership and runtime manifests, runs all formatter exception and idempotency checks,
+and applies output for review without running target-project builds. It refuses a
+missing or stale baseline. Use complete validation, not checkpoint mode, for the
+release gate.
 Validation batches run serially, while formatter workers within one invocation run
 concurrently up to the formatter's worker-job limit. Imported files are grouped by
 exact environment, and each group runs in one short-lived worker.

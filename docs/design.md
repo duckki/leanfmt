@@ -908,6 +908,18 @@ argument, including structured arguments such as `let`, `if`, `match`, and
 structure instances. No special-case preference between parent and child
 breaks is needed.
 
+Two or more parenthesized proof arguments use peer boundaries when the
+application does not fit. This keeps each proof attached to its parentheses
+without forcing compact proof arguments onto separate lines:
+
+```lean
+exact inductionPrinciple motives
+  (by
+    exact firstCase)
+  (by
+    exact secondCase)
+```
+
 A multiline named argument keeps its closing parenthesis attached to the final
 line of the value:
 
@@ -1303,6 +1315,16 @@ theorem pipedProof : True :=
     exact True.intro
 ```
 
+An unparenthesized proof containing multiple tactics always starts its body on
+the following line. The required layout boundary prevents the first tactic from
+joining `by` and changing the scope of later tactics or declarations:
+
+```lean
+have h : NeZero value := NeZero.mk <| by
+  rw [value]
+  exact one_ne_zero
+```
+
 A `have` that contains a protected proof body moves with the complete `<|`
 right-operand group so the proof and its following body continue to move as one
 layout island.
@@ -1323,29 +1345,31 @@ apply veryLongProofFunction
 
 The same parser-context rule covers `exact`, `refine`, and extension tactics;
 structural proof operands remain governed by the existing proof-island rules.
+When a tactic operand is an application, the application head starts a new
+structural base and its arguments remain ordinary application peers. Two or
+more parenthesized proof arguments break as peers rather than nesting under one
+another.
 
 When a registered tactic parser ends a header with a keyword-owned term body,
-the keyword stays with the final header piece. A long header wraps through its
-ordinary arguments, while the body uses the tactic continuation base:
+the keyword stays with the body application head. A bracketed tactic argument
+flows from the tactic base, while the body application's arguments use their
+own structural base:
 
 ```lean
-simpa
-  [veryLongNormalizationLemmaNameForTheCurrentGoal] using
-  veryLongProofTerm firstArgument secondArgument thirdArgument
+simpa [firstNormalizationLemma, secondNormalizationLemma,
+  thirdNormalizationLemma]
+  using veryLongProofTerm firstArgument secondArgument
+    thirdArgument
 ```
 
-If the protected header contains a bracketed collection that cannot fit with its
-attached suffix, the collection uses its ordinary structural layout while `using`
-remains attached to the closing bracket:
+If the bracketed collection itself cannot fit, it uses the ordinary collection
+breaks from that same base. The suffix and body head remain attached:
 
 ```lean
-simpa
-  [
-    firstNormalizationLemma,
-    secondNormalizationLemma,
-    thirdNormalizationLemma
-  ] using
-  proof
+simpa [firstNormalizationLemma,
+  secondNormalizationLemma,
+  thirdNormalizationLemma]
+  using proof
 ```
 
 ## Conditionals

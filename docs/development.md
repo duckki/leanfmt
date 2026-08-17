@@ -448,7 +448,15 @@ build, and formats staged copies of every Lake-owned source from that project's
 Lean files without a Lake module target are listed and skipped. Only after every
 requested formatter batch succeeds does the validator apply the staged output,
 build changed modules in large internal batches, and build the complete project
-again.
+again. This complete path is the release gate.
+
+For ordinary formatter checkpoints, `--checkpoint` reuses the clone, ownership
+classification, setup runtime, and imported artifacts from a previous successful
+complete validation. It still formats every selected source with preservation,
+exception, and idempotency checks and applies the output for review, but it runs no
+target-project Lake build. This keeps broad Hex and Mathlib formatting coverage
+cheap enough for intermediate checkpoints; it does not replace the complete gate
+before release.
 
 Staging keeps the clean build artifacts usable while later formatter batches import
 files formatted by earlier batches. Lake setup files also identify the project-wide
@@ -483,6 +491,23 @@ scripts/validate-external-projects.sh $HOME/target-repo
 scripts/validate-external-projects.sh my-project=$HOME/target-repo
 ```
 
+After a complete validation succeeds, the validator records a checkpoint baseline
+next to the project logs. The baseline binds the reusable manifests to the clone's
+Git revision, Lean toolchain, file selector, and exact selected-source list.
+Checkpoint mode implies clone reuse and refuses stale or missing state before it
+formats anything:
+
+```sh
+LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
+  --checkpoint --files Mathlib \
+  mathlib=$HOME/work/lean-libs/mathlib4
+```
+
+Run the ordinary command once whenever the clone revision, toolchain, selector, or
+selected files change. A complete run refreshes the baseline only after every
+formatter batch, changed-module build, and aggregate post-format build succeeds.
+`--checkpoint` cannot be combined with partial batches or explicit build targets.
+
 Pass `--files FILE_SELECTOR` to validate a subset of Lean files. A project can
 also override the current selector with `GIT_REPO::FILE_SELECTOR` or
 `NAME=GIT_REPO::FILE_SELECTOR`. An exact existing `.lean` file is included even
@@ -515,12 +540,13 @@ narrow declared acceptance surface and unrelated default targets are not part
 of the source being validated. Both the initial and final builds use the same
 target list.
 
-Validation runs in batches of 100 files by default. The validator first runs one
-complete project build, resolves and builds every selected Lake module, and copies
-the owned sources to its staging tree. Each validation batch formats staged files
-with the exception and idempotency checks enabled. Batches continue until all are
-formatted or one reports a diagnostic failure. A formatter failure leaves the
-project sources untouched and stops validation immediately without a final build.
+Complete validation runs in batches of 100 files by default. The validator first
+runs one complete project build, resolves and builds every selected Lake module,
+and copies the owned sources to its staging tree. Each validation batch formats
+staged files with the exception and idempotency checks enabled. Batches continue
+until all are formatted or one reports a diagnostic failure. A formatter failure
+leaves the project sources untouched and stops validation immediately without a
+final build.
 After every requested batch succeeds, the validator applies all staged output, builds
 changed module targets, and runs one complete project build. Within each batch,
 leanfmt manages formatter worker processes and batch sizing. The validator prints the
@@ -624,9 +650,10 @@ LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
 ```
 
 The script stops formatting at the first failing validation batch without building.
-After every requested batch succeeds, it runs one post-format build unless
-`--skip-final-build` was passed. It exits with a nonzero status if any executed phase
-failed. Each phase and the final summary include elapsed wall-clock time. Build-cache
-retrieval is an optional optimization:
+After every requested batch succeeds, complete validation runs the post-format
+builds unless `--skip-final-build` was passed. Checkpoint mode deliberately omits
+them and reports that it is not release evidence. The script exits with a nonzero
+status if any executed phase failed. Each phase and the final summary include
+elapsed wall-clock time. Build-cache retrieval is an optional optimization:
 repositories without a `cache` executable are reported as skipped rather than
 failed.

@@ -27,6 +27,8 @@ usage() {
 Usage:
   scripts/validate-external-projects.sh [--files FILE_SELECTOR] [--build-target TARGET]... [--batch N | --start-batch N] [--reuse-clone] [--skip-initial-build] [--skip-final-build] GIT_REPO[::FILE_SELECTOR]...
   scripts/validate-external-projects.sh [--files FILE_SELECTOR] [--build-target TARGET]... [--batch N | --start-batch N] [--reuse-clone] [--skip-initial-build] [--skip-final-build] NAME=GIT_REPO[::FILE_SELECTOR]...
+  scripts/validate-external-projects.sh --checkpoint [--files FILE_SELECTOR] GIT_REPO[::FILE_SELECTOR]...
+  scripts/validate-external-projects.sh --checkpoint [--files FILE_SELECTOR] NAME=GIT_REPO[::FILE_SELECTOR]...
 
 Each project argument must name an explicit git clone source. The validator
 creates a fresh clone under .scratch/external-validation/ before formatting
@@ -44,6 +46,12 @@ apply to every project argument in that invocation.
 Pass --start-batch N to validate batch N and every later batch. Pass
 --reuse-clone to keep an existing scratch clone, and --skip-initial-build to
 omit its already-completed pre-format build while resuming validation.
+Pass --checkpoint for the lighter checkpoint gate. It reuses an existing clone
+and the Lake ownership/runtime manifests recorded by a previous successful full
+validation of the same revision, toolchain, and selected file set. It runs all
+formatter diagnostics and idempotency checks, applies the staged output for
+review, and skips every target-project build. Run the ordinary command for the
+full release gate and to establish or refresh the checkpoint baseline.
 
 Set LEANFMT_VALIDATION_LINE_WIDTH=N to pass --line-width N to every formatter
 invocation. For example, validate mathlib at width 100 with:
@@ -483,6 +491,94 @@ collect_selected_lean_files() {
   done < <(selected_lean_files "$project_dir" "$file_selector")
 }
 
+write_selected_source_list() {
+  local project_dir="$1"
+  local output_file="$2"
+  shift 2
+  local file
+
+  : > "$output_file"
+  for file in "$@"; do
+    printf '%s\n' "${file#"$project_dir/"}" >> "$output_file"
+  done
+}
+
+write_checkpoint_identity() {
+  local output_file="$1"
+  local project_dir="$2"
+  local file_selector="$3"
+  local project_toolchain="$4"
+  local revision
+
+  revision="$(git -C "$project_dir" rev-parse HEAD)" || return $?
+  {
+    printf 'revision=%s\n' "$revision"
+    printf 'toolchain=%s\n' "$project_toolchain"
+    printf 'file-selector=%s\n' "$file_selector"
+  } > "$output_file"
+}
+
+validate_checkpoint_baseline() {
+  local project_dir="$1"
+  local file_selector="$2"
+  local project_toolchain="$3"
+  local checkpoint_file="$4"
+  local selected_file="$5"
+  local owned_file="$6"
+  local unowned_file="$7"
+  local setup_file="$8"
+  local runtime_file="$9"
+  shift 9
+  local -a selected_files=("$@")
+  local expected_identity current_selected source
+
+  expected_identity="$(mktemp "$WORK_DIR/checkpoint-identity.XXXXXX")" || return 1
+  current_selected="$(mktemp "$WORK_DIR/checkpoint-sources.XXXXXX")" || {
+    rm -f "$expected_identity"
+    return 1
+  }
+  write_checkpoint_identity "$expected_identity" "$project_dir" \
+    "$file_selector" "$project_toolchain" || {
+    rm -f "$expected_identity" "$current_selected"
+    return 1
+  }
+  write_selected_source_list "$project_dir" "$current_selected" \
+    "${selected_files[@]}"
+
+  if [[ ! -f "$checkpoint_file" ]] || \
+      ! cmp -s "$expected_identity" "$checkpoint_file"; then
+    printf '%s\n' \
+      'Checkpoint baseline is missing or does not match this revision, toolchain, and file selector.' \
+      'Run one full validation without checkpoint or skip options to establish it.' >&2
+    rm -f "$expected_identity" "$current_selected"
+    return 2
+  fi
+  if [[ ! -f "$selected_file" ]] || \
+      ! cmp -s "$current_selected" "$selected_file"; then
+    printf '%s\n' \
+      'The selected source set has changed since the checkpoint baseline.' \
+      'Run one full validation without checkpoint or skip options to refresh it.' >&2
+    rm -f "$expected_identity" "$current_selected"
+    return 2
+  fi
+  rm -f "$expected_identity" "$current_selected"
+
+  for source in "$owned_file" "$unowned_file" "$setup_file" "$runtime_file"; do
+    if [[ ! -f "$source" ]]; then
+      printf 'Checkpoint baseline manifest is missing: %s\n' "$source" >&2
+      printf '%s\n' \
+        'Run one full validation without checkpoint or skip options to refresh it.' >&2
+      return 2
+    fi
+  done
+  while IFS= read -r source; do
+    if [[ -n "$source" && ! -f "$project_dir/$source" ]]; then
+      printf 'Checkpoint source is missing: %s\n' "$source" >&2
+      return 2
+    fi
+  done < "$owned_file"
+}
+
 run_formatter_file_group() {
   local project_dir="$1"
   local list_file="$2"
@@ -559,7 +655,8 @@ run_project_validation_batches() {
   local start_batch="$6"
   local skip_initial_build="$7"
   local skip_final_build="$8"
-  shift 8
+  local checkpoint_mode="$9"
+  shift 9
   local -a build_targets=("$@")
   local -a build_command=(build_project "$project_dir")
   local -a selected_files=()
@@ -588,6 +685,7 @@ run_project_validation_batches() {
   local setup_file="$log_dir/setup-files"
   local runtime_file="$log_dir/runtime-library-manifest"
   local changed_file="$log_dir/changed-sources"
+  local checkpoint_file="$log_dir/checkpoint-baseline"
   local stage_dir="$project_dir/.lake/leanfmt-validation/staging"
   local batch first_index count last_index list_file log_file
   local formatter_status build_status status
@@ -596,12 +694,30 @@ run_project_validation_batches() {
 
   mkdir -p "$log_dir"
   printf 'Formatter batch logs: %s\n' "$log_dir"
-  : > "$selected_file"
-  for file in "${selected_files[@]}"; do
-    printf '%s\n' "${file#"$project_dir/"}" >> "$selected_file"
-  done
 
-  if ((skip_initial_build == 1)); then
+  if ((checkpoint_mode == 1)); then
+    if run_phase_result \
+        "Validate checkpoint baseline for $project_name ($file_selector)" \
+        validate_checkpoint_baseline "$project_dir" "$file_selector" \
+          "$PROJECT_TOOLCHAIN" "$checkpoint_file" "$selected_file" \
+          "$owned_file" "$unowned_file" "$setup_file" "$runtime_file" \
+          "${selected_files[@]}"; then
+      :
+    else
+      status=$?
+      printf 'Stopping because the checkpoint baseline is unavailable.\n' >&2
+      return "$status"
+    fi
+  else
+    rm -f "$checkpoint_file"
+    write_selected_source_list "$project_dir" "$selected_file" \
+      "${selected_files[@]}"
+  fi
+
+  if ((checkpoint_mode == 1)); then
+    section "Reuse validated $project_name build state ($file_selector)"
+    printf 'SKIPPED: checkpoint mode reuses the recorded Lake ownership and runtime state.\n'
+  elif ((skip_initial_build == 1)); then
     section "Skip initial build of $project_name before formatting ($file_selector)"
     printf 'SKIPPED: initial build disabled by --skip-initial-build.\n'
   else
@@ -616,15 +732,17 @@ run_project_validation_batches() {
     fi
   fi
 
-  if run_phase_result \
-      "Resolve and build selected Lake modules for $project_name ($file_selector)" \
-      classify_and_build_project_sources "$project_dir" "$selected_file" \
-        "$owned_file" "$unowned_file" "$setup_file"; then
-    :
-  else
-    status=$?
-    printf 'Stopping before formatter batches after Lake source resolution failed.\n' >&2
-    return "$status"
+  if ((checkpoint_mode == 0)); then
+    if run_phase_result \
+        "Resolve and build selected Lake modules for $project_name ($file_selector)" \
+        classify_and_build_project_sources "$project_dir" "$selected_file" \
+          "$owned_file" "$unowned_file" "$setup_file"; then
+      :
+    else
+      status=$?
+      printf 'Stopping before formatter batches after Lake source resolution failed.\n' >&2
+      return "$status"
+    fi
   fi
 
   while IFS= read -r source; do
@@ -655,15 +773,20 @@ run_project_validation_batches() {
     return 0
   fi
 
-  if run_phase_result \
-      "Collect Lake setup runtime for $project_name" \
-      collect_setup_runtime_manifest "$project_dir" "$setup_file" \
-        "$runtime_file"; then
-    :
+  if ((checkpoint_mode == 1)); then
+    section "Reuse recorded Lake setup runtime for $project_name"
+    printf 'SKIPPED: checkpoint mode uses %s.\n' "$runtime_file"
   else
-    status=$?
-    printf 'Stopping before formatter batches after Lake setup discovery failed.\n' >&2
-    return "$status"
+    if run_phase_result \
+        "Collect Lake setup runtime for $project_name" \
+        collect_setup_runtime_manifest "$project_dir" "$setup_file" \
+          "$runtime_file"; then
+      :
+    else
+      status=$?
+      printf 'Stopping before formatter batches after Lake setup discovery failed.\n' >&2
+      return "$status"
+    fi
   fi
   IFS= read -r runtime_line < "$runtime_file" || runtime_line=""
   if [[ "$runtime_line" != *$'\t'* ]]; then
@@ -734,7 +857,9 @@ run_project_validation_batches() {
   elif [[ -n "$start_batch" ]]; then
     printf 'Starting validation at batch: %d\n' "$start_batch"
   fi
-  if ((${#build_targets[@]} > 0)); then
+  if ((checkpoint_mode == 1)); then
+    printf 'Target-project builds: skipped by checkpoint mode\n'
+  elif ((${#build_targets[@]} > 0)); then
     printf 'Lake build targets:'
     printf ' %s' "${build_targets[@]}"
     printf '\n'
@@ -806,6 +931,13 @@ run_project_validation_batches() {
     return "$status"
   fi
 
+  if ((checkpoint_mode == 1)); then
+    section "Complete $project_name checkpoint validation ($file_selector)"
+    printf 'SKIPPED: checkpoint mode omits target-project builds; run full validation before release.\n'
+    rm -rf "$stage_dir"
+    return 0
+  fi
+
   if ((skip_final_build == 1)); then
     section "Skip final build of $project_name after all requested formatter batches passed ($file_selector)"
     printf 'SKIPPED: final build disabled by --skip-final-build.\n'
@@ -842,6 +974,13 @@ run_project_validation_batches() {
     return "$build_status"
   fi
 
+  if [[ -z "$selected_batch" && -z "$start_batch" ]] && \
+      ((skip_initial_build == 0)); then
+    write_checkpoint_identity "$checkpoint_file" "$project_dir" \
+      "$file_selector" "$PROJECT_TOOLCHAIN" || return $?
+    printf 'Recorded checkpoint baseline: %s\n' "$checkpoint_file"
+  fi
+
   rm -rf "$stage_dir"
   return 0
 }
@@ -855,6 +994,7 @@ main() {
   local reuse_clone=0
   local skip_initial_build=0
   local skip_final_build=0
+  local checkpoint_mode=0
   local -a build_targets=()
 
   validate_positive_integer LEANFMT_VALIDATION_BATCH_SIZE \
@@ -930,6 +1070,10 @@ main() {
       skip_final_build=1
       continue
     fi
+    if [[ "$specification" == "--checkpoint" ]]; then
+      checkpoint_mode=1
+      continue
+    fi
 
     project_spec="${specification%%::*}"
     file_selector="$default_file_selector"
@@ -965,6 +1109,21 @@ main() {
     printf '%s\n' '--batch and --start-batch cannot be used together.' >&2
     usage
     return 2
+  fi
+  if ((checkpoint_mode == 1)); then
+    if [[ -n "$selected_batch" || -n "$start_batch" ]]; then
+      printf '%s\n' '--checkpoint cannot be combined with --batch or --start-batch.' >&2
+      usage
+      return 2
+    fi
+    if ((${#build_targets[@]} > 0)); then
+      printf '%s\n' '--checkpoint cannot be combined with --build-target.' >&2
+      usage
+      return 2
+    fi
+    reuse_clone=1
+    skip_initial_build=1
+    skip_final_build=1
   fi
 
   mkdir -p "$WORK_DIR"
@@ -1008,6 +1167,7 @@ main() {
     validation_arguments=(
       "$name" "$project_dir" "$PROJECT_FORMATTER" "$file_selector"
       "$selected_batch" "$start_batch" "$skip_initial_build" "$skip_final_build"
+      "$checkpoint_mode"
     )
     if ((${#build_targets[@]} > 0)); then
       validation_arguments+=("${build_targets[@]}")

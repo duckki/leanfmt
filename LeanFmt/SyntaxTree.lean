@@ -56,15 +56,26 @@ def fullText (token : Token) : String :=
 
 end Token
 
+inductive DelimiterKind where
+  | paren
+  | bracket
+  | brace
+  | anonymousConstructor
+  | doubleAngle
+  | norm
+deriving BEq, Repr
+
 inductive NodeKind where
   | raw (kind : SyntaxNodeKind)
   | command (kind : SyntaxNodeKind)
-  | tactic (kind : SyntaxNodeKind) (containsSequence isOwner containsOwner : Bool)
+  | tactic (kind : SyntaxNodeKind)
+    (containsSequence isOwner containsOwner isSpacedApplication : Bool)
   | letExpression (kind : SyntaxNodeKind) (bodyCanStartApplicationArgument : Bool)
   | application
   | infixChain (kind : SyntaxNodeKind)
   | lowPriorityInfixRhs
   | indexedInfix (kind : SyntaxNodeKind)
+  | delimitedCollection (kind : DelimiterKind)
   | suffixGroup
   | tacticIdentifierClause
   | tacticEliminationTargets (containsNamed : Bool)
@@ -99,13 +110,15 @@ deriving BEq, Inhabited, Repr
 def nodeKindName : NodeKind → String
   | .raw kind => toString kind
   | .command kind => s!"LeanFmt.SyntaxTree.NodeKind.command {kind}"
-  | .tactic kind _ _ _ => toString kind
+  | .tactic kind _ _ _ _ => toString kind
   | .letExpression kind bodyCanStartApplicationArgument =>
       s!"LeanFmt.SyntaxTree.NodeKind.letExpression {kind} {bodyCanStartApplicationArgument}"
   | .application => "LeanFmt.SyntaxTree.NodeKind.application"
   | .infixChain kind => s!"LeanFmt.SyntaxTree.NodeKind.infixChain {kind}"
   | .lowPriorityInfixRhs => "LeanFmt.SyntaxTree.NodeKind.lowPriorityInfixRhs"
   | .indexedInfix kind => s!"LeanFmt.SyntaxTree.NodeKind.indexedInfix {kind}"
+  | .delimitedCollection kind =>
+      s!"LeanFmt.SyntaxTree.NodeKind.delimitedCollection {repr kind}"
   | .suffixGroup => "LeanFmt.SyntaxTree.NodeKind.suffixGroup"
   | .tacticIdentifierClause => "LeanFmt.SyntaxTree.NodeKind.tacticIdentifierClause"
   | .tacticEliminationTargets containsNamed =>
@@ -158,6 +171,9 @@ def isCoreTacticKindName (kindName : String) : Bool :=
 def isExtensionTacticKindName (kindName : String) : Bool :=
   kindName.contains ".Tactic." && !isCoreTacticKindName kindName
 
+def lexemeEndsWithOpeningDelimiter (lexeme : String) : Bool :=
+  ["(", "[", "{", "⟨", "⟪", "‖"].any fun suffix => lexeme.endsWith suffix
+
 namespace Tree
 
 private partial def appendTokens (tokens : Array Token) : Tree → Array Token
@@ -169,23 +185,27 @@ def tokens (tree : Tree) : Array Token :=
   appendTokens #[] tree
 
 def isTacticSequenceKind (kind : Lean.SyntaxNodeKind) : Bool :=
-  kind == `Lean.Parser.Tactic.tacticSeq || kind == `Lean.Parser.Tactic.tacticSeq1Indented
+  kind == `Lean.Parser.Tactic.tacticSeq
+  || kind == `Lean.Parser.Tactic.tacticSeq1Indented
+  || kind == `Lean.Parser.Tactic.tacticSeqBracketed
 
 def tacticKindOwnsStructuralLayout (kind : Lean.SyntaxNodeKind) : Bool :=
   kind == `Lean.Parser.Tactic.cases
   || kind == `Lean.Parser.Tactic.induction
+  || kind == `Lean.Parser.Tactic.match
   || kind == `Lean.Parser.Tactic.inductionAlts
   || kind == `Lean.Parser.Tactic.inductionAlt
 
 def isCalcTree : Tree → Bool
   | .node (.raw `Lean.calc) _ => true
   | .node (.raw `Lean.calcTactic) _ => true
-  | .node (.tactic `Lean.calcTactic _ _ _) _ => true
+  | .node (.tactic `Lean.calcTactic _ _ _ _) _ => true
   | _ => false
 
-def isTacticSequenceTree : Tree → Bool
+partial def isTacticSequenceTree : Tree → Bool
   | .node (.raw kind) _ => isTacticSequenceKind kind
-  | .node (.tactic kind _ _ _) _ => isTacticSequenceKind kind
+  | .node (.tactic kind _ _ _ _) _ => isTacticSequenceKind kind
+  | .node .suffixGroup children => children[0]?.any isTacticSequenceTree
   | _ => false
 
 private def sharesSourceLineWith (left right : Tree) : Bool :=
@@ -197,7 +217,14 @@ private def sharesSourceLineWith (left right : Tree) : Bool :=
 private def parserOwnedBodyHasDetachedBody : Tree → Bool
   | .node .parserOwnedBody children =>
       match children.toList with
-      | [header, body] => !sharesSourceLineWith header body
+      | [header, body] =>
+          !sharesSourceLineWith header body
+          || match body with
+              | .node .suffixGroup bodyChildren =>
+                  match bodyChildren.toList with
+                  | [introducer, value] => !sharesSourceLineWith introducer value
+                  | _ => false
+              | _ => false
       | _ => false
   | _ => false
 
@@ -229,7 +256,7 @@ deriving Inhabited
 partial def tacticLayoutSummary : Tree → TacticLayoutSummary
   | .missing | .leaf _ => {}
   | .node (.proofBody containsOwner) _ => { containsOwner }
-  | .node (.tactic _ containsSequence isOwner containsOwner) _ =>
+  | .node (.tactic _ containsSequence isOwner containsOwner _) _ =>
       { containsSequence, isOwner, containsOwner }
   | tree@(.node kind children) =>
       let childSummaries := children.map tacticLayoutSummary
@@ -273,8 +300,39 @@ def isTacticLayoutOwner (tree : Tree) : Bool :=
 def containsTacticLayoutOwner (tree : Tree) : Bool :=
   (tacticLayoutSummary tree).containsOwner
 
+def isSpacedApplicationTactic : Tree → Bool
+  | .node (.tactic _ _ _ _ isSpacedApplication) _ => isSpacedApplication
+  | _ => false
+
+partial def containsSpacedApplicationTactic : Tree → Bool
+  | .node (.tactic _ _ _ _ true) _ => true
+  | .node _ children => children.any containsSpacedApplicationTactic
+  | _ => false
+
+partial def isProofBodyEnvelope : Tree → Bool
+  | .node (.proofBody _) _ => true
+  | .node .suffixGroup children =>
+      match children.find? fun child => (firstTacticToken? child).isSome with
+      | some child => child.isProofBodyEnvelope
+      | none => false
+  | .node (.raw kind) children =>
+      if kind == `Lean.Parser.Term.byTactic || kind == `Lean.Parser.Term.byTactic' then
+        children.any
+          fun
+          | .node (.proofBody _) _ => true
+          | _ => false
+      else
+        match children.filter fun child => (firstTacticToken? child).isSome with
+        | #[child] => child.isProofBodyEnvelope
+        | _ => false
+  | .node _ children =>
+      match children.filter fun child => (firstTacticToken? child).isSome with
+      | #[child] => child.isProofBodyEnvelope
+      | _ => false
+  | _ => false
+
 partial def protectNestedTacticSequences : Tree → Tree
-  | tree@(.node (.tactic kind _ _ _) _) =>
+  | tree@(.node (.tactic kind _ _ _ _) _) =>
       if isTacticSequenceKind kind then
         .node (.proofBody tree.containsTacticLayoutOwner) #[tree]
       else
@@ -284,68 +342,192 @@ partial def protectNestedTacticSequences : Tree → Tree
       .node kind (children.map protectNestedTacticSequences)
   | tree => tree
 
--- Expose a final structural proof argument without separating its introducer from its body.
+-- Expose a final proof body while keeping its introducer in the structural shell.
 private def isTrailingProofArgumentEnvelope : NodeKind → Bool
+  | .suffixGroup
+  | .lowPriorityInfixRhs
+  | .infixChain `«term_<|_» => true
+  | .infixChain `Lean.Parser.Term.proj => true
   | .raw `null => true
+  | .raw `Lean.Parser.Term.paren => true
   | .raw kind =>
       let kindName := nodeKindName (.raw kind)
       kindName.startsWith "Lean.Parser.Term." && kindName.endsWith "Decl"
   | _ => false
 
-private partial def splitTrailingOwnedProofBody? : Tree → Option (Tree × Tree)
-  | body@(.node (.proofBody true) _) => some (.missing, body)
-  | .node (.tactic _ _ _ _) _ => none
-  | tree@(.node kind children) => do
+private def exposesSimpleTrailingProofArgument : NodeKind → Bool
+  | .suffixGroup
+  | .lowPriorityInfixRhs
+  | .infixChain `«term_<|_» => true
+  | _ => false
+
+private def proofArgumentEnvelopeCanOwnSuffix : NodeKind → Bool
+  | .suffixGroup
+  | .infixChain `Lean.Parser.Term.proj
+  | .raw `Lean.Parser.Term.paren => true
+  | _ => false
+
+private structure OwnedProofBodySplit where
+  before : Tree
+  body : Tree
+  after : Tree
+
+private def nodeOrMissing (kind : NodeKind) (children : Array Tree) : Tree :=
+  if children.any fun child => (firstTacticToken? child).isSome then
+    .node kind children
+  else
+    .missing
+
+private def splitNodeAroundChild (kind : NodeKind) (children : Array Tree)
+    (index : Nat) (split : OwnedProofBodySplit)
+    : OwnedProofBodySplit :=
+  let prefixChildren :=
+    children.mapIdx
+      fun childIndex child =>
+        if childIndex < index then
+          child
+        else if childIndex == index then
+          split.before
+        else
+          .missing
+  let suffixChildren :=
+    children.mapIdx
+      fun childIndex child =>
+        if childIndex < index then
+          .missing
+        else if childIndex == index then
+          split.after
+        else
+          child
+  {
+    before := nodeOrMissing kind prefixChildren
+    body := split.body
+    after := nodeOrMissing kind suffixChildren
+  }
+
+private partial def splitTrailingOwnedProofBodyCore?
+    (permitSimpleProof allowSimpleProof : Bool)
+    : Tree → Option OwnedProofBodySplit
+  | body@(.node (.proofBody containsOwner) _) =>
+      if containsOwner then
+        some { before := .missing, body, after := .missing }
+      else
+        none
+  | .node (.tactic _ _ _ _ _) _ => none
+  | .node kind children => do
       let kindName := nodeKindName kind
       if isCoreTacticKindName kindName || isExtensionTacticKindName kindName then
         none
       else
+        let exposesSimpleBody :=
+          permitSimpleProof
+          && allowSimpleProof
+          && (kind == .raw `Lean.Parser.Term.byTactic
+              || kind == .raw `Lean.Parser.Term.byTactic')
         let directBodyIndex? :=
           children.findIdx?
             fun
-            | .node (.proofBody true) _ => true
+            | .node (.proofBody containsOwner) _ =>
+                containsOwner || exposesSimpleBody
             | _ => false
         match directBodyIndex? with
         | some index =>
-            if (List.range' (index + 1) (children.size - (index + 1))).any
-                fun laterIndex =>
-                  children[laterIndex]?.any
-                    fun child =>
-                      (firstTacticToken? child).isSome then
+            if !proofArgumentEnvelopeCanOwnSuffix kind
+                && (List.range' (index + 1) (children.size - (index + 1))).any
+                    fun laterIndex =>
+                      children[laterIndex]?.any
+                        fun child =>
+                          (firstTacticToken? child).isSome then
               none
             else
-              some (.missing, tree)
+              let body ← children[index]?
+              match body with
+              | .node (.proofBody true) _ =>
+                  some
+                    {
+                      before := .missing
+                      body := .node kind children
+                      after := .missing
+                    }
+              | _ =>
+                  let split : OwnedProofBodySplit :=
+                    { before := .missing, body, after := .missing }
+                  some (splitNodeAroundChild kind children index split)
         | none =>
             if !isTrailingProofArgumentEnvelope kind then
               none
-            let index ←
-              children.findIdx? fun child => (splitTrailingOwnedProofBody? child).isSome
-            if (List.range' (index + 1) (children.size - (index + 1))).any
-                fun laterIndex =>
-                  children[laterIndex]?.any
-                    fun child =>
-                      (firstTacticToken? child).isSome then
+            let childPermitsSimpleProof :=
+              permitSimpleProof || exposesSimpleTrailingProofArgument kind
+            let childAllowsSimpleProof :=
+              allowSimpleProof || exposesSimpleTrailingProofArgument kind
+            let (index, split) ←
+              (List.range children.size).foldl
+                (fun found index =>
+                  found.orElse
+                    fun _ => do
+                      let child ← children[index]?
+                      let split ←
+                        splitTrailingOwnedProofBodyCore? childPermitsSimpleProof
+                          childAllowsSimpleProof child
+                      some (index, split))
+                none
+            if !proofArgumentEnvelopeCanOwnSuffix kind
+                && (List.range' (index + 1) (children.size - (index + 1))).any
+                    fun laterIndex =>
+                      children[laterIndex]?.any
+                        fun child =>
+                          (firstTacticToken? child).isSome then
               none
             else
-              let child ← children[index]?
-              let (shellChild, body) ← splitTrailingOwnedProofBody? child
-              some (.node kind (children.set! index shellChild), body)
+              some (splitNodeAroundChild kind children index split)
   | _ => none
 
-private def annotateTacticNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :=
+private def splitTrailingOwnedProofBody? (tree : Tree) (permitSimpleProof : Bool)
+    : Option OwnedProofBodySplit :=
+  splitTrailingOwnedProofBodyCore? permitSimpleProof false tree
+
+private partial def containsLowPriorityInfixRhs : Tree -> Bool
+  | .node .lowPriorityInfixRhs _ => true
+  | .node _ children => children.any containsLowPriorityInfixRhs
+  | _ => false
+
+private def annotateTacticNode
+    (kind : SyntaxNodeKind) (children : Array Tree) (isSpacedApplication := false)
+    : Tree :=
   let tree := .node (.raw kind) children
   let summary := tacticLayoutSummary tree
   if summary.isOwner then
     .node
-      (.tactic kind summary.containsSequence true summary.containsOwner)
+      (.tactic kind summary.containsSequence true summary.containsOwner
+        isSpacedApplication)
       (children.map protectNestedTacticSequences)
+  else if directlyOwnsAttachedTacticSequence children then
+    .node
+      (.tactic kind summary.containsSequence false summary.containsOwner
+        isSpacedApplication)
+      children
+  else if isTacticSequenceKind kind then
+    .node
+      (.tactic kind summary.containsSequence false summary.containsOwner
+        isSpacedApplication)
+      children
   else
-    match splitTrailingOwnedProofBody? (.node (.raw `null) children) with
-    | some (.node _ shellChildren, body) =>
-        let shell := .node (.tactic kind false false false) shellChildren
-        .node .suffixGroup #[shell, body]
+    match splitTrailingOwnedProofBody? (.node (.raw `null) children)
+            isSpacedApplication with
+    | some { before := .node _ shellChildren, body, after } =>
+        let shell :=
+          if isSpacedApplication then
+            .node (.tactic kind summary.containsSequence false false true) shellChildren
+          else if shellChildren.any containsLowPriorityInfixRhs then
+            .node .parserOwnedHeader shellChildren
+          else
+            .node (.tactic kind summary.containsSequence false false false) shellChildren
+        .node .suffixGroup #[shell, body, after]
     | _ =>
-        .node (.tactic kind summary.containsSequence false summary.containsOwner) children
+        .node
+          (.tactic kind summary.containsSequence false summary.containsOwner
+            isSpacedApplication)
+          children
 
 private def lineIndentation? (token : Token) : Option String :=
   match token.leading.text.splitOn "\n" with
@@ -359,7 +541,7 @@ private def lineIndentation? (token : Token) : Option String :=
 
 private def splitAlignedTacticSequenceContinuation? (tree : Tree)
     : Option (Tree × Tree) := do
-  let .node (.tactic kind _ isOwner _) children := tree | none
+  let .node (.tactic kind _ isOwner _ isSpacedApplication) children := tree | none
   if isOwner then
     none
   else
@@ -371,7 +553,9 @@ private def splitAlignedTacticSequenceContinuation? (tree : Tree)
     if !isTacticSequenceTree continuation then
       none
     else
-      let head := annotateTacticNode kind (children.set! continuationIndex .missing)
+      let head :=
+        annotateTacticNode kind (children.set! continuationIndex .missing)
+          isSpacedApplication
       let headIndentation ← firstTacticToken? head >>= lineIndentation?
       let continuationIndentation ← firstTacticToken? continuation >>= lineIndentation?
       if headIndentation == continuationIndentation then
@@ -379,12 +563,13 @@ private def splitAlignedTacticSequenceContinuation? (tree : Tree)
       else
         none
 
-private partial def annotateTacticSequenceEntry : Tree → Tree
+private partial def annotateTacticSequenceEntry (spacedApplicationKinds : NameSet)
+    : Tree → Tree
   | .node (.raw `null) children =>
       let children :=
         children.foldl
           (fun result child =>
-            let child := annotateTacticSequenceEntry child
+            let child := annotateTacticSequenceEntry spacedApplicationKinds child
             match splitAlignedTacticSequenceContinuation? child with
             | some (head, continuation) => result.push head |>.push continuation
             | none => result.push child)
@@ -394,17 +579,23 @@ private partial def annotateTacticSequenceEntry : Tree → Tree
       .node kind
       <| children.mapIdx
           fun index child =>
-            if index % 2 == 0 then annotateTacticSequenceEntry child else child
-  | .node (.raw kind) children => annotateTacticNode kind children
+            if index % 2 == 0 then
+              annotateTacticSequenceEntry spacedApplicationKinds child
+            else
+              child
+  | .node (.raw kind) children =>
+      annotateTacticNode kind children (spacedApplicationKinds.contains kind)
   | tree => tree
 
-def annotateTacticTree : Tree → Tree
+def annotateTacticTree (tree : Tree) (spacedApplicationKinds : NameSet := {}) : Tree :=
+  match tree with
   | tree@(.node (.raw kind) children) =>
       let kindName := nodeKindName (.raw kind)
       if isTacticSequenceKind kind then
-        annotateTacticNode kind (children.map annotateTacticSequenceEntry)
+        annotateTacticNode kind
+          (children.map (annotateTacticSequenceEntry spacedApplicationKinds))
       else if isCoreTacticKindName kindName then
-        annotateTacticNode kind children
+        annotateTacticNode kind children (spacedApplicationKinds.contains kind)
       else
         tree
   | tree => tree
@@ -1000,18 +1191,6 @@ def isGeneratedCommandKind (kind : Lean.SyntaxNodeKind) : Bool :=
       | [_] => false
       | _ => true
 
-def lexemeEndsWithOpeningDelimiter (lexeme : String) : Bool :=
-  ["(", "[", "{", "⟨", "⟪", "‖"].any fun suffix => lexeme.endsWith suffix
-
-inductive DelimiterKind where
-  | paren
-  | bracket
-  | brace
-  | anonymousConstructor
-  | doubleAngle
-  | norm
-deriving BEq, Repr
-
 private def delimiterKindForLexemes? (opening closing : String) : Option DelimiterKind :=
   if opening.endsWith "(" && closing == ")" then
     some .paren
@@ -1029,9 +1208,14 @@ private def delimiterKindForLexemes? (opening closing : String) : Option Delimit
     none
 
 def outerDelimiterKind? (children : Array Tree) : Option DelimiterKind := do
-  let content := children.filter fun child => child.firstToken?.isSome
-  let openingTree ← content[0]?
-  let closingTree ← content[content.size - 1]?
+  let openingTree ←
+    children.findSome?
+      fun child =>
+        if child.firstToken?.isSome then some child else none
+  let closingTree ←
+    children.findSomeRev?
+      fun child =>
+        if child.firstToken?.isSome then some child else none
   let opening ← openingTree.singleToken?
   let closing ← closingTree.singleToken?
   if opening.role != .atom || closing.role != .atom then
@@ -1523,7 +1707,10 @@ private partial def unwrapAttachedBodyRemainder : Tree → Tree
         tree
   | tree => tree
 
-private def regroupAttachedBodyIntroducerChildren (children : Array Tree) : Array Tree :=
+private def regroupAttachedBodyIntroducerChildren
+    (children : Array Tree)
+    (accepts : Token → Bool := fun token => token.lexeme == "do" || token.lexeme == "by")
+    : Array Tree :=
   let contentIndexes :=
     (List.range children.size).filter
       fun index => children[index]?.bind Tree.firstToken? |>.isSome
@@ -1531,10 +1718,8 @@ private def regroupAttachedBodyIntroducerChildren (children : Array Tree) : Arra
     | rightIndex :: leftIndex :: rest =>
         match children[leftIndex]?, children[rightIndex]? with
         | some left, some right =>
-            if treeStartsAttachedBody right then
-              match splitLeadingToken?
-                      (fun token => token.lexeme == "do" || token.lexeme == "by")
-                      right with
+            if right.firstToken?.any accepts then
+              match splitLeadingToken? accepts right with
               | some (introducer, body) =>
                   children.set! leftIndex (.node .suffixGroup #[left, introducer])
                   |>.set! rightIndex (unwrapAttachedBodyRemainder body)
@@ -1544,6 +1729,20 @@ private def regroupAttachedBodyIntroducerChildren (children : Array Tree) : Arra
         | _, _ => loop (leftIndex :: rest)
     | _ => children
   loop contentIndexes.reverse
+
+private def regroupNestedAttachedBodyChildren? (children : Array Tree)
+    : Option (Array Tree) := do
+  let nestedIndex ←
+    ((List.range children.size).filter
+      fun index => children[index]?.bind Tree.firstToken? |>.isSome).getLast?
+  let .node nestedKind nestedChildren ← children[nestedIndex]? | none
+  let bodyIndex ←
+    ((List.range nestedChildren.size).filter
+      fun index => nestedChildren[index]?.bind Tree.firstToken? |>.isSome).getLast?
+  let body@(.node (.proofBody _) _) ← nestedChildren[bodyIndex]? | none
+  let nestedHeader := .node nestedKind (nestedChildren.set! bodyIndex .missing)
+  let header := .node .suffixGroup (children.set! nestedIndex nestedHeader)
+  some #[header, body]
 
 private partial def splitParserOwnedBody? (suffixes : List String)
     : Tree → Option (Tree × Tree × Tree)
@@ -1569,11 +1768,31 @@ private partial def splitParserOwnedBody? (suffixes : List String)
           some (.node kind (children.set! bodyIndex nestedPrefix), suffix, body)
   | _ => none
 
+private def attachParserOwnedHeaderHead (children : Array Tree) : Array Tree :=
+  let contentIndexes :=
+    (List.range children.size).filter
+      fun index => children[index]?.any fun child => !child.tokens.isEmpty
+  match contentIndexes with
+  | firstIndex :: argumentIndex :: _ =>
+      match children[firstIndex]?, children[argumentIndex]? with
+      | some first, some argument =>
+          let attached :=
+            match argument with
+            | .node .suffixGroup argumentChildren =>
+                .node .suffixGroup <| #[first] ++ argumentChildren
+            | _ => .node .suffixGroup #[first, argument]
+          children.set! firstIndex .missing |>.set! argumentIndex attached
+      | _, _ => children
+  | _ => children
+
 private def regroupParserOwnedBody?
     (kind : SyntaxNodeKind) (suffixes : List String) (children : Array Tree)
     : Option Tree := do
   let (headerPrefix, suffix, body) ←
     splitParserOwnedBody? suffixes (.node (.raw kind) children)
+  let suffixIntroducesTacticBody :=
+    let kindName := nodeKindName (.raw kind)
+    isCoreTacticKindName kindName || isExtensionTacticKindName kindName
   let header :=
     match headerPrefix with
     | .node _ children =>
@@ -1582,13 +1801,52 @@ private def regroupParserOwnedBody?
             fun index => children[index]?.bind Tree.firstToken? |>.isSome
         match contentIndexes.getLast? with
         | some index =>
+            let flattenLastChildren (lastChildren : Array Tree) :=
+              let lastChildren :=
+                if suffixIntroducesTacticBody then
+                  lastChildren
+                else
+                  let lastContentIndex? :=
+                    ((List.range lastChildren.size).filter
+                      fun index => lastChildren[index]?.bind Tree.firstToken? |>.isSome)
+                    |>.getLast?
+                  match lastContentIndex? with
+                  | some lastContentIndex =>
+                      match lastChildren[lastContentIndex]? with
+                      | some lastContent =>
+                          lastChildren.set! lastContentIndex
+                            (.node .suffixGroup #[lastContent, suffix])
+                      | none => lastChildren
+                  | none => lastChildren.push suffix
+              childrenRange children 0 index
+              ++ lastChildren
+              ++ childrenRange children (index + 1) children.size
             match children[index]? with
-            | some last =>
+            | some (.node (.raw _) lastChildren) =>
                 .node .parserOwnedHeader
-                  (children.set! index (.node .suffixGroup #[last, suffix]))
-            | none => suffix
-        | none => suffix
-    | tree => .node .parserOwnedHeader #[.node .suffixGroup #[tree, suffix]]
+                  (attachParserOwnedHeaderHead <| flattenLastChildren lastChildren)
+            | some (.node (.tactic _ _ false false _) lastChildren) =>
+                .node .parserOwnedHeader
+                  (attachParserOwnedHeaderHead <| flattenLastChildren lastChildren)
+            | some last =>
+                let children :=
+                  if suffixIntroducesTacticBody then
+                    children
+                  else
+                    children.set! index (.node .suffixGroup #[last, suffix])
+                .node .parserOwnedHeader (attachParserOwnedHeaderHead children)
+            | none => if suffixIntroducesTacticBody then headerPrefix else suffix
+        | none => if suffixIntroducesTacticBody then headerPrefix else suffix
+    | tree =>
+        if suffixIntroducesTacticBody then
+          .node .parserOwnedHeader #[tree]
+        else
+          .node .parserOwnedHeader #[.node .suffixGroup #[tree, suffix]]
+  let body :=
+    if suffixIntroducesTacticBody then
+      .node .suffixGroup #[suffix, body]
+    else
+      body
   some <| .node .parserOwnedBody #[header, body]
 
 private def regroupDoIfElseBodySuffix : Tree → Tree
@@ -1597,7 +1855,8 @@ private def regroupDoIfElseBodySuffix : Tree → Tree
   | tree => tree
 
 private def regroupTacticTerminalDelimiter : Tree → Tree
-  | .node kind@(.tactic rawKind containsSequence isOwner _) children =>
+  | .node kind@(.tactic rawKind containsSequence isOwner _ isSpacedApplication)
+      children =>
       let terminalToken? :=
         ((List.range children.size).filter
           fun index => children[index]?.bind Tree.firstToken? |>.isSome).getLast?
@@ -1610,13 +1869,13 @@ private def regroupTacticTerminalDelimiter : Tree → Tree
       if grouped == children then
         .node kind children
       else if !isOwner && delimiterWasDetached then
-        .node (.tactic rawKind containsSequence true true) grouped
+        .node (.tactic rawKind containsSequence true true isSpacedApplication) grouped
       else
         .node kind grouped
   | tree => tree
 
 private def regroupTacticSequenceWrapperPrefix : Tree → Tree
-  | .node kind@(.tactic _ _ _ _) children =>
+  | .node kind@(.tactic _ _ _ _ _) children =>
       .node kind
       <| regroupRightmostSuffixChildren children
           (fun tree => if Tree.isTacticSequenceTree tree then some tree else none)
@@ -2210,10 +2469,32 @@ def regroupIfThenElseChain (kind : SyntaxNodeKind) (children : Array Tree) : Tre
 def proofBodyTree (children : Array Tree) : Tree :=
   .node (.proofBody <| children.any Tree.containsTacticLayoutOwner) children
 
+partial def startsWithParserOwnedBody : Tree → Bool
+  | .node .parserOwnedBody _ => true
+  | .node _ children =>
+      match children.find? fun child => child.firstToken?.isSome with
+      | some child => startsWithParserOwnedBody child
+      | none => false
+  | _ => false
+
 def regroupByTacticChildren (children : Array Tree) : Array Tree :=
   match children[0]? with
   | some byKeyword =>
-      #[byKeyword, proofBodyTree <| childrenRange children 1 children.size]
+      let bodyChildren := childrenRange children 1 children.size
+      let body := proofBodyTree bodyChildren
+      let parserOwnedBodyIsDetached :=
+        startsWithParserOwnedBody (.node (.raw `null) bodyChildren)
+        && match byKeyword.lastToken?, body.firstToken? with
+            | some introducer, some firstBodyToken =>
+                introducer.trailing.text.contains '\n'
+                || firstBodyToken.leading.text.contains '\n'
+            | _, _ => false
+      let body :=
+        match body with
+        | .node (.proofBody containsOwner) children =>
+            .node (.proofBody <| containsOwner || parserOwnedBodyIsDetached) children
+        | tree => tree
+      #[byKeyword, body]
   | none => children
 
 def regroupDecreasingByChildren (children : Array Tree) : Array Tree :=
@@ -2355,7 +2636,7 @@ partial def flattenDelimitedCollectionChildren (children : Array Tree) : Array T
   | none => children
 
 private def isDelimitedSequenceKind : NodeKind → Bool
-  | .raw kind | .tactic kind _ _ _ =>
+  | .raw kind | .tactic kind _ _ _ _ =>
       kind == `Lean.Parser.Tactic.tacticSeqBracketed
       || kind == `Lean.Parser.Term.doSeqBracketed
   | _ => false
@@ -2537,7 +2818,9 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
         <| regroupRightmostSuffixChildren (#[lvalue] ++ fieldParts)
             fun tree => if treeStartsAttachedBody tree then some tree else none
     | _, _ => .node (.raw kind) children
-  else if kind == `Lean.Parser.Term.match || kind == `Lean.Parser.Term.doMatch then
+  else if kind == `Lean.Parser.Term.match
+          || kind == `Lean.Parser.Term.doMatch
+          || kind == `Lean.Parser.Tactic.match then
     .node (.raw kind) (regroupMatchDiscriminantsBeforeWith children)
   else if kind == `Lean.Parser.Term.matchAlts then
     .node (.raw kind) (unwrapSingleNullChild children)
@@ -2579,7 +2862,7 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
             | none => tree
 
 private def nodeKindHasRawKind (expected : SyntaxNodeKind) : NodeKind → Bool
-  | .raw kind | .tactic kind _ _ _ => kind == expected
+  | .raw kind | .tactic kind _ _ _ _ => kind == expected
   | _ => false
 
 private partial def treeIsCasesAlternativeGroup : Tree → Bool
@@ -2672,7 +2955,7 @@ def regroupInductionChildren (children : Array Tree) : Option (Array Tree) := do
       fun child =>
         match unwrapSingleNullTree child with
         | .node (.raw `Lean.Parser.Tactic.inductionAlts) _ => true
-        | .node (.tactic `Lean.Parser.Tactic.inductionAlts _ _ _) _ => true
+        | .node (.tactic `Lean.Parser.Tactic.inductionAlts _ _ _ _) _ => true
         | _ => false
   let alternatives ← children[alternativesIndex]?
   let (withKeyword, alternatives) ← Tree.extractLeadingLexeme? "with" alternatives
@@ -2775,8 +3058,14 @@ def regroupRawNode
     regroupIfThenElseChain kind children
   else if kind == `Lean.Parser.Command.macroTail
           || kind == `Lean.Parser.Term.namedArgument
-          || kind == `Lean.Parser.Term.sufficesDecl then
-    .node (.raw kind) (regroupAttachedBodyIntroducerChildren children)
+          || kind == `Lean.Parser.Term.sufficesDecl
+          || kind == `Lean.Parser.Term.fromTerm then
+    let children :=
+      if kind == `Lean.Parser.Term.fromTerm then
+        regroupAttachedBodyIntroducerChildren children fun token => token.lexeme == "by"
+      else
+        regroupAttachedBodyIntroducerChildren children
+    .node (.raw kind) ((regroupNestedAttachedBodyChildren? children).getD children)
   else if kind == `Lean.Parser.Term.app && children.size == 2 then
     match children[0]?, children[1]? with
     | some head, some argumentContainer =>
@@ -2896,19 +3185,27 @@ private partial def regroupTreeWithPrecedencesInContext
                 else
                   childIsTacticSequenceEntry)
               child
+      let isDelimitedCollection := isDelimitedCollectionKind kind
+      let outerDelimiter? :=
+        if isDelimitedCollection || isGeneratedTermKind kind then
+          none
+        else
+          outerDelimiterKind? children
       let tree :=
-        if isDelimitedCollectionKind kind
-            || (!isGeneratedTermKind kind
-                && outerDelimiterKind? children == some .bracket) then
+        if isDelimitedCollection || outerDelimiter? == some .bracket then
           let children := regroupChildren (flattenDelimitedCollectionChildren children)
-          .node (.raw kind) <| flattenDelimitedCollectionChildren children
+          let children := flattenDelimitedCollectionChildren children
+          if kind == `null && outerDelimiter? == some .bracket then
+            .node (.delimitedCollection .bracket) children
+          else
+            .node (.raw kind) children
         else
           regroupRawNode infixPrecedences spacedApplicationKinds
             parserOwnedBodies (!isTacticSequenceEntry) kind (regroupChildren children)
       regroupCalcOwnerTree
       <| regroupTacticSequenceWrapperPrefix
       <| regroupTacticTerminalDelimiter
-      <| Tree.annotateTacticTree tree
+      <| Tree.annotateTacticTree tree spacedApplicationKinds
   | .node kind children =>
       .node kind
         (children.map

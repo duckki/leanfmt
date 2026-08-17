@@ -274,8 +274,24 @@ private def isProofBodyTree (tree : SyntaxTree.Tree) : Bool :=
   | .node (.proofBody _) _ => true
   | _ => false
 
+private partial def containsProofTree : SyntaxTree.Tree → Bool
+  | .missing => false
+  | .leaf _ => false
+  | tree@(.node _ children) =>
+      isProofBodyTree tree || children.any containsProofTree
+
+private partial def containsAttachedProofTerm : SyntaxTree.Tree → Bool
+  | .missing | .leaf _ => false
+  | .node (.raw `Lean.Parser.Term.byTactic) _
+  | .node (.raw `Lean.Parser.Term.byTactic') _ => true
+  | .node _ children => children.any containsAttachedProofTerm
+
 private def proofBodyContainsTacticLayoutOwner : SyntaxTree.Tree → Bool
   | .node (.proofBody containsOwner) _ => containsOwner
+  | _ => false
+
+private def proofBodyContainsNestedProof : SyntaxTree.Tree → Bool
+  | .node (.proofBody _) children => children.any containsAttachedProofTerm
   | _ => false
 
 private def isQuotationTree : SyntaxTree.Tree → Bool
@@ -285,8 +301,8 @@ private def isQuotationTree : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Command.quot) _ => true
   | .node (.raw `Lean.Parser.Tactic.quot) _ => true
   | .node (.raw `Lean.Parser.Tactic.quotSeq) _ => true
-  | .node (.tactic `Lean.Parser.Tactic.quot _ _ _) _ => true
-  | .node (.tactic `Lean.Parser.Tactic.quotSeq _ _ _) _ => true
+  | .node (.tactic `Lean.Parser.Tactic.quot _ _ _ _) _ => true
+  | .node (.tactic `Lean.Parser.Tactic.quotSeq _ _ _ _) _ => true
   | .node (.raw `token_antiquot) _ => true
   | .node kind _ =>
       let kindName := SyntaxTree.nodeKindName kind
@@ -381,15 +397,18 @@ private def isStructuredCalcTree : SyntaxTree.Tree → Bool
 
 private def isProtectedTacticTree : SyntaxTree.Tree → Bool
   | .node (.raw `Mathlib.Tactic.dsimpPercent) _ => false
-  | .node (.tactic `Mathlib.Tactic.dsimpPercent _ _ _) _ => false
+  | .node (.tactic `Mathlib.Tactic.dsimpPercent _ _ _ _) _ => false
   | tree@(.node kind _) =>
       let kindName := SyntaxTree.nodeKindName kind
       if isQuotationTree tree then
         false
       else
         match kind with
-        | .tactic rawKind _ isOwner containsOwner =>
-            !isTacticSequenceKind rawKind && !isOwner && !containsOwner
+        | .tactic rawKind _ isOwner containsOwner _ =>
+            !isTacticSequenceKind rawKind
+            && !isOwner
+            && !containsOwner
+            && !(tree.isSpacedApplicationTactic && containsAttachedProofTerm tree)
         | .raw rawKind =>
             coreTacticKindName kindName
             && !isTacticSequenceKind rawKind
@@ -456,12 +475,6 @@ private def isCommentSensitiveMatchExpr : SyntaxTree.Tree → Bool
 private def isSyntaxCommentTree : SyntaxTree.Tree → Bool
   | .node (.raw kind) _ => SyntaxTree.isSyntaxCommentKind kind
   | _ => false
-
-private partial def containsProofTree : SyntaxTree.Tree → Bool
-  | .missing => false
-  | .leaf _ => false
-  | tree@(.node _ children) =>
-      isProofBodyTree tree || children.any containsProofTree
 
 private def isProofLambdaTree (tree : SyntaxTree.Tree) : Bool :=
   LineBreakRules.treeFirstLexeme? tree == some "fun" && containsProofTree tree
@@ -552,7 +565,9 @@ def classify? (tree : SyntaxTree.Tree) : Option LayoutIslandKind :=
     | tree => tree
   if isIgnoreNextTarget tree then
     some .ignored
-  else if isProofBodyTree tree && !proofBodyContainsTacticLayoutOwner tree then
+  else if isProofBodyTree tree
+          && !proofBodyContainsTacticLayoutOwner tree
+          && !proofBodyContainsNestedProof tree then
     some .proof
   else if isProtectedTacticTree tree then
     some .mathlibTactic
@@ -885,8 +900,12 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
               sourceIndent
           let targetIndent :=
             if proofLayout
-                && request.respectPendingIndent
-                && originalLeadingHasLineStructure then
+                && !originalLeadingHasLineStructure
+                && !proofLayoutRebasesFromFirstToken tree then
+              structuralIndent
+            else if proofLayout
+                    && request.respectPendingIndent
+                    && originalLeadingHasLineStructure then
               structuralIndent
             else
               max movedIndent structuralIndent
@@ -938,6 +957,8 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
         fun token =>
           if !request.currentLine.endsWith token.lexeme then
             none
+          else if request.formattedLeadingWhitespace?.isSome then
+            some leadingColumn
           else if tokenStartsCurrentLine request.currentLine token then
             some (request.currentLine.length - token.lexeme.length + indentationSpaces)
           else
@@ -992,11 +1013,14 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
       targetColumn?.map
         fun targetColumn =>
           let minimumColumn :=
-            max (request.segmentIndentation * indentationSpaces) indentationSpaces
+            max
+              ((request.segmentIndentation + if usesPendingIndent then 0 else 1)
+                * indentationSpaces)
+              indentationSpaces
           let maximumColumn :=
             max minimumColumn (request.currentIndent + indentationSpaces)
           if targetColumn < minimumColumn || maximumColumn < targetColumn then
-            (request.segmentIndentation + 1) * indentationSpaces
+            minimumColumn
           else
             targetColumn
     else
