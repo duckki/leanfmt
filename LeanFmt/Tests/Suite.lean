@@ -7300,6 +7300,41 @@ def assertDeclarationParametersUseCommandBase (env : Lean.Environment) : IO Unit
   assertEq "declaration parameter command bases are idempotent"
     result.formatted formattedAgain
 
+def assertExtensionDeclarationParametersUseCommandBase (_env : Lean.Environment)
+    : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let source :=
+    "project_lemma declarationNameLongEnoughToForceAParameterContinuation\n"
+    ++ "                           (first : Nat) (second : Nat) : first = first := by\n"
+    ++ "  rfl\n"
+    ++ "\n"
+    ++ "instance : VeryLongTypeclassNameForDeclarationContinuation\n"
+    ++ "            (veryLongFunctionNameForDeclarationContinuation first second) := by\n"
+    ++ "  exact proof\n"
+  let expected :=
+    "project_lemma declarationNameLongEnoughToForceAParameterContinuation\n"
+    ++ "    (first : Nat) (second : Nat) : first = first := by\n"
+    ++ "  rfl\n"
+    ++ "\n"
+    ++ "instance\n"
+    ++ "    : VeryLongTypeclassNameForDeclarationContinuation\n"
+    ++ "        (veryLongFunctionNameForDeclarationContinuation first\n"
+    ++ "          second) := by\n"
+    ++ "  exact proof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "extension-declaration-parameter-command-base.lean" { lineWidth := 72 }
+  assertTrue "extension declaration parameter command bases do not fall back"
+    (!result.fellBack)
+  assertEq "extension declarations use the command base" expected result.formatted
+  assertTrue "extension declaration parameter command bases preserve code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "extension-declaration-parameter-command-base-formatted.lean" { lineWidth := 72 }
+  assertEq "extension declaration parameter command bases are idempotent"
+    result.formatted formattedAgain
+
 def assertDefinitionSourceBreakAfterAssignOverridesFlat (env : Lean.Environment)
     : IO Unit := do
   let source := "def definitionSourceBreakAfterAssign : Nat :=\n" ++ "  value\n"
@@ -16966,6 +17001,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertNotExistsIdentifiersFlow env
   assertSignatureParametersUseLeadingSourceBreakAfterFlatFails env
   assertDeclarationParametersUseCommandBase env
+  assertExtensionDeclarationParametersUseCommandBase env
   assertDefinitionSourceBreakAfterAssignOverridesFlat env
 
 def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do

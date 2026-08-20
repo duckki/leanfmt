@@ -2438,7 +2438,11 @@ def regroupDeclarationValueCommand (kind : SyntaxNodeKind) (children : Array Tre
   let children := regroupEquationTrailingClauseChildren children
   let command :=
     match regroupDefinitionChildren children with
-    | some declarationChildren => .node (.raw kind) declarationChildren
+    | some declarationChildren =>
+        if kind == `group then
+          .node .definition declarationChildren
+        else
+          .node (.raw kind) declarationChildren
     | none => .node (.raw kind) children
   match splitDeclarationAnnotations? command with
   | some (annotations, command) =>

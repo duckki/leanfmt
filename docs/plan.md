@@ -11,12 +11,6 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ## Open Issues
 
-### Declaration continuation layout
-
-Long declaration binders and continuation tokens can retain source-column
-alignment or remain over width instead of using the declaration's structural
-continuation indentation.
-
 ### Delimiter and suffix attachment
 
 Closing notation such as `:)`, a short operand after `<|`, or a proof argument
@@ -28,11 +22,6 @@ function
 ```
 
 ## Progress
-
-### Checkpoint 22: declaration continuation layout
-
-Long binder groups and breakable signatures use the declaration's structural
-continuation indentation and expose all required break opportunities.
 
 ### Checkpoint 23: delimiter and suffix attachment
 

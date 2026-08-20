@@ -4907,8 +4907,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.doPatDecl) _ => some doPatternDeclRule
   | .node (.raw `Lean.Parser.Term.dbgTrace) _ => some dbgTraceRule
   | .node (.raw `Lean.Parser.Term.idbg) _ => some dbgTraceRule
-  | tree@(.node (.raw `group) _) =>
-      if treeFirstLexeme? tree == some "lemma" then some theoremRule else some groupRule
+  | .node (.raw `group) _ => some groupRule
   | .node (.raw `Lean.Parser.Term.matchAltsWhereDecls) _ => some matchAltsWhereDeclsRule
   | .node (.raw `Lean.Parser.Term.matchAlts) _ => some matchAltsRule
   | tree@(.node (.raw kind) children) =>
