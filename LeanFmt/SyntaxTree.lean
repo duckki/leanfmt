@@ -1633,9 +1633,9 @@ partial def attachedDoTree? : Tree → Option Tree
         none
   | _ => none
 
-private def regroupRightmostSuffixChildren
+private def regroupRightmostOwnedChildren
     (children : Array Tree) (ownedRight? : Tree → Option Tree)
-    (ownsPair : Tree → Tree → Bool := fun left _ => directLeafAtom? left)
+    (groupPair? : Tree → Tree → Option Tree)
     : Array Tree :=
   let contentIndexes :=
     (List.range children.size).filter
@@ -1646,18 +1646,37 @@ private def regroupRightmostSuffixChildren
         | some left, some right =>
             match ownedRight? right with
             | some right =>
-                if ownsPair left right then
-                  children.set! leftIndex (.node .suffixGroup #[left, right])
-                  |>.set! rightIndex .missing
-                else
-                  loop (leftIndex :: rest)
+                match groupPair? left right with
+                | some group =>
+                    children.set! leftIndex group |>.set! rightIndex .missing
+                | none => loop (leftIndex :: rest)
             | none => children
         | _, _ => loop (leftIndex :: rest)
     | _ => children
   loop contentIndexes.reverse
 
+private def regroupRightmostSuffixChildren
+    (children : Array Tree) (ownedRight? : Tree → Option Tree)
+    (ownsPair : Tree → Tree → Bool := fun left _ => directLeafAtom? left)
+    : Array Tree :=
+  regroupRightmostOwnedChildren children ownedRight?
+    fun left right =>
+      if ownsPair left right then some <| .node .suffixGroup #[left, right] else none
+
 private def treeStartsAttachedBody (tree : Tree) : Bool :=
   tree.firstToken?.any fun token => token.lexeme == "do" || token.lexeme == "by"
+
+private def regroupOptionalPrivateValue (children : Array Tree) : Array Tree :=
+  regroupRightmostOwnedChildren children (fun tree => some tree)
+    fun left right =>
+      if directLeafAtomToken? left |>.any fun token => token.lexeme == "private" then
+        some
+        <| match right with
+            | .node (.raw `Lean.Parser.Term.fun) children =>
+                .node (.raw `Lean.Parser.Term.fun) (#[left] ++ children)
+            | _ => .node .suffixGroup #[left, right]
+      else
+        none
 
 private def startsWithOpeningDelimiter (tree : Tree) : Bool :=
   tree.firstToken?.any fun token => lexemeEndsWithOpeningDelimiter token.lexeme
@@ -3019,6 +3038,7 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
           | some parameters =>
               fieldParts.set! 0 (regroupSignatureParameters parameters)
           | none => fieldParts
+        let fieldParts := regroupOptionalPrivateValue fieldParts
         .node (.raw kind)
         <| regroupRightmostSuffixChildren (#[lvalue] ++ fieldParts)
             fun tree => if treeStartsAttachedBody tree then some tree else none
@@ -3309,6 +3329,8 @@ def regroupRawNode
     .node (.raw kind) (regroupRegisterLinterSetChildren children)
   else if kind == `commandUnsuppress_compilationIn_ then
     .node (.raw kind) (regroupCommandInWrapperChildren children)
+  else if kind == `Lean.Parser.Term.structInstFieldDef then
+    .node (.raw kind) children
   else if kind == `Lean.Parser.Term.binderTactic then
     .node (.infixChain kind) (regroupBinderTacticChildren children)
   else if kind == `Lean.calcStep then

@@ -3804,6 +3804,42 @@ def assertPrivateStructureFieldsUseCommandBase (env : Lean.Environment) : IO Uni
       "private-structure-field-base-formatted.lean"
   assertEq "private structure field formatting is idempotent" formatted formattedAgain
 
+def assertPrivateStructureFieldValueUsesFieldBase (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "structure Wrapper where\n"
+    ++ "  field : Nat -> Nat\n"
+    ++ "\n"
+    ++ "def short : Wrapper where\n"
+    ++ "  field := private fun value => value\n"
+    ++ "\n"
+    ++ "def wrapped : Wrapper where\n"
+    ++ "  field :=\n"
+    ++ "          private fun veryLongArgumentName =>\n"
+    ++ "                  veryLongArgumentName\n"
+  let expected :=
+    "structure Wrapper where\n"
+    ++ "  field : Nat -> Nat\n"
+    ++ "\n"
+    ++ "def short : Wrapper where\n"
+    ++ "  field := private fun value => value\n"
+    ++ "\n"
+    ++ "def wrapped : Wrapper where\n"
+    ++ "  field :=\n"
+    ++ "    private fun veryLongArgumentName =>\n"
+    ++ "      veryLongArgumentName\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "private-structure-field-value-base.lean" { lineWidth := 40 }
+  assertTrue "a private structure field value does not fall back" (!result.fellBack)
+  assertEq "a private structure field value uses the field base" expected result.formatted
+  assertTrue "private structure field value formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "private-structure-field-value-base-formatted.lean" { lineWidth := 40 }
+  assertEq "private structure field value formatting is idempotent"
+    result.formatted formattedAgain
+
 def assertLeadingStructureCommentUsesFieldBase (env : Lean.Environment) : IO Unit := do
   let source :=
     "structure CommentedStructure where\n"
@@ -16838,6 +16874,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertStructureBreaksTopLevelFields env
   assertStructureConstructorsInheritFieldBase env
   assertPrivateStructureFieldsUseCommandBase env
+  assertPrivateStructureFieldValueUsesFieldBase env
   assertLeadingStructureCommentUsesFieldBase env
   assertStructureFieldProofBreaksAfterAssignment env
   assertStructureInstanceMethodBindersFlow env

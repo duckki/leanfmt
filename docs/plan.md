@@ -17,17 +17,6 @@ Long declaration binders and continuation tokens can retain source-column
 alignment or remain over width instead of using the declaration's structural
 continuation indentation.
 
-### Non-proof child rebasing
-
-Preserved structure-field values and non-application wrappers can retain an
-incidental source column after their surrounding layout changes. Parser-described
-tactic applications now use the tactic and application structural bases.
-
-```lean
-field :=
-          private fun x => value
-```
-
 ### Delimiter and suffix attachment
 
 Closing notation such as `:)`, a short operand after `<|`, or a proof argument
@@ -39,11 +28,6 @@ function
 ```
 
 ## Progress
-
-### Checkpoint 21: non-proof child rebasing
-
-Remaining structure-field values and non-application wrappers use their logical
-layout base without syntax-specific renderer behavior.
 
 ### Checkpoint 22: declaration continuation layout
 

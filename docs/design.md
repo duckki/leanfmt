@@ -1807,6 +1807,17 @@ as a declaration value does. The body breaks after the introducer:
 }
 ```
 
+An optional `private` modifier belongs to the complete field value. When a
+lambda value wraps, its body uses the field-value base instead of the source
+column where `fun` happened to begin:
+
+```lean
+def wrapped : Wrapper where
+  field :=
+    private fun veryLongArgumentName =>
+      veryLongArgumentName
+```
+
 Multiple sources in a structure update align as peers before the `with` suffix:
 
 ```lean
