@@ -5511,6 +5511,24 @@ def assertLongDeclarationNamesBreakConsistently (env : Lean.Environment) : IO Un
     Formatter.formatSourceWithEnv env formatted "long-declaration-names-formatted.lean"
   assertEq "long declaration name formatting is idempotent" formatted formattedAgain
 
+def assertFittingTheoremNameStaysWithKeyword (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "theorem queue_expectedScheduleQueueCompletionStack_enqueueExpectedSegment_eq_push\n"
+    ++ "    (schema : Schema) (resolvers : GraphQL.Execution.Resolvers ObjectRef)\n"
+    ++ "    (variableValues : VariableValues)\n"
+    ++ "    (key : ScheduleKey) (segment : ExpectedQueueSegment ObjectRef)\n"
+    ++ "    (queue : ExpectedScheduleQueue ObjectRef)\n"
+    ++ "    : expectedScheduleQueueCompletionStack schema resolvers variableValues\n"
+    ++ "        (enqueueExpectedSegment key segment queue)\n"
+    ++ "      = pushExpectedFieldSegment key\n"
+    ++ "          (expectedScheduleSegmentSpecFieldResults schema resolvers variableValues\n"
+    ++ "            key segment)\n"
+    ++ "          (expectedScheduleQueueCompletionStack schema resolvers variableValues\n"
+    ++ "            queue) := by\n"
+    ++ "  exact proof\n"
+  let formatted ← Formatter.formatSourceWithEnv env source "fitting-theorem-name.lean"
+  assertEq "a fitting theorem name stays with its declaration keyword" source formatted
+
 def assertTopLevelAnnotationsBreakConsistently (env : Lean.Environment) : IO Unit := do
   let annotation :=
     "@[foo /- first line\nannotation continuation occupies most of the formatting width -/]"
@@ -15494,6 +15512,40 @@ def assertApplicationFitCountsFromSuffix (env : Lean.Environment) : IO Unit := d
   assertEq "application fit includes a protected proof argument"
     protectedProofExpected protectedProofFormatted
 
+def assertApplicationBreaksBeforeOverflowingInfixArgument (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "example : True := by\n"
+    ++ "  exact ZPoly.congr_trans\n"
+    ++ "    (s' * g' + t' * h')\n"
+    ++ "    (a - (s * b * g' + (qBezout * g' + rBezout) * h'))\n"
+    ++ "    (1 - b * b)\n"
+    ++ "    (m * m)\n"
+    ++ "    (ZPoly.congr_trans _ _ _ (m * m) hleft\n"
+    ++ "      (by\n"
+    ++ "        simpa [hnormalized] using\n"
+    ++ "          ZPoly.congr_refl\n"
+    ++ "            ((s - s * b - qBezout * h') * g' + (t - rBezout) * h')\n"
+    ++ "            (m * m)))\n"
+    ++ "    (ZPoly.congr_trans _ _ _ (m * m) hright\n"
+    ++ "      (by\n"
+    ++ "        simpa [quadraticHenselStep_one_sub_error_exact b] using\n"
+    ++ "          ZPoly.congr_refl ((b + 1) - b * (b + 1)) (m * m)))\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "application-overflowing-infix-argument.lean" { lineWidth := 100 }
+  assertTrue "an application with an overflowing infix argument does not fall back"
+    (!result.fellBack)
+  assertTextContains "an application breaks before its overflowing infix argument"
+    result.formatted "\n    (1 - b * b)"
+  assertTrue "an application breaks before an infix argument causes overflow"
+    (Formatter.linesFit result.formatted 100)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "application-overflowing-infix-argument-formatted.lean" { lineWidth := 100 }
+  assertEq "overflowing infix application argument formatting is idempotent"
+    result.formatted formattedAgain
+
 def assertParserStateUpdatesAfterSyntaxCommands (env : Lean.Environment) : IO Unit := do
   let source :=
     "syntax \"customTerm\" : term\n"
@@ -16708,6 +16760,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertMovedDocumentedDoLetRecRebasesCommentedArms env
   assertBasicDeclarationBreak env
   assertLongDeclarationNamesBreakConsistently env
+  assertFittingTheoremNameStaysWithKeyword env
   assertTopLevelAnnotationsBreakConsistently env
   assertNotationValueBreaksAfterArrow env
   assertSetBuilderBreaksAfterSeparator
@@ -16768,6 +16821,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertSelfFormattingRulePriorities env
   assertApplicationFlow env
   assertApplicationFitsBeforeSourceBreaks env
+  assertApplicationBreaksBeforeOverflowingInfixArgument env
   assertNamedArgumentKeepsClosingDelimiterAttached env
   assertNestedApplicationHonorsSourceBreaks env
   assertApplicationCommentBreakAvoidsOverflowAfterOuterShift env

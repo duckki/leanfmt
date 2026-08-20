@@ -713,6 +713,9 @@ def renderedOverflowCount (before after : RenderState) : Nat :=
       1
   completed + current
 
+def renderedOutputOverflowCount (before after : RenderState) : Nat :=
+  renderedOverflowCount before { after with lineFitSuffixWidth := 0 }
+
 def preferCandidateWithFewerOverflows (before current candidate : RenderState)
     : RenderState :=
   if renderedOverflowCount before candidate < renderedOverflowCount before current then
@@ -2459,8 +2462,22 @@ mutual
                 flow.segment.stop
               else
                 nextBreakIndex
-            let rendered :=
+            let renderNested (state : RenderState) :=
               renderNestedSegment state flow.segment index child (some suffixStop)
+            let rendered := renderNested state
+            let rendered :=
+              if state.pendingIndent?.isNone
+                  && 0 < renderedOutputOverflowCount state rendered then
+                let candidateState :=
+                  state.withPendingIndent (state.segmentBaseIndent + indentationSpaces)
+                let candidate := renderNested candidateState
+                if renderedOutputOverflowCount state candidate
+                    < renderedOutputOverflowCount state rendered then
+                  candidate
+                else
+                  rendered
+              else
+                rendered
             renderFlowChildren rendered flow (index + 1)
               (renderedTreeIsMultiline before rendered child)
           match flow.stateForForcedNestedChild? state index child breakAfterPreviousChild
