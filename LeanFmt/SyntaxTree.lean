@@ -101,7 +101,7 @@ inductive NodeKind where
   | doFallbackContinuation
   | structureUpdate
   | ifThenElseClause
-  | ifThenElseChain
+  | ifThenElseChain (kind : SyntaxNodeKind)
   | proofBody (containsTacticLayoutOwner : Bool)
   | derivingClause
   | unifConstraints
@@ -146,7 +146,7 @@ def nodeKindName : NodeKind → String
   | .doFallbackContinuation => "LeanFmt.SyntaxTree.NodeKind.doFallbackContinuation"
   | .structureUpdate => "LeanFmt.SyntaxTree.NodeKind.structureUpdate"
   | .ifThenElseClause => "LeanFmt.SyntaxTree.NodeKind.ifThenElseClause"
-  | .ifThenElseChain => "LeanFmt.SyntaxTree.NodeKind.ifThenElseChain"
+  | .ifThenElseChain kind => s!"LeanFmt.SyntaxTree.NodeKind.ifThenElseChain {kind}"
   | .proofBody _ => "LeanFmt.SyntaxTree.NodeKind.proofBody"
   | .derivingClause => "LeanFmt.SyntaxTree.NodeKind.derivingClause"
   | .unifConstraints => "LeanFmt.SyntaxTree.NodeKind.unifConstraints"
@@ -2500,7 +2500,43 @@ def regroupDoDeclarationFallbackChildren (children : Array Tree) : Array Tree :=
     #[]
 
 def isIfThenElseKind (kind : SyntaxNodeKind) : Bool :=
-  kind == `termIfThenElse || kind == `boolIfThenElse
+  kind == `termIfThenElse || kind == `termDepIfThenElse || kind == `boolIfThenElse
+
+def ifThenElseClause (children : Array Tree) : Tree :=
+  if children.size < 2 then
+    .node .ifThenElseClause children
+  else
+    let conditionIndex := children.size - 2
+    let condition := children[conditionIndex]!
+    let thenKeyword := children[conditionIndex + 1]!
+    .node .ifThenElseClause
+    <| (childrenRange children 0 conditionIndex).push
+    <| .node .suffixGroup #[condition, thenKeyword]
+
+def attachIfThenElseClauseBody (accepts : Tree → Bool) (clause body : Tree)
+    : Tree × Tree :=
+  if !accepts body then
+    (clause, body)
+  else
+    match clause with
+    | .node .ifThenElseClause children =>
+        let suffixIndex := children.size - 1
+        match children[suffixIndex]? with
+        | some (.node .suffixGroup suffixChildren) =>
+            (
+              .node .ifThenElseClause
+                (children.set! suffixIndex
+                  <| .node .suffixGroup (suffixChildren.push body)),
+              .missing
+            )
+        | _ => (clause, body)
+    | _ => (clause, body)
+
+def termIfAttachedBody (body : Tree) : Bool :=
+  treeStartsAttachedBody body
+
+def doIfAttachedBody (body : Tree) : Bool :=
+  body.firstToken?.any (·.lexeme == "do")
 
 def ifThenElseChainParts? : Tree → Option (Array Tree)
   | .node (.raw kind) children => do
@@ -2509,14 +2545,17 @@ def ifThenElseChainParts? : Tree → Option (Array Tree)
       let thenBranch ← children[3]?
       let elseKeyword ← children[4]?
       let elseBranch ← children[5]?
+      let (clause, thenBranch) :=
+        attachIfThenElseClauseBody termIfAttachedBody
+          (ifThenElseClause (childrenRange children 0 3)) thenBranch
       some
         #[
-          .node .ifThenElseClause (childrenRange children 0 3),
+          clause,
           thenBranch,
           elseKeyword,
           elseBranch
         ]
-  | .node .ifThenElseChain children => some children
+  | .node (.ifThenElseChain _) children => some children
   | _ => none
 
 def prependElseToIfThenElseClause (elseKeyword : Tree) (parts : Array Tree)
@@ -2527,31 +2566,108 @@ def prependElseToIfThenElseClause (elseKeyword : Tree) (parts : Array Tree)
       some <| parts.set! 0 (.node .ifThenElseClause (#[elseKeyword] ++ children))
   | _ => none
 
-def attachFinalBodySuffix (parts : Array Tree) : Array Tree :=
+def attachFinalElseBodySuffixWhere (accepts : Tree → Bool) (parts : Array Tree)
+    : Array Tree :=
   if parts.size < 2 then
     parts
   else
     match parts[parts.size - 2]?, parts.back? with
     | some delimiter, some body =>
-        if body.firstToken?.any
-            fun token => token.lexeme == "do" || token.lexeme == "by" then
+        if (directLeafAtomToken? delimiter).any (·.lexeme == "else") && accepts body then
           parts.extract 0 (parts.size - 2) |>.push (.node .suffixGroup #[delimiter, body])
         else
           parts
     | _, _ => parts
 
 def regroupIfThenElseChain (kind : SyntaxNodeKind) (children : Array Tree) : Tree :=
-  let chain? : Option Tree := do
-    let thenBranch ← children[3]?
-    let elseKeyword ← children[4]?
-    let elseBranch ← children[5]?
-    let continuation ← ifThenElseChainParts? elseBranch
-    let continuation ← prependElseToIfThenElseClause elseKeyword continuation
+  if children.size != 6 then
+    .node (.raw kind) children
+  else
+    let thenBranch := children[3]!
+    let elseKeyword := children[4]!
+    let elseBranch := children[5]!
+    let continuation? := do
+      let continuation ← ifThenElseChainParts? elseBranch
+      prependElseToIfThenElseClause elseKeyword continuation
+    match continuation? with
+    | some continuation =>
+        let (clause, thenBranch) :=
+          attachIfThenElseClauseBody termIfAttachedBody
+            (ifThenElseClause (childrenRange children 0 3)) thenBranch
+        let parts := #[clause, thenBranch] ++ continuation
+        .node (.ifThenElseChain kind)
+          (attachFinalElseBodySuffixWhere termIfAttachedBody parts)
+    | none => .node (.raw kind) children
+
+private partial def doIfContinuationParts? : Tree → Option (Array Tree)
+  | .node (.raw `null) children =>
+      let children := children.filter fun child => child.firstToken?.isSome
+      let rec loop : List Tree → Option (Array Tree)
+        | [] => some #[]
+        | [elseKeyword, body] =>
+            if (directLeafAtomToken? elseKeyword).any (·.lexeme == "else") then
+              some #[elseKeyword, (attachedDoTree? body).getD body]
+            else
+              none
+        | child :: rest => do
+            let childParts ← doIfContinuationParts? child
+            let restParts ← loop rest
+            some <| childParts ++ restParts
+      loop children.toList
+  | .node (.raw `group) children =>
+      match children.toList with
+      | [elseKeyword, ifKeyword] =>
+          if elseKeyword.firstToken?.any (·.lexeme == "else")
+              && ifKeyword.firstToken?.any (·.lexeme == "if") then
+            some #[elseKeyword, ifKeyword]
+          else
+            none
+      | _ => do
+          let prefixParts ← children[0]? >>= doIfContinuationParts?
+          let children := prefixParts ++ childrenRange children 1 children.size
+          if children.size != 5
+              || !children[0]!.firstToken?.any (·.lexeme == "else")
+              || !children[1]!.firstToken?.any (·.lexeme == "if")
+              || !children[3]!.firstToken?.any (·.lexeme == "then") then
+            none
+          else
+            let body := (attachedDoTree? children[4]!).getD children[4]!
+            let (clause, body) :=
+              attachIfThenElseClauseBody doIfAttachedBody
+                (ifThenElseClause (childrenRange children 0 4)) body
+            some #[clause, body]
+  | _ => none
+
+def regroupDoIfThenElseChain? (children : Array Tree) : Option Tree := do
+  if children.size < 4 then
+    none
+  let thenBranch ← children[3]?
+  let thenBranch := (attachedDoTree? thenBranch).getD thenBranch
+  let (clause, thenBranch) :=
+    attachIfThenElseClauseBody doIfAttachedBody
+      (ifThenElseClause (childrenRange children 0 3)) thenBranch
+  let initial := #[clause, thenBranch]
+  let rec loop (parts : Array Tree) (index : Nat) : Option (Array Tree) := do
+    if children.size <= index then
+      some parts
+    else
+      let child ← children[index]?
+      if child.firstToken?.isNone then
+        loop parts (index + 1)
+      else
+        let continuation ← doIfContinuationParts? child
+        loop (parts ++ continuation) (index + 1)
+  let parts ← loop initial 4
+  let hasContinuationClause :=
+    match parts[2]? with
+    | some (.node .ifThenElseClause _) => true
+    | _ => false
+  if !hasContinuationClause then
+    none
+  else
     some
-    <| .node .ifThenElseChain
-    <| attachFinalBodySuffix
-    <| #[.node .ifThenElseClause (childrenRange children 0 3), thenBranch] ++ continuation
-  chain?.getD <| .node (.raw kind) children
+    <| .node (.ifThenElseChain `Lean.Parser.Term.doIf)
+    <| attachFinalElseBodySuffixWhere doIfAttachedBody parts
 
 def proofBodyTree (children : Array Tree) : Tree :=
   .node (.proofBody <| children.any Tree.containsTacticLayoutOwner) children
@@ -2892,7 +3008,9 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
         .node (.raw kind) <| children.set! 1 (regroupMatchPatterns patterns)
     | none => .node (.raw kind) children
   else if kind == `Lean.Parser.Term.doIf then
-    .node (.raw kind) <| (regroupAttachedDoRhs children).map regroupDoIfElseBodySuffix
+    let children := regroupAttachedDoRhs children
+    (regroupDoIfThenElseChain? children).getD
+    <| .node (.raw kind) (children.map regroupDoIfElseBodySuffix)
   else if kind == `Lean.Parser.Term.structInstField then
     match children[0]?, children[1]? >>= structInstFieldParts? with
     | some lvalue, some fieldParts =>
@@ -3140,7 +3258,8 @@ def regroupRawNode
   else if kind == `Lean.Parser.Tactic.inductionAlt then
     .node (.raw kind) (regroupTacticAlternativeChildren children)
   else if kind == `termDepIfThenElse then
-    .node (.raw kind) ((regroupDependentIfNamedDiscriminant? children).getD children)
+    let children := (regroupDependentIfNamedDiscriminant? children).getD children
+    regroupIfThenElseChain kind children
   else if isIfThenElseKind kind then
     regroupIfThenElseChain kind children
   else if kind == `Lean.Parser.Command.macroTail

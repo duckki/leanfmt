@@ -1407,6 +1407,30 @@ else
   finalResult
 ```
 
+Dependent clauses use that same chain shape and keep each named condition with
+its branch header:
+
+```lean
+if hzero : n = 0 then
+  zero
+else if hleft : cut = 0 then
+  left
+else if hright : cut = n then
+  right
+else
+  middle
+```
+
+The final condition line keeps `then`. A long infix condition wraps by its own
+infix rule before detaching the branch suffix:
+
+```lean
+else if rule.binding == .global
+        && rule.head == operation.key
+        && !globalCompiled[ruleIndex]! then
+  secondResult
+```
+
 Accepted source breaks between branch boundaries can keep an intentional
 multiline conditional even when a flatter form fits. Because conditionals are
 non-flow rules, any accepted branch break activates the complete balanced

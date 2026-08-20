@@ -10771,6 +10771,21 @@ def assertElseIfContinuesOnElseLine (env : Lean.Environment) : IO Unit := do
     ++ "    fallbackResultNameWithEnoughCharactersForLayoutTesting\n"
   let formatted ← Formatter.formatSourceWithEnv env source "else-if-chain.lean"
   assertEq "else-if continues on else line" expected formatted
+  let dependentSource :=
+    "def dependentElseIfChain := if hzero : n = 0 then zero else if hleft : cut = 0 then left else if hright : cut = n then right else middle\n"
+  let dependentExpected :=
+    "def dependentElseIfChain :=\n"
+    ++ "  if hzero : n = 0 then\n"
+    ++ "    zero\n"
+    ++ "  else if hleft : cut = 0 then\n"
+    ++ "    left\n"
+    ++ "  else if hright : cut = n then\n"
+    ++ "    right\n"
+    ++ "  else\n"
+    ++ "    middle\n"
+  let dependentFormatted ←
+    Formatter.formatSourceWithEnv env dependentSource "dependent-else-if-chain.lean"
+  assertEq "dependent else-if continues on else line" dependentExpected dependentFormatted
 
 def assertElseIfChainBreaksThenBranchesTogether (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -10793,6 +10808,30 @@ def assertElseIfChainBreaksThenBranchesTogether (env : Lean.Environment) : IO Un
   let formatted ←
     Formatter.formatSourceWithEnv env source "else-if-chain-then-branches.lean"
   assertEq "else-if chain breaks then branches together" expected formatted
+  let longConditionSource :=
+    "def longConditionalClause := do\n"
+    ++ "  for operation in operations do\n"
+    ++ "    for rule in rules do\n"
+    ++ "      if rule.binding == .local then\n"
+    ++ "        firstResult\n"
+    ++ "      else if rule.binding == .global && rule.head == operation.key &&\n"
+    ++ "          !globalCompiled[ruleIndex]! then\n"
+    ++ "        secondResult\n"
+  let longConditionExpected :=
+    "def longConditionalClause := do\n"
+    ++ "  for operation in operations do\n"
+    ++ "    for rule in rules do\n"
+    ++ "      if rule.binding == .local then\n"
+    ++ "        firstResult\n"
+    ++ "      else if rule.binding == .global\n"
+    ++ "              && rule.head == operation.key\n"
+    ++ "              && !globalCompiled[ruleIndex]! then\n"
+    ++ "        secondResult\n"
+  let longConditionFormatted ←
+    Formatter.formatSourceWithEnv env longConditionSource
+      "long-conditional-clause.lean" { lineWidth := 100 }
+  assertEq "a long else-if condition keeps then with its final condition line"
+    longConditionExpected longConditionFormatted
 
 def assertTermMatchAlternativesStayOnOwnLines (env : Lean.Environment) : IO Unit := do
   let source :=

@@ -3070,6 +3070,11 @@ def ifThenElseChainBreaks (_context : RuleContext) (segment : Segment)
       let indentLevels := if offset % 2 == 0 then 1 else 0
       boundaryBreak? segment index indentLevels
 
+def ifThenElseChainMandatory (_context : RuleContext) (segment : Segment) : Bool :=
+  match segment.parent with
+  | .node (.ifThenElseChain kind) _ => kind == `Lean.Parser.Term.doIf
+  | _ => false
+
 def firstMatchAlternativesIndex? (segment : Segment) : Option Nat :=
   match firstChildRawKind? segment `Lean.Parser.Term.matchAlts with
   | some index => some index
@@ -3852,6 +3857,7 @@ def ifLetThenElseRule : LineBreakRule :=
 def ifThenElseChainRule : LineBreakRule :=
   {
     name := "ifThenElseChain"
+    mandatory := ifThenElseChainMandatory
     useExistingBreaks := fun _ _ => true
     startAlignment := fun _ _ => .preferred
     roundUpBaseIndentation := true
@@ -4849,7 +4855,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node .lowPriorityInfixRhs _ => some lowPriorityInfixRhsRule
   | .node (.infixChain _) _ => some infixChainRule
   | .node .ifThenElseClause _ => some transparentRule
-  | .node .ifThenElseChain _ => some ifThenElseChainRule
+  | .node (.ifThenElseChain _) _ => some ifThenElseChainRule
   | .node (.raw `termIfThenElse) _ => some ifThenElseRule
   | .node (.raw `boolIfThenElse) _ => some ifThenElseRule
   | .node (.raw `Lean.Parser.Term.match) _ => some matchExpressionRule

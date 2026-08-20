@@ -11,17 +11,6 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ## Open Issues
 
-### Conditional chain ownership
-
-Multiline `else if` chains can split after `else`, and a wrapped `then` can
-inherit its condition's incidental column instead of the conditional base.
-
-```lean
-else
-  if condition then
-    result
-```
-
 ### Declaration continuation layout
 
 Long declaration binders and continuation tokens can retain source-column
@@ -50,11 +39,6 @@ function
 ```
 
 ## Progress
-
-### Checkpoint 20: conditional chain ownership
-
-`else if`, multiline `then`, and their branch bodies share one conditional base
-without source-column inheritance or renderer token checks.
 
 ### Checkpoint 21: non-proof child rebasing
 
