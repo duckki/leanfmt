@@ -1348,7 +1348,9 @@ structural proof operands remain governed by the existing proof-island rules.
 When a tactic operand is an application, the application head starts a new
 structural base and its arguments remain ordinary application peers. Two or
 more parenthesized proof arguments break as peers rather than nesting under one
-another.
+another. The tactic prefix remains with the application head even when moving
+the complete application inward would fit; ordinary application breakpoints
+wrap its arguments beneath that attached head.
 
 When a registered tactic parser ends a header with a keyword-owned term body,
 the keyword stays with the body application head. A bracketed tactic argument

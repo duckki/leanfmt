@@ -9,24 +9,7 @@ Mathlib, leanfmt's first-class syntax-support targets. Missing rules in other
 external projects are useful inventory, but block validation only when they
 coincide with preservation, formatting, convergence, overflow, or build issues.
 
-## Open Issues
-
-### Delimiter and suffix attachment
-
-Closing notation such as `:)`, a short operand after `<|`, or a proof argument
-after an application head can detach even when the complete suffix fits.
-
-```lean
-function
-<| shortOperand
-```
-
 ## Progress
-
-### Checkpoint 23: delimiter and suffix attachment
-
-Short low-priority operands, closing notation, and structural application
-arguments remain attached whenever the complete group fits.
 
 ### Checkpoint 24: release validation
 

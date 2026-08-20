@@ -15703,6 +15703,53 @@ def assertApplicationFitCountsFromSuffix (env : Lean.Environment) : IO Unit := d
   assertEq "application fit includes a protected proof argument"
     protectedProofExpected protectedProofFormatted
 
+def assertStructuralAttachmentPolicy (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def closingTypeAscription :=\n"
+    ++ "  (veryLongFunctionNameForTypeAscription\n"
+    ++ "      firstArgument secondArgument :)\n"
+    ++ "\n"
+    ++ "def fittingMovedPipe := functionNameForPipeHead <| shortOperand\n"
+    ++ "\n"
+    ++ "theorem attachedTacticProofArgument : True := by\n"
+    ++ "  exact proofFunctionWithLongEnoughHead (by simp)\n"
+    ++ "\n"
+    ++ "theorem nonfittingProofArgument : True := by\n"
+    ++ "  exact proofHead (by\n"
+    ++ "    simpa [firstRewriteName, secondRewriteName, thirdRewriteName] using hypothesis)\n"
+  let expected :=
+    "def closingTypeAscription :=\n"
+    ++ "  (veryLongFunctionNameForTypeAscription\n"
+    ++ "      firstArgument secondArgument\n"
+    ++ "    :)\n"
+    ++ "\n"
+    ++ "def fittingMovedPipe :=\n"
+    ++ "  functionNameForPipeHead <| shortOperand\n"
+    ++ "\n"
+    ++ "theorem attachedTacticProofArgument : True := by\n"
+    ++ "  exact proofFunctionWithLongEnoughHead\n"
+    ++ "    (by simp)\n"
+    ++ "\n"
+    ++ "theorem nonfittingProofArgument : True := by\n"
+    ++ "  exact proofHead\n"
+    ++ "    (by\n"
+    ++ "      simpa [firstRewriteName,\n"
+    ++ "        secondRewriteName, thirdRewriteName]\n"
+    ++ "        using hypothesis)\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "structural-attachment-policy.lean" { lineWidth := 48 }
+  assertTrue "structural attachment formatting does not fall back" (!result.fellBack)
+  assertEq "prefixes and fitting suffixes follow their attachment policies"
+    expected result.formatted
+  assertTrue "structural attachment formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "structural-attachment-policy-formatted.lean" { lineWidth := 48 }
+  assertEq "structural attachment formatting is idempotent"
+    result.formatted formattedAgain
+
 def assertApplicationBreaksBeforeOverflowingInfixArgument (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -17210,6 +17257,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertElaborationSyntaxHasRules env
   assertMatchExprAlternativesStartOnNewLines env
   assertApplicationFitCountsFromSuffix env
+  assertStructuralAttachmentPolicy env
   assertParserStateUpdatesAfterSyntaxCommands env
   assertSyntaxAuthoringDefinitionPreservesCode env
   assertCustomBracedTermSyntaxKeepsNestedSourceLayout env
