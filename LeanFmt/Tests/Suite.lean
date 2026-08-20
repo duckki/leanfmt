@@ -9845,6 +9845,87 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
   assertEq "sibling tactics keep their mandatory boundary"
     tacticSequenceSource tacticSequenceFormatted
 
+  let detachedAlternativeBodiesSource :=
+    "theorem standaloneCaseBody : True := by\n"
+    ++ "  case branch =>\n"
+    ++ "  exact True.intro\n"
+    ++ "\n"
+    ++ "theorem standaloneNextBody : True := by\n"
+    ++ "  next branch =>\n"
+    ++ "  exact True.intro\n"
+    ++ "\n"
+    ++ "theorem parenthesizedCaseBody : True := by\n"
+    ++ "  (case branch =>\n"
+    ++ "  exact True.intro)\n"
+    ++ "\n"
+    ++ "theorem tacticCombinatorBeforeNext : True := by\n"
+    ++ "  cases hlookup : value <;>\n"
+    ++ "    simp [hlookup]\n"
+    ++ "  next branch =>\n"
+    ++ "  exact True.intro\n"
+  let detachedAlternativeBodiesExpected :=
+    "theorem standaloneCaseBody : True := by\n"
+    ++ "  case branch =>\n"
+    ++ "    exact True.intro\n"
+    ++ "\n"
+    ++ "theorem standaloneNextBody : True := by\n"
+    ++ "  next branch =>\n"
+    ++ "    exact True.intro\n"
+    ++ "\n"
+    ++ "theorem parenthesizedCaseBody : True := by\n"
+    ++ "  (case branch =>\n"
+    ++ "    exact True.intro)\n"
+    ++ "\n"
+    ++ "theorem tacticCombinatorBeforeNext : True := by\n"
+    ++ "  cases hlookup : value <;>\n"
+    ++ "    simp [hlookup]\n"
+    ++ "  next branch =>\n"
+    ++ "    exact True.intro\n"
+  let detachedAlternativeBodiesResult ←
+    Formatter.formatSourceWithEnvDetailed env detachedAlternativeBodiesSource
+      "detached-tactic-alternative-bodies.lean"
+  assertTrue "detached tactic alternative bodies do not fall back"
+    (!detachedAlternativeBodiesResult.fellBack)
+  assertEq "detached tactic alternatives own their following tactic sequences"
+    detachedAlternativeBodiesExpected detachedAlternativeBodiesResult.formatted
+  assertTrue "detached tactic alternative formatting preserves code"
+    (← codePreservedIgnoringWhitespace env detachedAlternativeBodiesSource
+        detachedAlternativeBodiesResult.formatted)
+  let detachedAlternativeBodiesAgain ←
+    Formatter.formatSourceWithEnv env detachedAlternativeBodiesResult.formatted
+      "detached-tactic-alternative-bodies-formatted.lean"
+  assertEq "detached tactic alternative formatting is idempotent"
+    detachedAlternativeBodiesResult.formatted detachedAlternativeBodiesAgain
+
+  let detachedParserOwnedBodySource :=
+    "theorem detachedParserOwnedBody : True := by\n"
+    ++ "  project_simp? proposition says\n"
+    ++ "  exact True.intro\n"
+    ++ "\n"
+    ++ "theorem inlineParserOwnedBody : True := by\n"
+    ++ "  project_simp? proposition says exact True.intro\n"
+  let detachedParserOwnedBodyExpected :=
+    "theorem detachedParserOwnedBody : True := by\n"
+    ++ "  project_simp? proposition says\n"
+    ++ "    exact True.intro\n"
+    ++ "\n"
+    ++ "theorem inlineParserOwnedBody : True := by project_simp? proposition says exact True.intro\n"
+  let detachedParserOwnedBodyResult ←
+    Formatter.formatSourceWithEnvDetailed env detachedParserOwnedBodySource
+      "detached-parser-owned-tactic-body.lean"
+  assertTrue "a detached parser-owned tactic body does not fall back"
+    (!detachedParserOwnedBodyResult.fellBack)
+  assertEq "a parser-owned tactic suffix owns its following tactic sequence"
+    detachedParserOwnedBodyExpected detachedParserOwnedBodyResult.formatted
+  assertTrue "detached parser-owned tactic body formatting preserves code"
+    (← codePreservedIgnoringWhitespace env detachedParserOwnedBodySource
+        detachedParserOwnedBodyResult.formatted)
+  let detachedParserOwnedBodyAgain ←
+    Formatter.formatSourceWithEnv env detachedParserOwnedBodyResult.formatted
+      "detached-parser-owned-tactic-body-formatted.lean"
+  assertEq "detached parser-owned tactic body formatting is idempotent"
+    detachedParserOwnedBodyResult.formatted detachedParserOwnedBodyAgain
+
   let tacticFamilySource :=
     "theorem tacticFamilyCoverage (h : Prop) [Decidable h] : True := by\n"
     ++ "  by_cases h\n"

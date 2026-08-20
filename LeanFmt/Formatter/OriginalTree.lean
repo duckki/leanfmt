@@ -409,6 +409,8 @@ private def isProtectedTacticTree : SyntaxTree.Tree → Bool
             && !isOwner
             && !containsOwner
             && !(tree.isSpacedApplicationTactic && containsAttachedProofTerm tree)
+        | .infixChain rawKind =>
+            coreTacticKindName (toString rawKind) && !tree.containsTacticLayoutOwner
         | .raw rawKind =>
             coreTacticKindName kindName
             && !isTacticSequenceKind rawKind

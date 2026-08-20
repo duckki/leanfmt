@@ -3868,6 +3868,12 @@ def matchExpressionRule : LineBreakRule :=
 def parserOwnedBodyRule : LineBreakRule :=
   {
     name := "parserOwnedBody"
+    mandatory :=
+      fun _ segment =>
+        match segment.child? 1 with
+        | some (.node (.proofBody _) _) => true
+        | _ => false
+    formatOriginalChildLeadingBoundary := fun _ _ index => index == 1
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
     breakPoints := parserOwnedBodyBreaks

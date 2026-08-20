@@ -1372,6 +1372,15 @@ simpa [firstNormalizationLemma,
   using proof
 ```
 
+A registered tactic suffix followed by a tactic sequence owns that sequence in
+the same way. A source-detached body indents from the tactic header, while an
+inline body remains compact:
+
+```lean
+project_simp? proposition says
+  exact True.intro
+```
+
 ## Conditionals
 
 A fitting conditional stays on one line. A multiline conditional breaks as a
@@ -1544,6 +1553,16 @@ tactics remain peers in the surrounding tactic sequence because indenting them
 under the alternative changes Lean's parse. The owned indentation remains
 structural when a protected, unbreakable proof line becomes longer than the
 configured width after moving to that column.
+
+A standalone tactic alternative similarly owns a following tactic sequence:
+
+```lean
+case branch =>
+  exact True.intro
+```
+
+Correcting one owned alternative does not reformat an unrelated peer tactic
+combinator chain; that chain remains an authored-layout proof island.
 
 `cases` and `induction` keep `with` on the complete header. Their alternatives
 align with the tactic, and a multiline alternative body is indented two levels

@@ -9,6 +9,7 @@ syntax (name := projectMatrixLiteral) "#pm[" term "," term ";" term "," term "]"
 syntax:max (name := projectTightIndexed) (priority := high) term noWs "[" term "]" : term
 syntax (name := contextClassifiedTactic) "context_classified_tactic " ident ident : tactic
 syntax (name := contextTermTactic) "context_term_tactic " term : tactic
+syntax (name := projectSaysTactic) "project_simp? " term " says " tacticSeq : tactic
 syntax (name := projectPrefixedDeclaration) "project_haveI' " letDecl : doElem
 syntax (name := projectTermCommand) "#project_term " ident term : command
 syntax (name := projectWrappedTerm) "project_wrapped " term : term

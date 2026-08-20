@@ -1012,10 +1012,15 @@ unsafe def parserDescribesSpacedApplicationUnsafe
 opaque parserDescribesSpacedApplication
     (env : Environment) (options : Options) (kind : SyntaxNodeKind) : Bool
 
-def parserDescrIsTermOperand : ParserDescr → Bool
+def parserDescrIsOwnedBody : ParserDescr → Bool
   | .cat category _ => category == `term
+  | .const parser =>
+      parser == `tacticSeq
+      || parser == `tacticSeqIndentGt
+      || parser == `Lean.Parser.Tactic.tacticSeq
+      || parser == `Lean.Parser.Tactic.tacticSeqIndentGt
   | .unary combinator parser =>
-      combinator != `optional && parserDescrIsTermOperand parser
+      combinator != `optional && parserDescrIsOwnedBody parser
   | _ => false
 
 def parserDescrKeywordSuffixes : ParserDescr → List String
@@ -1030,10 +1035,10 @@ def parserDescrKeywordSuffixes : ParserDescr → List String
           if symbol.toList.any (·.isAlphanum) then some symbol else none
   | _ => []
 
-def parserDescrSuffixTermClauseSuffixes (parser : ParserDescr) : List String :=
+def parserDescrSuffixOwnedBodyClauseSuffixes (parser : ParserDescr) : List String :=
   match parserDescrSequence parser with
   | [suffix, body] =>
-      if parserDescrIsTermOperand body then parserDescrKeywordSuffixes suffix else []
+      if parserDescrIsOwnedBody body then parserDescrKeywordSuffixes suffix else []
   | _ => []
 
 def parserDescrTrailingBodySuffixes (parser : ParserDescr) : List String :=
@@ -1042,13 +1047,13 @@ def parserDescrTrailingBodySuffixes (parser : ParserDescr) : List String :=
   | sequence =>
       match sequence.reverse with
       | body :: suffix :: preceding =>
-          if !preceding.isEmpty && parserDescrIsTermOperand body then
+          if !preceding.isEmpty && parserDescrIsOwnedBody body then
             parserDescrKeywordSuffixes suffix
           else
             match body with
             | .unary combinator clause =>
                 if combinator == `optional && !sequence.dropLast.isEmpty then
-                  parserDescrSuffixTermClauseSuffixes clause
+                  parserDescrSuffixOwnedBodyClauseSuffixes clause
                 else
                   []
             | _ => []
@@ -1883,6 +1888,88 @@ private def regroupTacticSequenceWrapperPrefix : Tree → Tree
             left.singleToken?.any (·.role == .atom)
             && Tree.sharesSourceLineWith left right
   | tree => tree
+
+private def tacticEndsWithDetachedBodySuffix (parserOwnedBodies : ParserOwnedBodyMap)
+    : Tree → Bool
+  | tree@(.node (.raw kind) _)
+  | tree@(.node (.tactic kind _ _ _ _) _) =>
+      tree.lastToken?.any
+        fun token =>
+          ((parserOwnedBodies.find? kind).getD []).contains token.lexeme
+          || (isCoreTacticKindName (toString kind) && token.lexeme == "=>")
+  | _ => false
+
+private def regroupDirectParserOwnedTacticBody?
+    (parserOwnedBodies : ParserOwnedBodyMap) (kind : NodeKind) (children : Array Tree)
+    : Option Tree := do
+  let .tactic _ _ _ _ _ := kind | none
+  let bodyIndex ←
+    ((List.range children.size).filter
+      fun index => children[index]?.bind Tree.firstToken? |>.isSome).getLast?
+  let body ← children[bodyIndex]?
+  if !body.isTacticSequenceTree then
+    none
+  let header := .node kind (children.set! bodyIndex .missing)
+  if !tacticEndsWithDetachedBodySuffix parserOwnedBodies header then
+    none
+  let body := .node (.proofBody body.containsTacticLayoutOwner) #[body]
+  some <| .node .parserOwnedBody #[header, body]
+
+private partial def regroupDetachedParserOwnedTacticBodiesCore
+    (parserOwnedBodies : ParserOwnedBodyMap)
+    : Tree → Tree × Bool
+  | .node kind children =>
+      let regroupedChildren :=
+        children.map (regroupDetachedParserOwnedTacticBodiesCore parserOwnedBodies)
+      let children := regroupedChildren.map fun (child, _) => child
+      let containsDetached := regroupedChildren.any fun (_, contains) => contains
+      let rec loop (grouped : Array Tree) (containsDetached : Bool)
+          : List Tree → Array Tree × Bool
+        | header :: body :: rest =>
+            if tacticEndsWithDetachedBodySuffix parserOwnedBodies header
+                && body.isTacticSequenceTree then
+              let body := .node (.proofBody body.containsTacticLayoutOwner) #[body]
+              loop (grouped.push <| .node .parserOwnedBody #[header, body]) true rest
+            else
+              loop (grouped.push header) containsDetached (body :: rest)
+        | [child] => (grouped.push child, containsDetached)
+        | [] => (grouped, containsDetached)
+      let (children, containsDetached) := loop #[] containsDetached children.toList
+      let (children, containsDetached) :=
+        match kind, children.toList with
+        | .parserOwnedBody, [header, body] =>
+            if body.isTacticSequenceTree && !Tree.sharesSourceLineWith header body then
+              (#[header, .node (.proofBody body.containsTacticLayoutOwner) #[body]], true)
+            else
+              (children, containsDetached)
+        | _, _ => (children, containsDetached)
+      let containsDetached :=
+        containsDetached
+        || match kind, children.toList with
+            | .parserOwnedBody, [_, .node (.proofBody _) _] => true
+            | _, _ => false
+      let kind :=
+        match kind with
+        | .tactic rawKind containsSequence isOwner containsOwner isSpacedApplication =>
+            if containsDetached then
+              .tactic rawKind containsSequence isOwner true isSpacedApplication
+            else
+              .tactic rawKind containsSequence isOwner containsOwner isSpacedApplication
+        | .proofBody containsOwner =>
+            if containsDetached then
+              .proofBody true
+            else
+              .proofBody containsOwner
+        | _ => kind
+      match regroupDirectParserOwnedTacticBody? parserOwnedBodies kind children with
+      | some tree => (tree, true)
+      | none => (.node kind children, containsDetached)
+  | tree => (tree, false)
+
+private def regroupDetachedParserOwnedTacticBodies
+    (parserOwnedBodies : ParserOwnedBodyMap) (tree : Tree)
+    : Tree :=
+  (regroupDetachedParserOwnedTacticBodiesCore parserOwnedBodies tree).1
 
 private def regroupMatchAltBodySuffix (children : Array Tree) : Array Tree :=
   regroupTerminalLeadingTokenChildren children (fun _ => true)
@@ -3217,8 +3304,10 @@ def regroupTreeWithPrecedences
     (spacedApplicationKinds : SpacedApplicationKindSet := {})
     (parserOwnedBodies : ParserOwnedBodyMap := {})
     : Tree → Tree :=
-  regroupTreeWithPrecedencesInContext
-    infixPrecedences spacedApplicationKinds parserOwnedBodies false
+  fun tree =>
+    regroupDetachedParserOwnedTacticBodies parserOwnedBodies
+    <| regroupTreeWithPrecedencesInContext
+        infixPrecedences spacedApplicationKinds parserOwnedBodies false tree
 
 def regroupTree (tree : Tree) : Tree :=
   regroupTreeWithPrecedences {} {} {} tree

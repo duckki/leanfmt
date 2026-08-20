@@ -11,18 +11,6 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ## Open Issues
 
-### Detached tactic bodies
-
-Standalone `case ... =>` and parser-owned tactic suffixes such as `simp? ...
-says` can leave their following tactic sequence outside the owner's structural
-body. The same root cause appears in nested `next` bodies and parenthesized
-elimination alternatives.
-
-```lean
-case branch =>
-exact proof
-```
-
 ### Conditional chain ownership
 
 Multiline `else if` chains can split after `else`, and a wrapped `then` can
@@ -62,11 +50,6 @@ function
 ```
 
 ## Progress
-
-### Checkpoint 19: detached tactic bodies
-
-Standalone tactic alternatives and parser-owned tactic suffixes own and indent
-their following tactic sequences without renderer-specific syntax handling.
 
 ### Checkpoint 20: conditional chain ownership
 
