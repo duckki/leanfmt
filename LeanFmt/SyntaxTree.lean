@@ -1898,6 +1898,43 @@ private def regroupTacticTerminalDelimiter : Tree → Tree
         .node kind grouped
   | tree => tree
 
+private partial def attachPrefixToOperandHead (prefixTree : Tree) : Tree → Tree
+  | .node kind children =>
+      match kind with
+      | .application | .infixChain _ | .indexedInfix _ =>
+          match (List.range children.size).find?
+                  fun index => children[index]?.bind Tree.firstToken? |>.isSome with
+          | some headIndex =>
+              match children[headIndex]? with
+              | some head =>
+                  .node kind
+                    (children.set! headIndex (attachPrefixToOperandHead prefixTree head))
+              | none => .node kind children
+          | none => .node kind children
+      | .suffixGroup => .node .suffixGroup (#[prefixTree] ++ children)
+      | _ => .node .suffixGroup #[prefixTree, .node kind children]
+  | operand => .node .suffixGroup #[prefixTree, operand]
+
+private partial def regroupSpacedTacticFirstOperands : Tree → Tree
+  | .node kind children =>
+      let children := children.map regroupSpacedTacticFirstOperands
+      match kind with
+      | kind@(.tactic _ _ _ _ true) =>
+          let contentIndexes :=
+            (List.range children.size).filter
+              fun index => children[index]?.bind Tree.firstToken? |>.isSome
+          match contentIndexes with
+          | prefixIndex :: operandIndex :: _ =>
+              match children[prefixIndex]?, children[operandIndex]? with
+              | some prefixTree, some operand =>
+                  let attached := attachPrefixToOperandHead prefixTree operand
+                  .node kind
+                    (children.set! prefixIndex attached |>.set! operandIndex .missing)
+              | _, _ => .node kind children
+          | _ => .node kind children
+      | _ => .node kind children
+  | tree => tree
+
 private def regroupTacticSequenceWrapperPrefix : Tree → Tree
   | .node kind@(.tactic _ _ _ _ _) children =>
       .node kind
@@ -3450,7 +3487,8 @@ def regroupTreeWithPrecedences
     (parserOwnedBodies : ParserOwnedBodyMap := {})
     : Tree → Tree :=
   fun tree =>
-    regroupDetachedParserOwnedTacticBodies parserOwnedBodies
+    regroupSpacedTacticFirstOperands
+    <| regroupDetachedParserOwnedTacticBodies parserOwnedBodies
     <| regroupTreeWithPrecedencesInContext
         infixPrecedences spacedApplicationKinds parserOwnedBodies false tree
 

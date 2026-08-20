@@ -4128,16 +4128,16 @@ def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit
     assertTrue s!"{tactic} records its parser-derived spaced application"
       ((findTacticTree? kind moduleTree.tree).any
         SyntaxTree.Tree.isSpacedApplicationTactic)
-    assertTrue s!"{tactic} does not become an outer application"
-      ((findTreeNodeStartingWith? .application tactic moduleTree.tree).isNone)
+    assertTrue s!"{tactic} is grouped into its operand application head"
+      ((findTreeNodeStartingWith? .application tactic moduleTree.tree).isSome)
   assertTrue "extension term-taking tactic retains its tactic ownership"
     ((findTacticTree? `contextTermTactic moduleTree.tree).isSome)
   assertTrue "extension term-taking tactic records its spaced application"
     ((findTacticTree? `contextTermTactic moduleTree.tree).any
       SyntaxTree.Tree.isSpacedApplicationTactic)
-  assertTrue "extension term-taking tactic does not become an outer application"
-    ((findTreeNodeStartingWith? .application
-        "context_term_tactic" moduleTree.tree).isNone)
+  assertTrue "extension term-taking tactic is grouped with its first operand"
+    ((findTacticTree? `contextTermTactic moduleTree.tree).any
+      fun tree => tree.containsNodeKind .suffixGroup)
   let combinatorSource :=
     "theorem combinedTermTakingTactics : True := by\n"
     ++ "  exact veryLongExactProofFunction firstArgument <;>\n"
@@ -4149,8 +4149,31 @@ def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit
       in [("exact", `Lean.Parser.Tactic.exact), ("apply", `Lean.Parser.Tactic.apply)] do
     assertTrue s!"combined {tactic} retains its tactic ownership"
       ((findTacticTree? kind combinatorTree.tree).isSome)
-    assertTrue s!"combined {tactic} does not become an outer application"
-      ((findTreeNodeStartingWith? .application tactic combinatorTree.tree).isNone)
+    assertTrue s!"combined {tactic} is grouped into its operand application head"
+      ((findTreeNodeStartingWith? .application tactic combinatorTree.tree).isSome)
+  let infixSource :=
+    "theorem infixTermTakingTactic : True := by\n"
+    ++ "  exact (firstProof X).trans <| by\n"
+    ++ "    exact secondProofWithEnoughCharactersForLineBreaking X\n"
+  let infixTree ←
+    SyntaxTree.parseModuleStringWithEnv env infixSource
+      "infix-term-taking-tactic-application.lean"
+  assertTrue "a tactic prefix joins the infix left-hand head"
+    ((findTreeNodeStartingWith? (.infixChain `«term_<|_») "exact" infixTree.tree).isSome)
+  let infixResult ←
+    Formatter.formatSourceWithEnvDetailed env infixSource
+      "infix-term-taking-tactic-application.lean" { lineWidth := 70 }
+  assertTrue "an attached tactic infix does not enter a layout cycle"
+    (!infixResult.fellBack)
+  assertEq "an overflowing attached tactic infix breaks its suffix proof body"
+    infixSource infixResult.formatted
+  assertTrue "an attached tactic infix preserves code"
+    (← codePreservedIgnoringWhitespace env infixSource infixResult.formatted)
+  let infixFormattedAgain ←
+    Formatter.formatSourceWithEnv env infixResult.formatted
+      "infix-term-taking-tactic-application-formatted.lean" { lineWidth := 70 }
+  assertEq "attached tactic infix formatting is idempotent"
+    infixResult.formatted infixFormattedAgain
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "term-taking-tactic-application.lean" { lineWidth := 60 }
@@ -10789,19 +10812,18 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
     ++ "        exact h\n"
   let matchArmProofExpected :=
     "theorem matchArmProofOwnership (n : Nat) : True := by\n"
-    ++ "  exact\n"
-    ++ "    match n with\n"
-    ++ "    | _ => by\n"
-    ++ "        have h : True := by\n"
-    ++ "          cases n with\n"
-    ++ "          | zero => exact True.intro\n"
-    ++ "          | succ n => exact True.intro\n"
-    ++ "        exact h\n"
+    ++ "  exact match n with\n"
+    ++ "  | _ => by\n"
+    ++ "      have h : True := by\n"
+    ++ "        cases n with\n"
+    ++ "        | zero => exact True.intro\n"
+    ++ "        | succ n => exact True.intro\n"
+    ++ "      exact h\n"
   let matchArmProofResult ←
     Formatter.formatSourceWithEnvDetailed env matchArmProofSource
       "match-arm-proof-ownership.lean"
   assertTrue "a match arm proof remains owned by the match" !matchArmProofResult.fellBack
-  assertEq "a tactic does not extract a proof through a nested term owner"
+  assertEq "a tactic attaches a nested term owner without extracting its proof"
     matchArmProofExpected matchArmProofResult.formatted
   assertTrue "match arm proof formatting preserves code"
     (← codePreservedIgnoringWhitespace env matchArmProofSource
@@ -15704,6 +15726,7 @@ def assertApplicationFitCountsFromSuffix (env : Lean.Environment) : IO Unit := d
     protectedProofExpected protectedProofFormatted
 
 def assertStructuralAttachmentPolicy (env : Lean.Environment) : IO Unit := do
+  let unbreakableProofHead := "proofFunctionNameThatCannotFitWithExactAtThisWidth"
   let source :=
     "def closingTypeAscription :=\n"
     ++ "  (veryLongFunctionNameForTypeAscription\n"
@@ -15717,6 +15740,22 @@ def assertStructuralAttachmentPolicy (env : Lean.Environment) : IO Unit := do
     ++ "theorem nonfittingProofArgument : True := by\n"
     ++ "  exact proofHead (by\n"
     ++ "    simpa [firstRewriteName, secondRewriteName, thirdRewriteName] using hypothesis)\n"
+    ++ "\n"
+    ++ "theorem attachedTacticLambda : True := by\n"
+    ++ "  refine fun firstArgument secondArgument =>\n"
+    ++ "    proofFunction firstArgument secondArgument\n"
+    ++ "\n"
+    ++ "theorem unbreakableTacticHead : True := by\n"
+    ++ s!"  exact {unbreakableProofHead} firstArgument\n"
+    ++ "\n"
+    ++ "theorem generatedHead (n : Nat) : True := by\n"
+    ++ "  cases n with\n"
+    ++ "  | zero =>\n"
+    ++ "      exact\n"
+    ++ s!"        {unbreakableProofHead} firstArgument\n"
+    ++ "          (by\n"
+    ++ "            exact True.intro)\n"
+    ++ "  | succ n => exact True.intro\n"
   let expected :=
     "def closingTypeAscription :=\n"
     ++ "  (veryLongFunctionNameForTypeAscription\n"
@@ -15736,6 +15775,22 @@ def assertStructuralAttachmentPolicy (env : Lean.Environment) : IO Unit := do
     ++ "      simpa [firstRewriteName,\n"
     ++ "        secondRewriteName, thirdRewriteName]\n"
     ++ "        using hypothesis)\n"
+    ++ "\n"
+    ++ "theorem attachedTacticLambda : True := by\n"
+    ++ "  refine fun firstArgument secondArgument =>\n"
+    ++ "    proofFunction firstArgument secondArgument\n"
+    ++ "\n"
+    ++ "theorem unbreakableTacticHead : True := by\n"
+    ++ s!"  exact {unbreakableProofHead} firstArgument\n"
+    ++ "\n"
+    ++ "theorem generatedHead (n : Nat) : True := by\n"
+    ++ "  cases n with\n"
+    ++ "  | zero =>\n"
+    ++ s!"      exact {unbreakableProofHead}\n"
+    ++ "        firstArgument\n"
+    ++ "        (by\n"
+    ++ "          exact True.intro)\n"
+    ++ "  | succ n => exact True.intro\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "structural-attachment-policy.lean" { lineWidth := 48 }
@@ -15744,6 +15799,18 @@ def assertStructuralAttachmentPolicy (env : Lean.Environment) : IO Unit := do
     expected result.formatted
   assertTrue "structural attachment formatting preserves code"
     (← codePreservedIgnoringWhitespace env source result.formatted)
+  let sourceTree ←
+    SyntaxTree.parseModuleStringWithEnv env source
+      "structural-attachment-policy-source.lean"
+  let formattedTree ←
+    SyntaxTree.parseModuleStringWithEnv env result.formatted
+      "structural-attachment-policy-output.lean"
+  assertTrue "an attached overlong tactic head is not actionable overflow"
+    (!(Formatter.Diagnostics.formattingExceptions sourceTree formattedTree
+        { lineWidth := 48 }).any
+        fun
+        | .lineOverflow _ => true
+        | _ => false)
   let formattedAgain ←
     Formatter.formatSourceWithEnv env result.formatted
       "structural-attachment-policy-formatted.lean" { lineWidth := 48 }
@@ -16719,7 +16786,7 @@ def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
   let tacticHeadResult ←
     Formatter.formatSourceWithEnvDetailed env tacticHeadSource
       "tactic-attached-application-head-overflow.lean" { lineWidth := 50 }
-  assertEq "a spaced tactic breaks before its application head when that helps"
+  assertEq "an authored spaced-tactic break remains protected"
     tacticHeadExpected tacticHeadResult.formatted
 
 def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)

@@ -1345,12 +1345,19 @@ apply veryLongProofFunction
 
 The same parser-context rule covers `exact`, `refine`, and extension tactics;
 structural proof operands remain governed by the existing proof-island rules.
-When a tactic operand is an application, the application head starts a new
-structural base and its arguments remain ordinary application peers. Two or
-more parenthesized proof arguments break as peers rather than nesting under one
-another. The tactic prefix remains with the application head even when moving
-the complete application inward would fit; ordinary application breakpoints
-wrap its arguments beneath that attached head.
+A term-taking tactic remains attached to the first line of its operand. The
+operand then follows its own structural rules: an application head starts a new
+base for ordinary argument flow, while a lambda keeps its introducer with the
+tactic and breaks its body after `=>`. Two or more parenthesized proof arguments
+break as peers rather than nesting under one another. An unbreakable head that
+cannot fit with its tactic is retained as a logically indented overflow. An
+authored break can remain only when the surrounding proof is emitted as a
+protected source-layout island.
+
+An attached proof suffix uses the same fit decision after its owner has been
+laid out. Thus `<| by simp` remains together when that final line fits, while
+an overflowing proof breaks after `by` and indents from the operand's base.
+Earlier breaks inside the owner do not force this suffix body to break.
 
 When a registered tactic parser ends a header with a keyword-owned term body,
 the keyword stays with the body application head. A bracketed tactic argument

@@ -467,6 +467,13 @@ def attachedSuffixApplicationHeadSpan? : SyntaxTree.Tree → Option SyntaxTree.S
       let first ← tree.firstToken?
       let last ← head.lastToken?
       some { start := first.span.start, stop := last.span.stop }
+  | .node .application children => do
+      let head ← children.find? fun child => child.firstToken?.isSome
+      let .node .suffixGroup suffixChildren := head | none
+      if suffixChildren.any SyntaxTree.Tree.isProofBodyEnvelope then
+        none
+      else
+        treeSpan? head
   | _ => none
 
 partial def attachedSuffixApplicationHeadSpans : SyntaxTree.Tree → List SyntaxTree.Span

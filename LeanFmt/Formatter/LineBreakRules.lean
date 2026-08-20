@@ -1953,23 +1953,12 @@ def applicationRule : LineBreakRule :=
     breakPoints := applicationBreaks
   }
 
-def tacticApplicationOperandIndex? (segment : Segment) : Option Nat :=
-  segment.indexes.find?
-    fun index =>
-      (segment.child? index).any
-        fun
-        | .node .application _ => true
-        | _ => false
-
 def tacticApplicationRule : LineBreakRule :=
   {
     applicationRule with
       name := "tacticApplication"
-      formatOriginalChildLeadingBoundary :=
-        fun _ segment index => tacticApplicationOperandIndex? segment == some index
+      flow := fun _ segment => 1 < (nonemptyChildIndexes segment).length
       inheritBase := fun _ _ => true
-      keepPrefixWithChildFirstLine :=
-        fun _ segment index => tacticApplicationOperandIndex? segment == some index
   }
 
 def pipeProjRule : LineBreakRule :=
@@ -3598,22 +3587,26 @@ def constructorRule : LineBreakRule :=
 def suffixGroupRequiresProofBodyBreak (segment : Segment) : Bool :=
   segment.indexes.any fun index => (segment.child? index).any proofBodyHasMultipleTactics
 
+def suffixGroupHasProofBody (segment : Segment) : Bool :=
+  segment.indexes.any
+    fun index =>
+      match segment.child? index with
+      | some (.node (.proofBody _) _) => true
+      | _ => false
+
 def suffixGroupBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   segment.indexes.filterMap
     fun index =>
       match segment.child? index with
-      | some child@(.node (.proofBody _) _) =>
-          if proofBodyHasMultipleTactics child
-              || (nonemptyChildIndexes segment).any (index < ·) then
-            boundaryBreak? segment index 1
-          else
-            none
+      | some (.node (.proofBody _) _) =>
+          boundaryBreak? segment index 1
       | _ => none
 
 def suffixGroupRule : LineBreakRule :=
   {
     name := "suffixGroup"
     mandatory := fun _ segment => suffixGroupRequiresProofBodyBreak segment
+    flow := fun _ segment => suffixGroupHasProofBody segment
     inheritBase :=
       fun _ segment =>
         let shell? := segment.child? segment.start
@@ -3627,6 +3620,11 @@ def suffixGroupRule : LineBreakRule :=
         !(ownsProofBody && shellOwnsLocalBase)
     formatOriginalChildLeadingBoundary :=
       fun _ segment index => segment.start < index
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index =>
+        match segment.child? index with
+        | some (.node (.proofBody _) _) => true
+        | _ => false
     breakPoints := suffixGroupBreaks
   }
 
@@ -3868,6 +3866,7 @@ def matchExpressionRule : LineBreakRule :=
   {
     name := "matchExpression"
     mandatory := fun _ _ => true
+    inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
     breakPoints := matchExpressionBreaks
   }
 
