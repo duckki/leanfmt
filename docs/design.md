@@ -921,7 +921,9 @@ breaks is needed.
 
 Two or more parenthesized proof arguments use peer boundaries when the
 application does not fit. This keeps each proof attached to its parentheses
-without forcing compact proof arguments onto separate lines:
+without forcing compact proof arguments onto separate lines. When ordinary
+arguments occur between proof arguments, their first argument starts a peer run
+at the application base and the remaining fitting arguments stay on that line:
 
 ```lean
 exact inductionPrinciple motives

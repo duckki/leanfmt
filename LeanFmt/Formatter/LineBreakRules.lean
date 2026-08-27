@@ -1865,13 +1865,18 @@ def applicationBreaks (context : RuleContext) (segment : Segment) : List BreakPo
   if !patternFunBreaks.isEmpty then
     patternFunBreaks
   else
+    let argumentBreaks := childBoundaryBreaks segment 1
     let proofArgumentBreaks :=
-      (childBoundaryBreaks segment 1).filter
+      argumentBreaks.filter
         fun breakPoint => applicationPeerProofArgument segment breakPoint.index
     if 2 <= proofArgumentBreaks.length then
-      proofArgumentBreaks
+      argumentBreaks.filter
+        fun breakPoint =>
+          applicationPeerProofArgument segment breakPoint.index
+          || (previousContentIndex? segment breakPoint.index).any
+              fun previousIndex => applicationPeerProofArgument segment previousIndex
     else
-      (childBoundaryBreaks segment 1).filter
+      argumentBreaks.filter
         fun breakPoint =>
           !applicationArgumentStaysAttached context segment breakPoint.index
 

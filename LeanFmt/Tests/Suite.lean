@@ -4317,6 +4317,24 @@ def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit
     (← codePreservedIgnoringWhitespace env proofArgumentsSource
         proofArgumentsResult.formatted)
 
+  let interleavedProofArgumentsSource :=
+    "theorem tacticWithInterleavedProofArguments : True := by\n"
+    ++ "  exact pendingScopeShapeMemberBool_foldl_insert_of_all\n"
+    ++ "    raw possible ([] : List PendingScopeShape)\n"
+    ++ "    (by intro candidate hcandidate; simp [pendingScopeShapeMemberBool] at hcandidate)\n"
+    ++ "    hall shape\n"
+    ++ "    (by simpa [pendingScopeShapeSet] using hshape)\n"
+  let interleavedProofArgumentsResult ←
+    Formatter.formatSourceWithEnvDetailed env interleavedProofArgumentsSource
+      "tactic-interleaved-proof-arguments.lean" { lineWidth := 90 }
+  assertTrue "interleaved tactic proof arguments do not fall back"
+    (!interleavedProofArgumentsResult.fellBack)
+  assertEq "ordinary arguments between proof arguments retain the application base"
+    interleavedProofArgumentsSource interleavedProofArgumentsResult.formatted
+  assertTrue "interleaved tactic proof argument formatting preserves code"
+    (← codePreservedIgnoringWhitespace env interleavedProofArgumentsSource
+        interleavedProofArgumentsResult.formatted)
+
   let compactProofArguments :=
     "theorem compactProofArguments : True := by\n"
     ++ "  exact hgroups responseName [field] field (by simp [hcollect]) (by simp)\n"
