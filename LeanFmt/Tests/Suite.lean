@@ -6900,6 +6900,51 @@ def assertHaveTermFormatting (env : Lean.Environment) : IO Unit := do
       "long-have-term-formatting-formatted.lean"
   assertEq "long have term formatting is idempotent"
     longResult.formatted longFormattedAgain
+  let multilineProofSource :=
+    "theorem multilineHaveProof : True := by\n"
+    ++ "  have hpreserve' :\n"
+    ++ "      veryLongLeftFunctionName firstArgument secondArgument =\n"
+    ++ "        shortRight firstArgument := by\n"
+    ++ "    simpa [a, b] using hpreserve\n"
+    ++ "  exact hpreserve'\n"
+  let multilineProofExpected :=
+    "theorem multilineHaveProof : True := by\n"
+    ++ "  have hpreserve' :\n"
+    ++ "      veryLongLeftFunctionName firstArgument secondArgument =\n"
+    ++ "        shortRight firstArgument := by\n"
+    ++ "    simpa [a, b] using hpreserve\n"
+    ++ "  exact hpreserve'\n"
+  let multilineProofTree ←
+    SyntaxTree.parseModuleStringWithEnv env multilineProofSource
+      "multiline-have-proof-tree.lean"
+  let assignedProofExposed :=
+    (findTreeNodeStartingWith? .tacticAssignmentProof "have" multilineProofTree.tree).any
+      fun
+      | .node .tacticAssignmentProof children =>
+          children.any
+            fun
+            | .node (.proofBody _) _ => true
+            | _ => false
+      | _ => false
+  let assignedProofHasIntrinsicOwner :=
+    (findTreeNode? (.raw `Lean.Parser.Term.byTactic) multilineProofTree.tree).any
+      SyntaxTree.Tree.containsIntrinsicTacticLayoutOwner
+  assertTrue "a single simpa proof has no intrinsic layout owner"
+    (!assignedProofHasIntrinsicOwner)
+  assertTrue "a have := by proof body is exposed after its attached suffix"
+    assignedProofExposed
+  let multilineProofResult ←
+    Formatter.formatSourceWithEnvDetailed env multilineProofSource
+      "multiline-have-proof-formatting.lean"
+  assertTrue "multiline have proof formatting does not fall back"
+    (!multilineProofResult.fellBack)
+  assertEq "a multiline have type breaks its proof after := by"
+    multilineProofExpected multilineProofResult.formatted
+  let multilineProofAgain ←
+    Formatter.formatSourceWithEnv env multilineProofResult.formatted
+      "multiline-have-proof-formatting-formatted.lean"
+  assertEq "multiline have proof formatting is idempotent"
+    multilineProofResult.formatted multilineProofAgain
   let dependentReturnSource :=
     "def dependentHaveReturnTypeWithEnoughHeaderCharactersToRequireSignatureWrapping :\n"
     ++ "    have : Left = Right := by\n"

@@ -3628,6 +3628,9 @@ def suffixGroupRule : LineBreakRule :=
     breakPoints := suffixGroupBreaks
   }
 
+def tacticAssignmentProofRule : LineBreakRule :=
+  { suffixGroupRule with name := "tacticAssignmentProof", flow := fun _ _ => false }
+
 def namedDiscriminantRule : LineBreakRule :=
   {
     name := "namedDiscriminant"
@@ -4845,6 +4848,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.letPatDecl) _ => some letPatternDeclRule
   | .node (.raw `Lean.Parser.Term.whereDecls) _ => some whereDeclsRule
   | .node .suffixGroup _ => some suffixGroupRule
+  | .node .tacticAssignmentProof _ => some tacticAssignmentProofRule
   | .node .namedDiscriminant _ => some namedDiscriminantRule
   | .node (.raw `Lean.Parser.Command.whereStructInst) _ => some whereStructInstRule
   | .node (.raw `Lean.Parser.Command.mutual) _ => some mutualRule

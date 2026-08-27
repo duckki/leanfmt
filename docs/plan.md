@@ -13,11 +13,10 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ### Checkpoint 24: release validation
 
-The light gate is complete for the release candidate: the local suite and fresh
-GraphQL, quantum, Hex, and Mathlib formatter checkpoints pass with no exception,
-idempotency, or material performance regression. The next checkpoint reruns the
-complete external builds, reviews every final formatting delta, and accepts the
-release only with no logical-layout blocker.
+The complete local gate and fresh GraphQL, quantum, Hex, and Mathlib validations
+pass. Every project builds cleanly after formatting, with no preservation,
+overflow, missing-rule, idempotency, or logical-layout blocker. Timings show no
+material formatter regression, so the version 0.4 release candidate is ready.
 
 ## Validation standard
 

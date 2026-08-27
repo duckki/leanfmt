@@ -652,6 +652,17 @@ where
     computeNormalizedRecursiveSelectionResultWithAccumulatedErrors n anotherArgument
 ```
 
+The same ownership applies to a local tactic assignment whose value is a `by`
+proof. When the complete assignment does not fit, `by` remains attached to `:=`
+and the first break is before the proof body:
+
+```lean
+have hpreserve' :
+    veryLongLeftFunctionName firstArgument secondArgument =
+      shortRight firstArgument := by
+  simpa [a, b] using hpreserve
+```
+
 Termination clauses follow the same ownership rule. `termination_by` and
 `decreasing_by` return to the base column of the declaration they modify. A
 fitting `termination_by` parameter lambda and measure stay on one line:

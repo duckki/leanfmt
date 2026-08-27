@@ -77,6 +77,7 @@ inductive NodeKind where
   | indexedInfix (kind : SyntaxNodeKind)
   | delimitedCollection (kind : DelimiterKind)
   | suffixGroup
+  | tacticAssignmentProof
   | tacticIdentifierClause
   | tacticEliminationTargets (containsNamed : Bool)
   | tacticEliminationHeader (targetIsNamed : Bool)
@@ -120,6 +121,7 @@ def nodeKindName : NodeKind → String
   | .delimitedCollection kind =>
       s!"LeanFmt.SyntaxTree.NodeKind.delimitedCollection {repr kind}"
   | .suffixGroup => "LeanFmt.SyntaxTree.NodeKind.suffixGroup"
+  | .tacticAssignmentProof => "LeanFmt.SyntaxTree.NodeKind.tacticAssignmentProof"
   | .tacticIdentifierClause => "LeanFmt.SyntaxTree.NodeKind.tacticIdentifierClause"
   | .tacticEliminationTargets containsNamed =>
       s!"LeanFmt.SyntaxTree.NodeKind.tacticEliminationTargets {containsNamed}"
@@ -300,6 +302,13 @@ def isTacticLayoutOwner (tree : Tree) : Bool :=
 def containsTacticLayoutOwner (tree : Tree) : Bool :=
   (tacticLayoutSummary tree).containsOwner
 
+partial def containsIntrinsicTacticLayoutOwner : Tree → Bool
+  | tree@(.node (.tactic _ _ isOwner _ _) children) =>
+      isOwner || isCalcTree tree || children.any containsIntrinsicTacticLayoutOwner
+  | tree@(.node _ children) =>
+      isCalcTree tree || children.any containsIntrinsicTacticLayoutOwner
+  | _ => false
+
 def isSpacedApplicationTactic : Tree → Bool
   | .node (.tactic _ _ _ _ isSpacedApplication) _ => isSpacedApplication
   | _ => false
@@ -404,6 +413,35 @@ private def splitNodeAroundChild (kind : NodeKind) (children : Array Tree)
     body := split.body
     after := nodeOrMissing kind suffixChildren
   }
+
+private def exposeAssignedProofBody? (split : OwnedProofBodySplit)
+    : Option OwnedProofBodySplit := do
+  if split.before.tokens.back?.map (·.lexeme) != some ":=" then
+    none
+  let .node bodyKind bodyChildren := split.body | none
+  let .raw rawBodyKind := bodyKind | none
+  if rawBodyKind != `Lean.Parser.Term.byTactic
+      && rawBodyKind != `Lean.Parser.Term.byTactic' then
+    none
+  let proofIndex ←
+    bodyChildren.findIdx?
+      fun
+      | .node (.proofBody _) _ => true
+      | _ => false
+  let proofBody ← bodyChildren[proofIndex]?
+  if proofBody.containsIntrinsicTacticLayoutOwner then
+    none
+  let bodySplit :=
+    splitNodeAroundChild bodyKind bodyChildren proofIndex
+      { before := .missing, body := proofBody, after := .missing }
+  if bodySplit.after != .missing then
+    none
+  some
+    {
+      before := .node .suffixGroup #[split.before, bodySplit.before]
+      body := proofBody
+      after := split.after
+    }
 
 private partial def splitTrailingOwnedProofBodyCore?
     (permitSimpleProof allowSimpleProof : Bool)
@@ -512,17 +550,31 @@ private def annotateTacticNode
         isSpacedApplication)
       children
   else
-    match splitTrailingOwnedProofBody? (.node (.raw `null) children)
-            isSpacedApplication with
-    | some { before := .node _ shellChildren, body, after } =>
-        let shell :=
-          if isSpacedApplication then
-            .node (.tactic kind summary.containsSequence false false true) shellChildren
-          else if shellChildren.any containsLowPriorityInfixRhs then
-            .node .parserOwnedHeader shellChildren
-          else
-            .node (.tactic kind summary.containsSequence false false false) shellChildren
-        .node .suffixGroup #[shell, body, after]
+    let split? :=
+      splitTrailingOwnedProofBody? (.node (.raw `null) children) isSpacedApplication
+    match split? with
+    | some split =>
+        let (groupKind, split) :=
+          match exposeAssignedProofBody? split with
+          | some assigned => (NodeKind.tacticAssignmentProof, assigned)
+          | none => (NodeKind.suffixGroup, split)
+        match split.before with
+        | .node _ shellChildren =>
+            let shell :=
+              if isSpacedApplication then
+                .node (.tactic kind summary.containsSequence false false true)
+                  shellChildren
+              else if shellChildren.any containsLowPriorityInfixRhs then
+                .node .parserOwnedHeader shellChildren
+              else
+                .node (.tactic kind summary.containsSequence false false false)
+                  shellChildren
+            .node groupKind #[shell, split.body, split.after]
+        | _ =>
+            .node
+              (.tactic kind summary.containsSequence false summary.containsOwner
+                isSpacedApplication)
+              children
     | _ =>
         .node
           (.tactic kind summary.containsSequence false summary.containsOwner
