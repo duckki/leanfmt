@@ -2253,9 +2253,17 @@ mutual
         renderSegment childState childSegment
           (some { childPlan with breakPoints := childBreakPoints })
     let rendered :=
+      let overflowCount := renderedOverflowCount childState rendered
+      let suffixOverflowsPreservedProof :=
+        originalPlan?.any
+          fun plan =>
+            plan.policy.content == .proof
+            && renderedOutputOverflowCount childState rendered == 0
+            && 0 < overflowCount
       if emitOriginal
-          && OriginalTree.canUseStructuralOverflowFallback child
-          && 0 < renderedOverflowCount childState rendered then
+          && (OriginalTree.canUseStructuralOverflowFallback child
+              || suffixOverflowsPreservedProof)
+          && 0 < overflowCount then
         let structural := renderSegmentByPlan childState childSegment childPlan
         preferCandidateWithFewerOverflows childState rendered structural
       else

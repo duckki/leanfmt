@@ -1371,6 +1371,11 @@ cannot fit with its tactic is retained as a logically indented overflow. An
 authored break can remain only when the surrounding proof is emitted as a
 protected source-layout island.
 
+When attached closing delimiters or a projection member make the terminal line of a
+preserved proof overflow, a parser-identified tactic application may use its ordinary
+argument breaks. The closing suffix stays attached to the final argument line instead
+of occupying a line by itself.
+
 An attached proof suffix uses the same fit decision after its owner has been
 laid out. Thus `<| by simp` remains together when that final line fits, while
 an overflowing proof breaks after `by` and indents from the operand's base.

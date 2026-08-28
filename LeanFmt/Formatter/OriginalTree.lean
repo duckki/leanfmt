@@ -750,6 +750,7 @@ private partial def wrapsBracketedCollection : SyntaxTree.Tree → Bool
 
 def canUseStructuralOverflowFallback : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _ => true
+  | .node (.tactic _ _ _ _ true) _ => true
   | tree => classify? tree == some .mathlibTactic && wrapsBracketedCollection tree
 
 def canUseStructuralLayoutAfterParentMove : SyntaxTree.Tree → Bool

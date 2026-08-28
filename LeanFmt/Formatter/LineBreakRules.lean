@@ -232,12 +232,15 @@ def leadingBreak? (segment : Segment) (index indentLevels : Nat) : Option BreakP
   else
     none
 
+def nonemptyChildIndexes (segment : Segment) : List Nat :=
+  segment.indexes.filter
+    fun index => (segment.child? index >>= SyntaxTree.Tree.firstToken?).isSome
+
 def childBoundaryBreaks (segment : Segment) (indentLevels : Nat) : List BreakPoint :=
-  match segment.children? with
-  | none => []
-  | some children =>
-      (List.range (children.size - 1)).filterMap
-        fun offset => boundaryBreak? segment (offset + 1) indentLevels
+  match nonemptyChildIndexes segment with
+  | [] | [_] => []
+  | _ :: rest =>
+      rest.filterMap fun index => boundaryBreak? segment index indentLevels
 
 -----------------------------------------------------------------------------------------
 -- Tree/Token utilities
@@ -382,13 +385,6 @@ def previousContentIndex? (segment : Segment) (index : Nat) : Option Nat :=
       else
         found)
     none
-
-def nonemptyChildIndexes (segment : Segment) : List Nat :=
-  segment.indexes.filter
-    fun index =>
-      match segment.child? index with
-      | some child => treeHasContent child
-      | none => false
 
 def tokenChildIndexes (segment : Segment) : List Nat :=
   segment.indexes.filter
@@ -3648,16 +3644,6 @@ def namedDiscriminantRule : LineBreakRule :=
     breakPoints := fun _ segment => [boundaryBreak? segment 1 0].filterMap id
   }
 
-def projectedParenClosingBreaks (context : RuleContext) (segment : Segment)
-    : List BreakPoint :=
-  if parentIsNodeKind context (.infixChain `Lean.Parser.Term.proj)
-      && treeContainsProofTree segment.parent then
-    match (nonemptyChildIndexes segment).getLast? with
-    | some index => [boundaryBreak? segment index 0].filterMap id
-    | none => []
-  else
-    []
-
 def dotIdentRule : LineBreakRule :=
   {
     name := "dotIdent"
@@ -3673,18 +3659,12 @@ def interpolatedStringRule : LineBreakRule :=
 def parenRule : LineBreakRule :=
   {
     name := "paren"
-    flow :=
-      fun context segment =>
-        !(patternAliasParenBreaks context segment).isEmpty
-        || !(projectedParenClosingBreaks context segment).isEmpty
+    flow := fun context segment => !(patternAliasParenBreaks context segment).isEmpty
     inheritBase :=
       fun context _ =>
         parentIsRawKind context `Lean.Parser.Term.namedPattern
         || context.usesIndexedInfixRhsBase
-    breakPoints :=
-      fun context segment =>
-        patternAliasParenBreaks context segment
-        ++ projectedParenClosingBreaks context segment
+    breakPoints := patternAliasParenBreaks
   }
 
 /-! ### Infix and control-flow rule values -/

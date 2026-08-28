@@ -916,6 +916,10 @@ are not suffix-eligible. The suffix classifiers live with line-break rules; the 
 only measures with those classifications and the same whitespace policy used by actual
 emission. Tight optional-access `?` participates in that measurement, so a following
 defaulting call or projection can expose an earlier application break before overflowing.
+A preserved proof island retries structurally only when its attached suffix creates an
+overflow that the preserved proof did not have. Parser-identified spaced tactic
+applications may participate in that retry, allowing their ordinary application
+breakpoints to leave room for closing delimiters and projection members.
 A regrouped proof body stops inherited suffix measurement after its `by`
 introducer; the proof renderer may still keep a fitting first tactic, such as `classical`
 or `calc`, on that line. When measurement stops before a token or rule boundary,

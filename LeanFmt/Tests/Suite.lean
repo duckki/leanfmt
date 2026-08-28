@@ -160,9 +160,12 @@ def assertUnifHintChildrenRegrouped : IO Unit := do
   let constraints :=
     SyntaxTree.Tree.node (SyntaxTree.NodeKind.raw `null)
       #[
-        .node (.raw `Lean.unifConstraintElem) #[],
-        .node (.raw `Lean.unifConstraintElem) #[],
-        .node (.raw `Lean.unifConstraintElem) #[]
+        .node (.raw `Lean.unifConstraintElem)
+          #[.leaf (SyntaxTree.tokenOfNone .ident .anonymous "first")],
+        .node (.raw `Lean.unifConstraintElem)
+          #[.leaf (SyntaxTree.tokenOfNone .ident .anonymous "second")],
+        .node (.raw `Lean.unifConstraintElem)
+          #[.leaf (SyntaxTree.tokenOfNone .ident .anonymous "third")]
       ]
   let raw :=
     SyntaxTree.Tree.node
@@ -2334,13 +2337,14 @@ def assertProofIslandFitIncludesParentSuffix (env : Lean.Environment) : IO Unit 
     ++ "      Quiver.Hom.op_inj\n"
     ++ "        (Cofork.IsColimit.hom_ext h\n"
     ++ "          (by\n"
-    ++ "            exact veryLongQualifiedIdentifierNameThatNearlyFillsTheAvailableSourceLinexxxxxxxxx hb)))\n"
+    ++ "            exact veryLongQualifiedIdentifierNameThatNearlyFillsTheAvailableSourceLinexxxxxxxxx\n"
+    ++ "              hb)))\n"
   let formatted ←
     Formatter.formatSourceWithEnv env source "fitting-proof-island-suffix.lean"
       { lineWidth := 100 }
   assertEq "moved proof island uses structural application breaks" expected formatted
-  assertTrue "unbreakable nested proof lines may overflow structurally"
-    (!Formatter.linesFit formatted 100)
+  assertTrue "a moved proof island breaks its tactic application before overflowing"
+    (Formatter.linesFit formatted 100)
 
 def assertQuotationIslandRetainsFittingSourceIndent (env : Lean.Environment)
     : IO Unit := do
@@ -2600,8 +2604,8 @@ def assertProtectedBodiesUseStructuralIndentation (env : Lean.Environment) : IO 
     ++ "          (by\n"
     ++ "            intro cached h\n"
     ++ "            cases h\n"
-    ++ "            exact FieldCacheSourceAligned.object previousSource fields extraArgument)\n"
-    ++ "        ).internallyAligned\n"
+    ++ "            exact FieldCacheSourceAligned.object previousSource fields\n"
+    ++ "              extraArgument)).internallyAligned\n"
     ++ "\n"
     ++ "def nestedElseProof (n : Nat) : Nat :=\n"
     ++ "  id\n"
@@ -4316,6 +4320,45 @@ def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit
   assertTrue "tactic proof argument formatting preserves code"
     (← codePreservedIgnoringWhitespace env proofArgumentsSource
         proofArgumentsResult.formatted)
+
+  let nestedProofArgumentsSource :=
+    "theorem tacticWithNestedProofArguments : True := by\n"
+    ++ "  exact\n"
+    ++ "    completeValue_nonNull_append_result_aligned_of_inner schema resolvers\n"
+    ++ "      variableValues depth inner resolved prefixFields later\n"
+    ++ "      (ih depth resolved prefixFields later\n"
+    ++ "        (by\n"
+    ++ "          intro childDepth runtimeType identity hlt hcontains hincludes\n"
+    ++ "          exact hprefixChildren childDepth runtimeType identity hlt\n"
+    ++ "            hcontains (by simpa using hincludes))\n"
+    ++ "        hobjects\n"
+    ++ "        (by\n"
+    ++ "          intro childDepth runtimeType identity hlt hcontains hincludes\n"
+    ++ "          exact hchildren childDepth runtimeType identity hlt hcontains\n"
+    ++ "            (by simpa using hincludes)))\n"
+  let nestedProofArgumentsExpected :=
+    "theorem tacticWithNestedProofArguments : True := by\n"
+    ++ "  exact completeValue_nonNull_append_result_aligned_of_inner schema resolvers\n"
+    ++ "    variableValues depth inner resolved prefixFields later\n"
+    ++ "    (ih depth resolved prefixFields later\n"
+    ++ "      (by\n"
+    ++ "        intro childDepth runtimeType identity hlt hcontains hincludes\n"
+    ++ "        exact hprefixChildren childDepth runtimeType identity hlt\n"
+    ++ "          hcontains (by simpa using hincludes))\n"
+    ++ "      hobjects\n"
+    ++ "      (by\n"
+    ++ "        intro childDepth runtimeType identity hlt hcontains hincludes\n"
+    ++ "        exact hchildren childDepth runtimeType identity hlt hcontains (by simpa using hincludes)))\n"
+  let nestedProofArgumentsResult ←
+    Formatter.formatSourceWithEnvDetailed env nestedProofArgumentsSource
+      "tactic-nested-proof-arguments.lean" { lineWidth := 100 }
+  assertTrue "nested tactic proof arguments do not fall back"
+    (!nestedProofArgumentsResult.fellBack)
+  assertEq "closing delimiters stay attached after nested tactic applications"
+    nestedProofArgumentsExpected nestedProofArgumentsResult.formatted
+  assertTrue "nested tactic proof argument formatting preserves code"
+    (← codePreservedIgnoringWhitespace env nestedProofArgumentsSource
+        nestedProofArgumentsResult.formatted)
 
   let interleavedProofArgumentsSource :=
     "theorem tacticWithInterleavedProofArguments : True := by\n"
