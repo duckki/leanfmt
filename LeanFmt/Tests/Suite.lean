@@ -5683,6 +5683,28 @@ def assertLongDeclarationNamesBreakConsistently (env : Lean.Environment) : IO Un
     Formatter.formatSourceWithEnv env formatted "long-declaration-names-formatted.lean"
   assertEq "long declaration name formatting is idempotent" formatted formattedAgain
 
+def assertDeclarationUniverseSuffixStaysAttachedAcrossPasses (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "theorem CliffordAlgebra.not_forall_algebraMap_injective.{v} :\n"
+    ++ "    -- TODO: make `R` universe polymorphic\n"
+    ++ "    ¬∀ (R : Type) (M : Type v) [CommRing R] [AddCommGroup M] [Module R M]\n"
+    ++ "        (Q : QuadraticForm R M),\n"
+    ++ "      Function.Injective (algebraMap R <| CliffordAlgebra Q) := by\n"
+    ++ "  trivial\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "declaration-universe-suffix.lean"
+  assertTrue "declaration universe suffix does not fall back" (!result.fellBack)
+  assertTextContains "declaration universe suffix stays attached to its name"
+    result.formatted "CliffordAlgebra.not_forall_algebraMap_injective.{v}\n"
+  assertTrue "declaration universe suffix formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "declaration-universe-suffix-formatted.lean"
+  assertEq "declaration universe suffix formatting is idempotent"
+    result.formatted formattedAgain
+
 def assertFittingTheoremNameStaysWithKeyword (env : Lean.Environment) : IO Unit := do
   let source :=
     "theorem queue_expectedScheduleQueueCompletionStack_enqueueExpectedSegment_eq_push\n"
@@ -17222,6 +17244,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertMovedDocumentedDoLetRecRebasesCommentedArms env
   assertBasicDeclarationBreak env
   assertLongDeclarationNamesBreakConsistently env
+  assertDeclarationUniverseSuffixStaysAttachedAcrossPasses env
   assertFittingTheoremNameStaysWithKeyword env
   assertTopLevelAnnotationsBreakConsistently env
   assertNotationValueBreaksAfterArrow env

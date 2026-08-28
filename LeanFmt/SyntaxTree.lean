@@ -1628,6 +1628,15 @@ def flattenDeclarationIdentifierChild : Tree → Array Tree
   | child => #[child]
 
 def regroupDeclarationIdentifierChildren (children : Array Tree) : Array Tree :=
+  let children :=
+    match children[0]?, children[1]? with
+    | some identifier, some universeSuffix =>
+        if universeSuffix.firstToken?.isSome then
+          #[Tree.node .suffixGroup #[identifier, universeSuffix]]
+          ++ children.extract 2 children.size
+        else
+          children
+    | _, _ => children
   children.flatMap flattenDeclarationIdentifierChild
 
 def regroupSeparatedDeclarationSignatureChildren (children : Array Tree) : Array Tree :=
