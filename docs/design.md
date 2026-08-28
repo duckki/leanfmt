@@ -1362,6 +1362,14 @@ apply veryLongProofFunction
 
 The same parser-context rule covers `exact`, `refine`, and extension tactics;
 structural proof operands remain governed by the existing proof-island rules.
+A final parenthesized proof whose tactic content occupies one source line may
+rejoin its `by` when the complete application fits:
+
+```lean
+exact Or.inl (by simp [hselected])
+```
+
+Authored multiline tactic content remains protected.
 A term-taking tactic remains attached to the first line of its operand. The
 operand then follows its own structural rules: an application head starts a new
 base for ordinary argument flow, while a lambda keeps its introducer with the

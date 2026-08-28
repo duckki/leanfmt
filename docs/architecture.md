@@ -920,6 +920,11 @@ A preserved proof island retries structurally only when its attached suffix crea
 overflow that the preserved proof did not have. Parser-identified spaced tactic
 applications may participate in that retry, allowing their ordinary application
 breakpoints to leave room for closing delimiters and projection members.
+A parser-identified spaced tactic locally groups the `by` introducer of a final
+parenthesized, one-line proof argument with its proof body. The surrounding application
+and delimiters remain intact, so fitting proofs compact while nonfitting arguments retain
+ordinary application indentation. Multiline proof content remains an original-layout
+island.
 A regrouped proof body stops inherited suffix measurement after its `by`
 introducer; the proof renderer may still keep a fitting first tactic, such as `classical`
 or `calc`, on that line. When measurement stops before a token or rule boundary,

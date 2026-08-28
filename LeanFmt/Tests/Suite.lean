@@ -4294,6 +4294,31 @@ def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit
   assertEq "a detached compact nested proof rejoins its by introducer"
     compactNestedProofExpected compactNestedProofResult.formatted
 
+  let compactAppliedProofSource :=
+    "theorem compactAppliedProof : True := by\n"
+    ++ "  intro h\n"
+    ++ "  exact Or.inl (by\n"
+    ++ "    simp [selectedObservableFieldSpineTailForRuntime, hselected])\n"
+  let compactAppliedProofExpected :=
+    "theorem compactAppliedProof : True := by\n"
+    ++ "  intro h\n"
+    ++ "  exact Or.inl (by simp [selectedObservableFieldSpineTailForRuntime, hselected])\n"
+  let compactAppliedProofResult ←
+    Formatter.formatSourceWithEnvDetailed env compactAppliedProofSource
+      "compact-applied-proof.lean" { lineWidth := 100 }
+  assertTrue "a compact applied proof does not fall back"
+    (!compactAppliedProofResult.fellBack)
+  assertEq "a compact final proof argument rejoins its application head"
+    compactAppliedProofExpected compactAppliedProofResult.formatted
+  assertTrue "a compact applied proof preserves code"
+    (← codePreservedIgnoringWhitespace env compactAppliedProofSource
+        compactAppliedProofResult.formatted)
+  let compactAppliedProofAgain ←
+    Formatter.formatSourceWithEnv env compactAppliedProofResult.formatted
+      "compact-applied-proof-formatted.lean" { lineWidth := 100 }
+  assertEq "a compact final proof argument is idempotent"
+    compactAppliedProofResult.formatted compactAppliedProofAgain
+
   let proofArgumentsSource :=
     "theorem tacticWithProofArguments : True := by\n"
     ++ "  exact mergeResponseField.induct responseMotive listMotive fieldsMotive fieldMotive (by\n"
@@ -15920,9 +15945,7 @@ def assertStructuralAttachmentPolicy (env : Lean.Environment) : IO Unit := do
     ++ "  cases n with\n"
     ++ "  | zero =>\n"
     ++ s!"      exact {unbreakableProofHead}\n"
-    ++ "        firstArgument\n"
-    ++ "        (by\n"
-    ++ "          exact True.intro)\n"
+    ++ "        firstArgument (by exact True.intro)\n"
     ++ "  | succ n => exact True.intro\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source

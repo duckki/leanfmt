@@ -358,6 +358,30 @@ partial def protectNestedTacticSequences : Tree → Tree
       .node kind (children.map protectNestedTacticSequences)
   | tree => tree
 
+private partial def tacticSequenceHasMultipleEntries : Tree → Bool
+  | .node (.tactic kind _ _ _ _) children
+  | .node (.raw kind) children =>
+      if isTacticSequenceKind kind then
+        children.any tacticSequenceHasMultipleEntries
+      else if kind == `null then
+        2 <= (children.filter fun child => (firstTacticToken? child).isSome).size
+      else
+        false
+  | _ => false
+
+def proofBodyHasMultipleTactics : Tree → Bool
+  | .node (.proofBody _) children => children.any tacticSequenceHasMultipleEntries
+  | _ => false
+
+private def hasInternalLineBreakTrivia (tree : Tree) : Bool :=
+  let rec loop : List Token → Bool
+    | left :: right :: rest =>
+        left.trailing.text.contains '\n'
+        || right.leading.text.contains '\n'
+        || loop (right :: rest)
+    | _ => false
+  loop tree.tokens.toList
+
 -- Expose a final proof body while keeping its introducer in the structural shell.
 private def isTrailingProofArgumentEnvelope : NodeKind → Bool
   | .suffixGroup
@@ -531,6 +555,48 @@ private def splitTrailingOwnedProofBody? (tree : Tree) (permitSimpleProof : Bool
     : Option OwnedProofBodySplit :=
   splitTrailingOwnedProofBodyCore? permitSimpleProof false tree
 
+private partial def groupSimpleTrailingProofArgument? : Tree → Option Tree
+  | .node kind children => do
+      if kind == .raw `Lean.Parser.Term.byTactic
+          || kind == .raw `Lean.Parser.Term.byTactic' then
+        let proofIndex ←
+          children.findIdx?
+            fun
+            | body@(.node (.proofBody containsOwner) _) =>
+                !containsOwner
+                && !body.proofBodyHasMultipleTactics
+                && !hasInternalLineBreakTrivia body
+            | _ => false
+        let proofBody ← children[proofIndex]?
+        let split :=
+          splitNodeAroundChild kind children proofIndex
+            { before := .missing, body := proofBody, after := .missing }
+        some <| .node .suffixGroup #[split.before, split.body, split.after]
+      else
+        let candidateIndexes :=
+          if kind == .application || kind == .raw `null then
+            match (List.range children.size).reverse.find?
+                    fun index =>
+                      children[index]?.any
+                        fun child => (firstTacticToken? child).isSome with
+            | some index => [index]
+            | none => []
+          else if isTrailingProofArgumentEnvelope kind then
+            List.range children.size |>.reverse
+          else
+            []
+        let (index, grouped) ←
+          candidateIndexes.foldl
+            (fun found index =>
+              found.orElse
+                fun _ => do
+                  let child ← children[index]?
+                  let grouped ← groupSimpleTrailingProofArgument? child
+                  some (index, grouped))
+            none
+        some <| .node kind (children.set! index grouped)
+  | _ => none
+
 private partial def containsLowPriorityInfixRhs : Tree -> Bool
   | .node .lowPriorityInfixRhs _ => true
   | .node _ children => children.any containsLowPriorityInfixRhs
@@ -583,6 +649,13 @@ private def annotateTacticNode
                 isSpacedApplication)
               children
     | _ =>
+        let children :=
+          if isSpacedApplication then
+            match groupSimpleTrailingProofArgument? (.node (.raw `null) children) with
+            | some (.node _ grouped) => grouped
+            | _ => children
+          else
+            children
         .node
           (.tactic kind summary.containsSequence false summary.containsOwner
             isSpacedApplication)

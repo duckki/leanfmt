@@ -1821,20 +1821,8 @@ def applicationArgumentStaysAttached
       && context.ancestors.any
           fun frame => frame.rawKind? == some `Lean.Parser.Command.initialize)
 
-private partial def tacticSequenceHasMultipleEntries : SyntaxTree.Tree → Bool
-  | .node (.tactic kind _ _ _ _) children
-  | .node (.raw kind) children =>
-      if SyntaxTree.Tree.isTacticSequenceKind kind then
-        children.any tacticSequenceHasMultipleEntries
-      else if kind == `null then
-        2 <= (children.filter fun child => child.firstToken?.isSome).size
-      else
-        false
-  | _ => false
-
-private def proofBodyHasMultipleTactics : SyntaxTree.Tree → Bool
-  | .node (.proofBody _) children => children.any tacticSequenceHasMultipleEntries
-  | _ => false
+private def proofBodyHasMultipleTactics : SyntaxTree.Tree → Bool :=
+  SyntaxTree.Tree.proofBodyHasMultipleTactics
 
 private partial def containsMultiTacticProofBody : SyntaxTree.Tree → Bool
   | tree@(.node (.proofBody _) _) => proofBodyHasMultipleTactics tree
