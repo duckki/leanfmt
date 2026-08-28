@@ -1228,7 +1228,7 @@ def assertCustomNotationBracketSpacing : IO Unit := do
   assertTrue "source-adjacent postfix bang rejects an intervening break"
     (!Formatter.LayoutPlan.preservesTightTokenBoundary postfixBangSegment { index := 1 })
   assertTrue "prefixed opening delimiters allow structural breaks after the opener"
-    (Formatter.LineBreakRules.suffixOpeningDelimiterLexeme "#[")
+    (SyntaxTree.lexemeEndsWithOpeningDelimiter "#[")
   let prefixedOpeningSegment :=
     Formatter.LineBreakRules.Segment.ofTree
     <| .node (.raw `null)
@@ -4334,6 +4334,33 @@ def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit
   assertTrue "interleaved tactic proof argument formatting preserves code"
     (← codePreservedIgnoringWhitespace env interleavedProofArgumentsSource
         interleavedProofArgumentsResult.formatted)
+
+  let leadingArgumentsBeforeProofsSource :=
+    "theorem tacticWithLeadingArgumentsBeforeProofs : True := by\n"
+    ++ "  simpa [enqueueExpectedScheduleItems] using\n"
+    ++ "    queue_enqueueExpectedScheduleItems_scheduleExpectedPendingChildWork\n"
+    ++ "      (ObjectRef := ObjectRef) schema variableValues work\n"
+    ++ "      ([] : ExpectedScheduleQueue ObjectRef) queue\n"
+    ++ "      (by simp [expectedScheduleQueueItemsNonempty])\n"
+    ++ "      (by simp [expectedScheduleQueueKeysDistinct])\n"
+  let leadingArgumentsBeforeProofsExpected :=
+    "theorem tacticWithLeadingArgumentsBeforeProofs : True := by\n"
+    ++ "  simpa [enqueueExpectedScheduleItems]\n"
+    ++ "    using queue_enqueueExpectedScheduleItems_scheduleExpectedPendingChildWork\n"
+    ++ "            (ObjectRef := ObjectRef) schema variableValues work\n"
+    ++ "            ([] : ExpectedScheduleQueue ObjectRef) queue\n"
+    ++ "            (by simp [expectedScheduleQueueItemsNonempty])\n"
+    ++ "            (by simp [expectedScheduleQueueKeysDistinct])\n"
+  let leadingArgumentsBeforeProofsResult ←
+    Formatter.formatSourceWithEnvDetailed env leadingArgumentsBeforeProofsSource
+      "tactic-leading-arguments-before-proofs.lean" { lineWidth := 90 }
+  assertTrue "leading tactic arguments before proofs do not fall back"
+    (!leadingArgumentsBeforeProofsResult.fellBack)
+  assertEq "a leading ascription moves intact to the application continuation"
+    leadingArgumentsBeforeProofsExpected leadingArgumentsBeforeProofsResult.formatted
+  assertTrue "leading tactic argument formatting preserves code"
+    (← codePreservedIgnoringWhitespace env leadingArgumentsBeforeProofsSource
+        leadingArgumentsBeforeProofsResult.formatted)
 
   let compactProofArguments :=
     "theorem compactProofArguments : True := by\n"

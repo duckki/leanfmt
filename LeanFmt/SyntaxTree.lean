@@ -176,6 +176,13 @@ def isExtensionTacticKindName (kindName : String) : Bool :=
 def lexemeEndsWithOpeningDelimiter (lexeme : String) : Bool :=
   ["(", "[", "{", "⟨", "⟪", "‖"].any fun suffix => lexeme.endsWith suffix
 
+def Token.isOpeningDelimiter (token : Token) : Bool :=
+  token.role == .atom && lexemeEndsWithOpeningDelimiter token.lexeme
+
+def Token.isClosingDelimiter (token : Token) : Bool :=
+  token.role == .atom
+  && [")", "]", "}", "⟩", "⟫", "‖"].any fun delimiter => token.lexeme == delimiter
+
 namespace Tree
 
 private partial def appendTokens (tokens : Array Token) : Tree → Array Token
@@ -698,6 +705,18 @@ partial def lastToken? : Tree → Option Token
   | Tree.node _ children =>
       children.findSomeRev? lastToken?
 
+def isParenthesized (tree : Tree) : Bool :=
+  match tree.firstToken?, tree.lastToken? with
+  | some opening, some closing =>
+      opening.role == .atom
+      && opening.lexeme == "("
+      && closing.role == .atom
+      && closing.lexeme == ")"
+  | _, _ => false
+
+def startsWithOpeningDelimiter (tree : Tree) : Bool :=
+  tree.firstToken?.any Token.isOpeningDelimiter
+
 partial def extractLeadingLexeme? (lexeme : String) : Tree → Option (Tree × Tree)
   | .leaf token =>
       if token.lexeme == lexeme then some (.leaf token, .missing) else none
@@ -730,6 +749,9 @@ partial def containsNodeKind (target : NodeKind) : Tree → Bool
   | Tree.leaf _ => false
   | Tree.node kind children =>
       kind == target || children.any (containsNodeKind target)
+
+def isParenthesizedTypeAscription (tree : Tree) : Bool :=
+  tree.isParenthesized && tree.containsNodeKind (.raw `Lean.Parser.Term.typeAscription)
 
 partial def firstNodeChildCount? (target : NodeKind) : Tree → Option Nat
   | Tree.missing => none

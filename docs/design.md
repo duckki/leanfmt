@@ -933,6 +933,10 @@ exact inductionPrinciple motives
     exact secondCase)
 ```
 
+A parenthesized type ascription after the first parenthesized argument in the
+leading run retains its peer boundary. The ascription therefore moves intact
+instead of using its internal break first.
+
 A multiline named argument keeps its closing parenthesis attached to the final
 line of the value:
 

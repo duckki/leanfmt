@@ -490,19 +490,10 @@ def suffixKeywordLexeme (lexeme : String) : Bool :=
       "else"
     ]
 
-def suffixOpeningDelimiterLexeme (lexeme : String) : Bool :=
-  SyntaxTree.lexemeEndsWithOpeningDelimiter lexeme
-
-def treeStartsWithOpeningDelimiter (tree : SyntaxTree.Tree) : Bool :=
-  tree.firstToken?.any fun token => suffixOpeningDelimiterLexeme token.lexeme
-
-def suffixClosingDelimiterLexeme (lexeme : String) : Bool :=
-  lexemeIn lexeme [")", "]", "}", "⟩", "⟫", "‖"]
-
-def suffixDelimiterLexeme (lexeme : String) : Bool :=
-  suffixOpeningDelimiterLexeme lexeme
-  || suffixClosingDelimiterLexeme lexeme
-  || lexemeIn lexeme [",", ";", "?"]
+def suffixDelimiterToken (token : SyntaxTree.Token) : Bool :=
+  token.isOpeningDelimiter
+  || token.isClosingDelimiter
+  || lexemeIn token.lexeme [",", ";", "?"]
 
 def suffixOperatorLexeme (lexeme : String) : Bool :=
   lexemeIn lexeme
@@ -540,7 +531,7 @@ def suffixOperatorLexeme (lexeme : String) : Bool :=
 
 def suffixEligibleToken (token : SyntaxTree.Token) : Bool :=
   suffixKeywordLexeme token.lexeme
-  || suffixDelimiterLexeme token.lexeme
+  || suffixDelimiterToken token
   || suffixOperatorLexeme token.lexeme
 
 inductive SuffixTokenAction where
@@ -1490,8 +1481,8 @@ def tacticSequenceItemBreaks (context : RuleContext) (segment : Segment)
     | _ :: rest =>
         rest.filterMap
           fun index =>
-            if (segment.child? index).bind treeFirstLexeme?
-                |>.any suffixClosingDelimiterLexeme then
+            if (segment.child? index).bind SyntaxTree.Tree.firstToken?
+                |>.any SyntaxTree.Token.isClosingDelimiter then
               none
             else
               boundaryBreak? segment index 0
@@ -1816,7 +1807,7 @@ def exportBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint 
     | some breakPoint => [breakPoint]
     | none => []
   let closeBreak :=
-    match segment.indexes.find? fun index => childStartsWithLexeme segment index ")" with
+    match (nonemptyChildIndexes segment).getLast? with
     | some index =>
         match boundaryBreak? segment index 0 with
         | some breakPoint => [breakPoint]
@@ -1854,8 +1845,15 @@ private partial def containsMultiTacticProofBody : SyntaxTree.Tree → Bool
   | .node _ children => children.any containsMultiTacticProofBody
   | _ => false
 
+def applicationPeerParenthesizedArgument (segment : Segment) (index : Nat) : Bool :=
+  (segment.child? index).any SyntaxTree.Tree.isParenthesized
+
+def applicationPeerTypeAscriptionArgument (segment : Segment) (index : Nat) : Bool :=
+  (segment.child? index).any SyntaxTree.Tree.isParenthesizedTypeAscription
+
 def applicationPeerProofArgument (segment : Segment) (index : Nat) : Bool :=
-  childStartsWithLexeme segment index "(" && childHasNestedProofBody segment index
+  applicationPeerParenthesizedArgument segment index
+  && childHasNestedProofBody segment index
 
 def applicationBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   let patternFunBreaks :=
@@ -1870,9 +1868,16 @@ def applicationBreaks (context : RuleContext) (segment : Segment) : List BreakPo
       argumentBreaks.filter
         fun breakPoint => applicationPeerProofArgument segment breakPoint.index
     if 2 <= proofArgumentBreaks.length then
+      let firstParenthesizedIndex? :=
+        (argumentBreaks.find?
+          fun breakPoint =>
+            applicationPeerParenthesizedArgument segment breakPoint.index)
+        |>.map (·.index)
       argumentBreaks.filter
         fun breakPoint =>
           applicationPeerProofArgument segment breakPoint.index
+          || (applicationPeerTypeAscriptionArgument segment breakPoint.index
+              && firstParenthesizedIndex? != some breakPoint.index)
           || (previousContentIndex? segment breakPoint.index).any
               fun previousIndex => applicationPeerProofArgument segment previousIndex
     else
@@ -3647,7 +3652,9 @@ def projectedParenClosingBreaks (context : RuleContext) (segment : Segment)
     : List BreakPoint :=
   if parentIsNodeKind context (.infixChain `Lean.Parser.Term.proj)
       && treeContainsProofTree segment.parent then
-    [breakBeforeLexeme? segment ")" 0].filterMap id
+    match (nonemptyChildIndexes segment).getLast? with
+    | some index => [boundaryBreak? segment index 0].filterMap id
+    | none => []
   else
     []
 

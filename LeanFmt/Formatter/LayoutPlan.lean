@@ -99,7 +99,7 @@ def preservesTightTokenBoundary
       && !SpaceRules.preservesTightDotSpacing left right
       && !SpaceRules.preservesTightQuotedNameSpacing left right
       && !(left.span.stop == right.span.start
-            && !LineBreakRules.suffixOpeningDelimiterLexeme left.lexeme
+            && !left.isOpeningDelimiter
             && SpaceRules.preservesTightPostfixSpacing right)
   | none => true
 
@@ -258,9 +258,9 @@ def treeHasUnbreakableFirstLine (source : String) (tree : SyntaxTree.Tree) (plan
   || treeStartsWithSourceBrokenUnbreakableHead source tree
 
 def suffixDelimiterDepthAfter (depth : Nat) (token : SyntaxTree.Token) : Nat :=
-  if LineBreakRules.suffixOpeningDelimiterLexeme token.lexeme then
+  if token.isOpeningDelimiter then
     depth + 1
-  else if LineBreakRules.suffixClosingDelimiterLexeme token.lexeme then
+  else if token.isClosingDelimiter then
     depth - 1
   else
     depth

@@ -1388,7 +1388,7 @@ def childStartsWithCommentedDelimiter
       match child.tokens.toList.filter (SyntaxTree.tokenComesFromSource source) with
       | opening :: next :: _ =>
           let boundary := SourceBoundary.betweenTokens source opening next
-          LineBreakRules.treeStartsWithOpeningDelimiter child
+          child.startsWithOpeningDelimiter
           && boundary.hasComment
           && boundary.hasLineStructure
       | _ => false
@@ -2145,8 +2145,7 @@ mutual
                     let singleTokenRecovery := child.singleToken?.isSome
                     let atomicRecovery := childPlan.isAtomic || singleTokenRecovery
                     let canUseSourceColumn :=
-                      atomicRecovery
-                      || LineBreakRules.treeStartsWithOpeningDelimiter child
+                      atomicRecovery || child.startsWithOpeningDelimiter
                     let parentRelativeColumn :=
                       sourceLayoutStart?.map (·.2)
                       |>.getD (state.layoutAnchor.shiftColumn sourceColumn)

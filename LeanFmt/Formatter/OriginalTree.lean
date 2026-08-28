@@ -264,7 +264,7 @@ private def bodyColumnAfterOpeningDelimiter?
     let prefixLength := currentLine.length - token.lexeme.length
     let precedingText :=
       SpaceRules.stripLineEndWhitespace <| (currentLine.take prefixLength).toString
-    if LineBreakRules.suffixOpeningDelimiterLexeme precedingText then
+    if SyntaxTree.lexemeEndsWithOpeningDelimiter precedingText then
       some (precedingText.length - 1 + indentationSpaces)
     else
       none
@@ -846,8 +846,7 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     && hasLineBreakTrivia
     && request.lastToken?.any
         fun token =>
-          LineBreakRules.suffixOpeningDelimiterLexeme token.lexeme
-          && request.currentLine.endsWith token.lexeme
+          token.isOpeningDelimiter && request.currentLine.endsWith token.lexeme
   let inlineMultilineLayoutIsland :=
     retainsInlineRelativeLayout
     && hasLineBreakTrivia
