@@ -381,7 +381,12 @@ end Example
 ```
 
 A module docstring is separated from the first declaration. Leading comments
-and declaration docstrings stay attached to the command they describe.
+and declaration docstrings stay attached to the command they describe. When a
+syntax form takes a doc comment as its own payload, an inline comment stays
+inline if the form fits; after a break, the comment and following body share the
+form's base indentation. A comment-bearing term form retains its source break
+before the following term and keeps the directive with its doc payload. This
+applies in command, tactic, and term positions.
 
 Multiline top-level declarations have a blank line between them and adjacent
 declarations. Short one-line declarations may remain grouped without blank

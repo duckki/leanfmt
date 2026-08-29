@@ -1513,7 +1513,20 @@ private def regroupSpacedApplication?
   let arguments := contentIndexes.drop 1 |>.filterMap fun index => children[index]?
   if generated && arguments.any directLeafAtom? then
     none
-  some <| .node .application (#[head] ++ arguments.toArray)
+  let arguments := arguments.toArray
+  let commentPayloadBody? : Option Tree := do
+    if generated || arguments.size < 2 then
+      none
+    let body ← arguments.back?
+    let headerArguments := arguments.extract 0 (arguments.size - 1)
+    if headerArguments.any
+        fun argument =>
+          argument.containsNodeKind (.raw `Lean.Parser.Command.docComment) then
+      some
+      <| .node .parserOwnedBody #[.node .suffixGroup (#[head] ++ headerArguments), body]
+    else
+      none
+  commentPayloadBody?.getD <| .node .application (#[head] ++ arguments)
 
 private def regroupPrefixedDeclaration? (children : Array Tree) : Option Tree := do
   if children.size != 2 then

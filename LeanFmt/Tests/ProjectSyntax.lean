@@ -23,6 +23,8 @@ elab (name := projectNoteCommand) "#project_note " (docComment)? : command =>
 elab (name := projectNoteTactic) "#project_note " (docComment)? : tactic =>
   pure ()
 
+syntax (name := projectNoteTerm) "#project_note " (docComment)? term : term
+
 namespace BigOperators
 
 syntax bigOpBinder := ident (" ∈ " term)?

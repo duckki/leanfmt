@@ -956,6 +956,51 @@ def assertStandaloneCommentsFollowLayoutOwnership (env : Lean.Environment) : IO 
 
 def assertInlineSyntaxCommentKeepsSurroundingIndent (env : Lean.Environment)
     : IO Unit := do
+  let fittingCommandSource := "#project_note /-- A short top-level note. -/\n"
+  let fittingCommandResult ←
+    Formatter.formatSourceWithEnvDetailed env fittingCommandSource
+      "fitting-top-level-doc-comment.lean"
+  assertTrue "a fitting top-level command doc comment does not fall back"
+    (!fittingCommandResult.fellBack)
+  assertEq "a fitting top-level command doc comment stays inline"
+    fittingCommandSource fittingCommandResult.formatted
+  let brokenCommandSource :=
+    "#project_note /-- A top-level note that fits by itself. -/\n"
+  let brokenCommandExpected :=
+    "#project_note\n" ++ "/-- A top-level note that fits by itself. -/\n"
+  let brokenCommandResult ←
+    Formatter.formatSourceWithEnvDetailed env brokenCommandSource
+      "broken-top-level-doc-comment.lean" { lineWidth := 50 }
+  assertTrue "a broken top-level command doc comment does not fall back"
+    (!brokenCommandResult.fellBack)
+  assertEq "a broken top-level command doc comment uses the command base"
+    brokenCommandExpected brokenCommandResult.formatted
+  let termSource :=
+    "def documentedTerm :=\n"
+    ++ "  #project_note /-- A term-level note that fits on its own line. -/\n"
+    ++ "  True\n"
+  let termExpected :=
+    "def documentedTerm :=\n"
+    ++ "  #project_note /-- A term-level note that fits on its own line. -/\n"
+    ++ "  True\n"
+  let termResult ←
+    Formatter.formatSourceWithEnvDetailed env termSource
+      "term-doc-comment-payload.lean" { lineWidth := 100 }
+  assertTrue "a term doc-comment payload does not fall back" (!termResult.fellBack)
+  assertEq "a term doc-comment header and body share their owner's base"
+    termExpected termResult.formatted
+  let retainedTermSource :=
+    "def retainedDocumentedTerm :=\n"
+    ++ "  #project_note /-- The note's first line stays with its directive.\n"
+    ++ "  Its continuation and the following term retain the owner's base. -/\n"
+    ++ "  True\n"
+  let retainedTermResult ←
+    Formatter.formatSourceWithEnvDetailed env retainedTermSource
+      "retained-term-doc-comment-payload.lean" { lineWidth := 100 }
+  assertTrue "a retained term doc-comment payload does not fall back"
+    (!retainedTermResult.fellBack)
+  assertEq "a comment-bearing term retains its source break before the body"
+    retainedTermSource retainedTermResult.formatted
   let source :=
     "example : True := by\n"
     ++ "  #project_note /-- The first line follows the syntax prefix.\n"
@@ -1001,16 +1046,16 @@ def assertInlineSyntaxCommentKeepsSurroundingIndent (env : Lean.Environment)
     ++ "-/\n"
   let detachedExpected :=
     "#project_note\n"
-    ++ "  /--\n"
-    ++ "  nightly note\n"
-    ++ "  Body lines move with the opening delimiter.\n"
-    ++ "  -/\n"
+    ++ "/--\n"
+    ++ "nightly note\n"
+    ++ "Body lines move with the opening delimiter.\n"
+    ++ "-/\n"
   let detachedResult ←
     Formatter.formatSourceWithEnvDetailed env detachedSource
       "detached-multiline-doc-comment.lean"
   assertTrue "detached multiline doc comment does not fall back"
     (!detachedResult.fellBack)
-  assertEq "detached multiline doc comment moves every physical line"
+  assertEq "detached top-level doc comment stays at the command base"
     detachedExpected detachedResult.formatted
   let movedInlineSource :=
     "#project_note /-- https://github.com/leanprover/lean4/pull/4096\n"
@@ -1018,15 +1063,15 @@ def assertInlineSyntaxCommentKeepsSurroundingIndent (env : Lean.Environment)
     ++ "-/\n"
   let movedInlineExpected :=
     "#project_note\n"
-    ++ "  /-- https://github.com/leanprover/lean4/pull/4096\n"
-    ++ "  the continuation starts at the command base\n"
-    ++ "  -/\n"
+    ++ "/-- https://github.com/leanprover/lean4/pull/4096\n"
+    ++ "the continuation starts at the command base\n"
+    ++ "-/\n"
   let movedInlineResult ←
     Formatter.formatSourceWithEnvDetailed env movedInlineSource
       "moved-inline-multiline-doc-comment.lean" { lineWidth := 50 }
   assertTrue "moved inline multiline doc comment does not fall back"
     (!movedInlineResult.fellBack)
-  assertEq "moved inline multiline doc comment rebases its continuation margin"
+  assertEq "a broken top-level doc comment rebases to the command base"
     movedInlineExpected movedInlineResult.formatted
   assertTrue "moved inline multiline doc comment preserves code"
     (← codePreservedIgnoringWhitespace env movedInlineSource movedInlineResult.formatted)

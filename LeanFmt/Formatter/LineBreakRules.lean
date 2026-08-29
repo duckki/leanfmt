@@ -685,12 +685,24 @@ def defaultPresentChildIndexes (segment : Segment) : List Nat :=
       | some child => defaultChildPresent child
       | none => false
 
+def directDocCommentPayloadIndex? (segment : Segment) : Option Nat :=
+  segment.indexes.find?
+    fun index =>
+      (segment.child? index).any SyntaxTree.isDocCommentContainer
+      && (previousContentIndex? segment index).isSome
+
+def defaultChildIndentLevels (segment : Segment) (index : Nat) : Nat :=
+  match directDocCommentPayloadIndex? segment with
+  | some payloadIndex => if payloadIndex <= index then 0 else 1
+  | none => 1
+
 def defaultChildBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   match defaultPresentChildIndexes segment with
   | [] => []
   | [_] => []
   | _ :: rest =>
-      rest.filterMap fun index => boundaryBreak? segment index 1
+      rest.filterMap
+        fun index => boundaryBreak? segment index (defaultChildIndentLevels segment index)
 
 def defaultBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   let infixBreaks := defaultInfixBreaks context segment
@@ -3063,9 +3075,15 @@ def firstMatchAlternativesIndex? (segment : Segment) : Option Nat :=
   | some index => some index
   | none => firstChildRawKind? segment `Lean.Parser.Term.matchExprAlts
 
+def parserOwnedBodyHasCommentHeader (segment : Segment) : Bool :=
+  (segment.child? 0).any
+    fun header =>
+      header.containsNodeKind (.raw `Lean.Parser.Command.docComment)
+
 def parserOwnedBodyBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
-  [boundaryBreak? segment 1 1].filterMap id
+  let indentLevels := if parserOwnedBodyHasCommentHeader segment then 0 else 1
+  [boundaryBreak? segment 1 indentLevels].filterMap id
 
 def parserOwnedHeaderBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
@@ -3861,6 +3879,7 @@ def parserOwnedBodyRule : LineBreakRule :=
         match segment.child? 1 with
         | some (.node (.proofBody _) _) => true
         | _ => false
+    useExistingBreaks := fun _ segment => parserOwnedBodyHasCommentHeader segment
     formatOriginalChildLeadingBoundary := fun _ _ index => index == 1
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
