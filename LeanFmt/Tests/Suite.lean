@@ -4843,6 +4843,111 @@ def assertMovedChildrenUseLogicalLayoutBases (env : Lean.Environment) : IO Unit 
     Formatter.formatSourceWithEnv env whereSource "moved-where-finally-layout-base.lean"
   assertEq "where finally uses the declaration base" whereExpected whereFormatted
 
+def assertStructuralBasesAndClosingDelimiters (env : Lean.Environment) : IO Unit := do
+  let declarationSource :=
+    "@[to_additive]\n"
+    ++ "instance (priority := 100) UniformContinuousConstSMul.instContinuousConstSMul\n"
+    ++ "                              [ExtremelyLongUniformContinuousConstSMulTypeclass M X] : ContinuousConstSMul M X := value\n"
+  let declarationExpected :=
+    "@[to_additive]\n"
+    ++ "instance (priority := 100) UniformContinuousConstSMul.instContinuousConstSMul\n"
+    ++ "    [ExtremelyLongUniformContinuousConstSMulTypeclass M X] : ContinuousConstSMul M X :=\n"
+    ++ "  value\n"
+  let declarationResult ←
+    Formatter.formatSourceWithEnvDetailed env declarationSource
+      "structural-declaration-parameter-base.lean" { lineWidth := 100 }
+  assertTrue "long instance parameter formatting does not fall back"
+    (!declarationResult.fellBack)
+  assertEq "long instance parameters use the declaration base"
+    declarationExpected declarationResult.formatted
+
+  let tacticSource :=
+    "theorem tacticStructuralBases : True := by\n"
+    ++ "  exact fun h ↦ hcd.ne h.1 (by simpa only [map_ne_zero] using! h.2)\n"
+    ++ "    (sdiff_ne_right.2 <| .inl ht).symm\n"
+    ++ "  exact if ha : F.aeval a = 0 then ⟨a, a_is_soln hnorm ha⟩\n"
+    ++ "  else by\n"
+    ++ "    exact ⟨soln_gen hnorm, eval_soln hnorm, soln_dist_to_a_lt_deriv hnorm ha, soln_deriv_norm hnorm⟩\n"
+  let tacticExpected :=
+    "theorem tacticStructuralBases : True := by\n"
+    ++ "  exact fun h ↦\n"
+    ++ "    hcd.ne h.1 (by simpa only [map_ne_zero] using! h.2) (sdiff_ne_right.2 <| .inl ht).symm\n"
+    ++ "  exact if ha : F.aeval a = 0 then\n"
+    ++ "    ⟨a, a_is_soln hnorm ha⟩\n"
+    ++ "  else by\n"
+    ++ "    exact ⟨soln_gen hnorm, eval_soln hnorm, soln_dist_to_a_lt_deriv hnorm ha, soln_deriv_norm hnorm⟩\n"
+  let tacticResult ←
+    Formatter.formatSourceWithEnvDetailed env tacticSource
+      "tactic-structural-layout-bases.lean" { lineWidth := 100 }
+  assertTrue "tactic structural base formatting does not fall back"
+    (!tacticResult.fellBack)
+  assertEq "tactic operands do not inherit the rendered tactic-head column"
+    tacticExpected tacticResult.formatted
+
+  let equationSource :=
+    "structure SymmetricOperation where\n"
+    ++ "  symm : Nat → Nat → Nat → Nat\n"
+    ++ "\n"
+    ++ "def symmetricOperation : SymmetricOperation where\n"
+    ++ "  symm _ _\n"
+    ++ "        | 0 => firstArgumentWithEnoughCharacters\n"
+    ++ "        | _ + 1 => secondArgumentWithEnoughCharacters\n"
+  let equationExpected :=
+    "structure SymmetricOperation where\n"
+    ++ "  symm : Nat → Nat → Nat → Nat\n"
+    ++ "\n"
+    ++ "def symmetricOperation : SymmetricOperation where\n"
+    ++ "  symm _ _\n"
+    ++ "    | 0 => firstArgumentWithEnoughCharacters\n"
+    ++ "    | _ + 1 => secondArgumentWithEnoughCharacters\n"
+  let equationResult ←
+    Formatter.formatSourceWithEnvDetailed env equationSource
+      "structure-field-equation-base.lean" { lineWidth := 78 }
+  assertTrue "structure field equation formatting does not fall back"
+    (!equationResult.fellBack)
+  assertEq "structure field equations use the field base"
+    equationExpected equationResult.formatted
+
+  let applicationSource :=
+    "def nestedApplicationStructuralBase :=\n"
+    ++ "  outerFunctionWithEnoughCharacters firstArgumentWithEnoughCharacters\n"
+    ++ "    (innerFunctionWithEnoughCharactersForBreaking firstInnerArgument secondInnerArgument)\n"
+  let applicationExpected :=
+    "def nestedApplicationStructuralBase :=\n"
+    ++ "  outerFunctionWithEnoughCharacters firstArgumentWithEnoughCharacters\n"
+    ++ "    (innerFunctionWithEnoughCharactersForBreaking firstInnerArgument\n"
+    ++ "      secondInnerArgument)\n"
+  let applicationResult ←
+    Formatter.formatSourceWithEnvDetailed env applicationSource
+      "nested-application-structural-base.lean" { lineWidth := 76 }
+  assertTrue "nested application structural formatting does not fall back"
+    (!applicationResult.fellBack)
+  assertEq "nested application arguments use their logical application base"
+    applicationExpected applicationResult.formatted
+
+  let closingSource :=
+    "theorem attachedClosingDelimiters : True := by\n"
+    ++ "  exact\n"
+    ++ "    congr($((FunctorToTypes.shrinkMap.{w} (Functor.whiskerRight τ (forget _))).naturality f) x)\n"
+    ++ "  exact\n"
+    ++ "    (sum_pos (by simp +contextual [lt_iff_le_and_ne, eq_comm]) <| by\n"
+    ++ "      simpa [ne_iff, filter_apply]).ne'\n"
+    ++ "  exact\n"
+    ++ "    Algebra.TensorProduct.mapRingHom (algebraMap R A)\n"
+    ++ "      (RingHomClass.toRingHom (Algebra.TensorProduct.includeRight (A := A)))\n"
+    ++ "      (RingHomClass.toRingHom (Algebra.TensorProduct.includeRight (A := A)))\n"
+    ++ "      proofOne proofTwo\n"
+  let closingExpected := closingSource
+  let closingResult ←
+    Formatter.formatSourceWithEnvDetailed env closingSource
+      "attached-closing-delimiter-families.lean" { lineWidth := 100 }
+  assertTrue "attached closing delimiter formatting does not fall back"
+    (!closingResult.fellBack)
+  assertEq "ordinary, projected, and named argument closers stay attached"
+    closingExpected closingResult.formatted
+  assertTrue "structural base and closing delimiter cases preserve code"
+    (← codePreservedIgnoringWhitespace env closingSource closingResult.formatted)
+
 def assertMovedInlineProofBodiesRemainParseable (env : Lean.Environment) : IO Unit := do
   let source :=
     "theorem nestedInlineProofs (left right : True) : True :=\n"
@@ -17266,6 +17371,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertMovedProofLayoutKeepsFittingContinuation env
   assertMovedProofBodiesKeepRelativeIndentation env
   assertMovedChildrenUseLogicalLayoutBases env
+  assertStructuralBasesAndClosingDelimiters env
   assertMovedInlineProofBodiesRemainParseable env
   assertMultilineProtectedApplicationArgumentsBreakFromParent env
   assertProofApplicationFollowsMovedInlineAnchor env

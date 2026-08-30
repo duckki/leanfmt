@@ -748,6 +748,10 @@ Rules and regroupings should preserve these cross-syntax relationships:
   When constructor documentation precedes `|`, the inductive rule assigns one base to
   the complete constructor and the constructor rule keeps both the documentation and
   marker on that base.
+- Transparent singleton wrappers around declaration identifiers inherit the declaration
+  base. Structure-field wrappers likewise inherit the field base, and the wrapper that
+  directly owns `structInstFieldEqns` owns the break before those equations. Rules do
+  not infer either base from the wrapper's incidental rendered column.
 - A semicolon suppresses the otherwise structural do-statement boundary when the joined
   sequence fits; width pressure returns the following statement to the owning do
   sequence's peer base.
@@ -811,6 +815,10 @@ to an indentation boundary. Flow rules retain the conservative logical base inst
 Child segment bases are derived from renderer state, not from token spelling. If a child
 rule says `inheritBase`, the surrounding segment base is reused. Otherwise the child base
 comes from the column where its first visible token will be emitted.
+
+Parser-described spaced tactic applications extend that inherited base through
+transparent lambda and conditional wrappers. Their nested bodies therefore use the
+application's logical base even when the wrapper begins after an inline tactic head.
 
 ### Tail indentation
 

@@ -911,9 +911,13 @@ def nullInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   || (segment.singleChild?.any
         fun (_, child) =>
           treeIsRawKind child `Lean.Elab.ConfigEval.configEntries)
+  || (segment.singleChild?.any
+        fun (_, child) =>
+          treeIsRawKind child `Lean.Parser.Command.declId)
   || parentIsBinderDefaultWrapper context
   || parentIsRawKind context `Lean.Parser.Command.extends
   || parentIsRawKind context `Lean.Parser.Term.structInstFields
+  || parentIsRawKind context `Lean.Parser.Term.structInstField
   || parentIsRawKind context `Lean.Parser.Term.letRecDecls
   || parentIsRawKind context `Lean.Parser.Term.letRecDecl
   || parentIsRawKind context `Lean.Parser.Tactic.cases
@@ -1290,11 +1294,21 @@ def structInstFieldBodyBreaks (_context : RuleContext) (segment : Segment)
   let equationBreak :=
     match segment.indexes.find?
             fun index =>
-              segment.child? index
-              |>.any (treeContainsRawKind `Lean.Parser.Term.structInstFieldEqns) with
+              childIsRawKind segment index `Lean.Parser.Term.structInstFieldEqns with
     | some equationIndex => [boundaryBreak? segment equationIndex 1].filterMap id
     | none => []
   assignmentBreak ++ equationBreak
+
+def nestedStructInstFieldEquationBreaks (context : RuleContext) (segment : Segment)
+    : List BreakPoint :=
+  if parentIsRawKind context `Lean.Parser.Term.structInstField then
+    match segment.indexes.find?
+            fun index =>
+              childIsRawKind segment index `Lean.Parser.Term.structInstFieldEqns with
+    | some equationIndex => [boundaryBreak? segment equationIndex 1].filterMap id
+    | none => []
+  else
+    []
 
 def delimitedItemIndexes (segment : Segment) : List Nat :=
   match nonemptyChildIndexes segment with
@@ -3364,6 +3378,7 @@ def nullBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   structureFieldBreaks context segment
   ++ structureParentBreaks context segment
   ++ structInstFieldBreaks context segment
+  ++ nestedStructInstFieldEquationBreaks context segment
   ++ inductiveAlternativeBreaks context segment
   ++ tacticAlternativeSequenceBreaks context segment
   ++ tacticSequenceItemBreaks context segment
@@ -3428,6 +3443,7 @@ def nullRule : LineBreakRule :=
         || !(assertNotExistsIdentifierBreaks context segment).isEmpty
         || !(exportItemBreaks context segment).isEmpty
         || !(infixAlternativeBreaks context segment).isEmpty
+        || !(nestedStructInstFieldEquationBreaks context segment).isEmpty
     inheritBase := nullInheritBase
     breakPoints := nullBreaks
   }
@@ -3578,7 +3594,8 @@ def transparentRule : LineBreakRule :=
     inheritBase :=
       fun context segment =>
         (segment.rawKind? == some `Lean.Parser.Term.fun
-          && context.usesIndexedInfixRhsBase)
+          && (context.usesIndexedInfixRhsBase
+              || spacedApplicationOwnsNestedBase context.ancestors))
         || segment.rawKind? == some `Lean.Parser.Command.structSimpleBinder
     formatOriginalChildLeadingBoundary :=
       fun _ segment index =>
@@ -3831,6 +3848,7 @@ def ifThenElseRule : LineBreakRule :=
     name := "ifThenElse"
     useExistingBreaks := fun _ _ => true
     startAlignment := fun _ _ => .preferred
+    inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
     roundUpBaseIndentation := true
     breakPoints := ifThenElseBreaks
   }
@@ -3840,6 +3858,7 @@ def dependentIfThenElseRule : LineBreakRule :=
     name := "dependentIfThenElse"
     useExistingBreaks := fun _ _ => true
     startAlignment := fun _ _ => .preferred
+    inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
     roundUpBaseIndentation := true
     breakPoints := dependentIfThenElseBreaks
   }
@@ -3849,6 +3868,7 @@ def ifLetThenElseRule : LineBreakRule :=
     name := "ifLetThenElse"
     useExistingBreaks := fun _ _ => true
     startAlignment := fun _ _ => .preferred
+    inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
     roundUpBaseIndentation := true
     breakPoints := ifLetThenElseBreaks
   }
@@ -3859,6 +3879,7 @@ def ifThenElseChainRule : LineBreakRule :=
     mandatory := ifThenElseChainMandatory
     useExistingBreaks := fun _ _ => true
     startAlignment := fun _ _ => .preferred
+    inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
     roundUpBaseIndentation := true
     breakPoints := ifThenElseChainBreaks
   }

@@ -9,14 +9,39 @@ Mathlib, leanfmt's first-class syntax-support targets. Missing rules in other
 external projects are useful inventory, but block validation only when they
 coincide with preservation, formatting, convergence, overflow, or build issues.
 
+## Open issues
+
+### Parser-owned suffixes and low-priority pipes
+
+Fitting suffixes such as `with`, `where`, `:= by`, `=> do`, and tactic argument
+heads can detach from their owner. A broken `<|` application can also leave `<|`
+on a line by itself even though neither adjacent boundary may break in that
+shape. Anonymous `have :` headers expose the same ownership gap.
+
+### Compact and protected layouts
+
+Fitting semicolon tactic sequences, `if` expressions, proof applications, and
+source-attached attributes can expand unnecessarily. Protected source-layout
+islands such as braced `all_goals` blocks must retain their relative shape while
+the surrounding base indentation changes.
+
 ## Progress
 
-### Checkpoint 24: release validation
+### Checkpoint 2: suffix and operator ownership
 
-The complete local gate and fresh GraphQL, quantum, Hex, and Mathlib validations
-pass. Every project builds cleanly after formatting, with no preservation,
-overflow, missing-rule, idempotency, or logical-layout blocker. Timings show no
-material formatter regression, so the version 0.4 release candidate is ready.
+Add focused regressions for parser-owned trailing clauses, tactic proof/value
+suffixes, anonymous `have` headers, and standalone `<|`. Generalize syntax-tree
+ownership and existing suffix behavior so line-break rules only describe legal
+boundaries. Validate locally and against the affected Mathlib files, then commit.
+
+### Checkpoint 3: compact and protected consistency
+
+Add focused regressions for fitting semicolon sequences, conditionals,
+applications, attributes, and protected braced tactic blocks. Reconcile fit
+selection with the existing compact-layout and original-island policies without
+weakening width or preservation diagnostics. Run the full local gate and light
+GraphQL, quantum, Hex, and Mathlib checkpoint validations, review performance and
+formatting changes, then commit.
 
 ## Validation standard
 

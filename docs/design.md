@@ -820,6 +820,17 @@ structure ResolverFixture (ObjectRef : Type := PUnit) where
       -> Option (ResolverValue ObjectRef)
 ```
 
+Structure fields defined by equations use the field indentation as their arm
+base. Parameters remain with the field name when they fit; a wrapped parser
+container does not make the arms align under their source column:
+
+```lean
+def symmetricOperation : SymmetricOperation where
+  symm _ _
+    | 0 => firstResult
+    | _ + 1 => secondResult
+```
+
 Inductive constructors also start on separate lines:
 
 ```lean
@@ -923,6 +934,11 @@ fitting on the current line. The application therefore breaks before that
 argument, including structured arguments such as `let`, `if`, `match`, and
 structure instances. No special-case preference between parent and child
 breaks is needed.
+
+When a tactic is parsed as a spaced application, a multiline lambda,
+conditional, or nested application uses the tactic application's structural
+base. It does not align beneath the final character of `exact`, `refine`, or a
+similar tactic head.
 
 Two or more parenthesized proof arguments use peer boundaries when the
 application does not fit. This keeps each proof attached to its parentheses
