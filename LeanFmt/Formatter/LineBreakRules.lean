@@ -3174,7 +3174,12 @@ def matchAltBreaks (_context : RuleContext) (segment : Segment) : List BreakPoin
     | none => []
 
 def matchExprAltBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
-  [leadingBreak? segment segment.start 0, boundaryBreak? segment 3 1].filterMap id
+  let bodyBreak :=
+    if attachedBodyStart segment 3 then
+      none
+    else
+      boundaryBreak? segment 3 1
+  [leadingBreak? segment segment.start 0, bodyBreak].filterMap id
 
 def doBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   match boundaryBreak? segment 1 (attachedBodyIndentLevels context) with

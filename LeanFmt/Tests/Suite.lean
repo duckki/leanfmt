@@ -3449,7 +3449,7 @@ def assertDoMatchExprAlternativesPreserveBranches (env : Lean.Environment) : IO 
   assertTrue "do match_expr alternatives preserve code"
     (← codePreservedIgnoringWhitespace env source formatted)
   assertTextContains "do match_expr branch body starts after arrow" formatted
-    "  | Matrix.vecCons _ n x xs =>\n    do\n      let tail ← matchExprExample xs\n"
+    "  | Matrix.vecCons _ n x xs => do\n    let tail ← matchExprExample xs\n"
   assertTextContains "do match_expr fallback branch stays separate"
     formatted "  | _ =>\n    return e\n"
   assertTextLacks "do match_expr alternatives do not merge" formatted "return tail | _"
@@ -7020,14 +7020,13 @@ def assertLowPriorityPipeKeepsStructurallyRenderedOperand (env : Lean.Environmen
   let showProofExpected :=
     "def pipeShowProof : True :=\n"
     ++ "  veryLongFunctionNameWithEnoughCharactersToForcePipeBreak\n"
-    ++ "  <|\n"
-    ++ "    show True by\n"
-    ++ "      exact True.intro\n"
+    ++ "  <| show True by\n"
+    ++ "    exact True.intro\n"
   let showProofResult ←
     Formatter.formatSourceWithEnvDetailed env showProofSource
       "low-priority-pipe-show-proof.lean" { lineWidth := 60 }
   assertTrue "a detached show proof does not fall back" (!showProofResult.fellBack)
-  assertEq "a detached show proof keeps its tactic body structural base"
+  assertEq "a moved show proof keeps its first line with the pipe"
     showProofExpected showProofResult.formatted
   assertTrue "a detached show proof preserves code"
     (← codePreservedIgnoringWhitespace env showProofSource showProofResult.formatted)
@@ -7063,7 +7062,7 @@ def assertLowPriorityPipeKeepsStructurallyRenderedOperand (env : Lean.Environmen
     "def pipeProtectedShow :=\n"
     ++ "  le_antisymm (Algebra.adjoin_le fun x hx ↦ show x ∈ Subalgebra.toSubmodule S from subset_span hx)\n"
     ++ "  <|\n"
-    ++ "    show Subalgebra.toSubmodule S ≤ Subalgebra.toSubmodule (Algebra.adjoin R ↑t) from fun x hx ↦\n"
+    ++ "    show Subalgebra.toSubmodule S ≤ Subalgebra.toSubmodule (Algebra.adjoin R ↑t) xxxx from fun x hx ↦\n"
     ++ "      span_le.mpr (fun _ hx ↦ Algebra.subset_adjoin hx)\n"
     ++ "        (show x ∈ span R ↑t by\n"
     ++ "          rw [ht]\n"
@@ -7080,7 +7079,7 @@ def assertLowPriorityPipeKeepsStructurallyRenderedOperand (env : Lean.Environmen
   let attachedProtectedSource :=
     "def pipeProtectedShow :=\n"
     ++ "  le_antisymm (Algebra.adjoin_le fun x hx ↦ show x ∈ Subalgebra.toSubmodule S from subset_span hx)\n"
-    ++ "  <| show Subalgebra.toSubmodule S ≤ Subalgebra.toSubmodule (Algebra.adjoin R ↑t) from fun x hx ↦\n"
+    ++ "  <| show Subalgebra.toSubmodule S ≤ Subalgebra.toSubmodule (Algebra.adjoin R ↑t) xxxx from fun x hx ↦\n"
     ++ "       span_le.mpr (fun _ hx ↦ Algebra.subset_adjoin hx)\n"
     ++ "         (show x ∈ span R ↑t by\n"
     ++ "           rw [ht]\n"
@@ -17117,6 +17116,77 @@ def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
   assertEq "an authored spaced-tactic break remains protected"
     tacticHeadExpected tacticHeadResult.formatted
 
+def assertParserOwnedSuffixAndPipeBoundaries (env : Lean.Environment) : IO Unit := do
+  let check (name source expected : String) (lineWidth : Nat := 100) : IO Unit := do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source s!"{name}.lean" { lineWidth }
+    assertTrue s!"{name} formatting does not fall back" (!result.fellBack)
+    assertEq s!"{name} keeps parser-owned boundaries attached" expected result.formatted
+    assertTrue s!"{name} formatting preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    let formattedAgain ←
+      Formatter.formatSourceWithEnv env result.formatted s!"{name}-formatted.lean"
+        { lineWidth }
+    assertEq s!"{name} formatting is idempotent" result.formatted formattedAgain
+
+  check "movable-low-priority-pipe-operand"
+    ("def movablePipeOperand : True :=\n"
+      ++ "  Subtype.ext\n"
+      ++ "  <| Prod.ext rfl\n"
+      ++ "  <|\n"
+      ++ "    show left = right by\n"
+      ++ "      exact proof\n")
+    ("def movablePipeOperand : True :=\n"
+      ++ "  Subtype.ext\n"
+      ++ "  <| Prod.ext rfl\n"
+      ++ "  <| show left = right by\n"
+      ++ "    exact proof\n")
+
+  check "prefixed-induction-suffix"
+    ("theorem prefixedInduction : True := by\n"
+      ++ "  classical induction values using List.induction with\n"
+      ++ "  | nil => simp\n"
+      ++ "  | cons value values ih => simp [ih]\n")
+    ("theorem prefixedInduction : True := by\n"
+      ++ "  classical induction values using List.induction with\n"
+      ++ "  | nil => simp\n"
+      ++ "  | cons value values ih => simp [ih]\n")
+
+  check "generated-match-do-suffix"
+    ("def generatedMatchDo := do\n"
+      ++ "  match_expr value with\n"
+      ++ "  | Constructor first second => do\n"
+      ++ "    pure first\n"
+      ++ "  | _ => throwError \"unsupported\"\n")
+    ("def generatedMatchDo := do\n"
+      ++ "  match_expr value with\n"
+      ++ "  | Constructor first second => do\n"
+      ++ "    pure first\n"
+      ++ "  | _ =>\n"
+      ++ "    throwError \"unsupported\"\n")
+
+  check "anonymous-have-colon"
+    ("theorem anonymousHaveColon : True := by\n"
+      ++ "  have :\n"
+      ++ "    ExtremelyLongPropositionName firstArgument secondArgument thirdArgument :=\n"
+      ++ "      proof\n"
+      ++ "  exact result\n")
+    ("theorem anonymousHaveColon : True := by\n"
+      ++ "  have :\n"
+      ++ "    ExtremelyLongPropositionName firstArgument secondArgument thirdArgument :=\n"
+      ++ "      proof\n"
+      ++ "  exact result\n")
+    72
+
+  check "simpa-only-bracket-suffix"
+    ("theorem simpaOnlyBracketSuffix : True := by\n"
+      ++ "  simpa only [firstNormalizationLemma, secondNormalizationLemma, thirdNormalizationLemma, fourthNormalizationLemma] using proof\n")
+    ("theorem simpaOnlyBracketSuffix : True := by\n"
+      ++ "  simpa only [firstNormalizationLemma, secondNormalizationLemma,\n"
+      ++ "    thirdNormalizationLemma, fourthNormalizationLemma]\n"
+      ++ "    using proof\n")
+    86
+
 def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
     : IO Unit := do
   let fallbackSource :=
@@ -17540,6 +17610,7 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertOwnedTerminalSuffixesStayAttached env
   assertStructuralHeadersOwnAttachedBodies env
   assertParserOwnedClauseBodies env
+  assertParserOwnedSuffixAndPipeBoundaries env
   assertFallbackAndConditionalSuffixesStayAttached env
   assertIfThenElseRuleBreaksBalancedShape env
   assertShortIfThenElseStaysFlatInEquationArm env

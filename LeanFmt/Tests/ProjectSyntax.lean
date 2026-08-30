@@ -1,4 +1,5 @@
 import Lean
+import Init.Tactics
 
 syntax (name := projectSyntax) "project_syntax" : term
 declare_syntax_cat projectClause

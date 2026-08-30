@@ -11,13 +11,6 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ## Open issues
 
-### Parser-owned suffixes and low-priority pipes
-
-Fitting suffixes such as `with`, `where`, `:= by`, `=> do`, and tactic argument
-heads can detach from their owner. A broken `<|` application can also leave `<|`
-on a line by itself even though neither adjacent boundary may break in that
-shape. Anonymous `have :` headers expose the same ownership gap.
-
 ### Compact and protected layouts
 
 Fitting semicolon tactic sequences, `if` expressions, proof applications, and
@@ -26,13 +19,6 @@ islands such as braced `all_goals` blocks must retain their relative shape while
 the surrounding base indentation changes.
 
 ## Progress
-
-### Checkpoint 2: suffix and operator ownership
-
-Add focused regressions for parser-owned trailing clauses, tactic proof/value
-suffixes, anonymous `have` headers, and standalone `<|`. Generalize syntax-tree
-ownership and existing suffix behavior so line-break rules only describe legal
-boundaries. Validate locally and against the affected Mathlib files, then commit.
 
 ### Checkpoint 3: compact and protected consistency
 

@@ -1966,6 +1966,21 @@ private def attachParserOwnedHeaderHead (children : Array Tree) : Array Tree :=
     (List.range children.size).filter
       fun index => children[index]?.any fun child => !child.tokens.isEmpty
   match contentIndexes with
+  | firstIndex :: modifierIndex :: argumentIndex :: _ =>
+      match children[firstIndex]?, children[modifierIndex]?, children[argumentIndex]? with
+      | some first, some modifier, some argument =>
+          if modifier.singleToken?.isSome && startsWithOpeningDelimiter argument then
+            children.set! firstIndex .missing
+            |>.set! modifierIndex .missing
+            |>.set! argumentIndex (.node .suffixGroup #[first, modifier, argument])
+          else
+            let attached :=
+              match modifier with
+              | .node .suffixGroup modifierChildren =>
+                  .node .suffixGroup <| #[first] ++ modifierChildren
+              | _ => .node .suffixGroup #[first, modifier]
+            children.set! firstIndex .missing |>.set! modifierIndex attached
+      | _, _, _ => children
   | firstIndex :: argumentIndex :: _ =>
       match children[firstIndex]?, children[argumentIndex]? with
       | some first, some argument =>
@@ -2067,21 +2082,48 @@ private def regroupTacticTerminalDelimiter : Tree → Tree
         .node kind grouped
   | tree => tree
 
+private def isTransparentTacticSequenceWrapperKind : NodeKind -> Bool
+  | .raw kind => kind == `null || Tree.isTacticSequenceKind kind
+  | .tactic kind _ _ _ _ => Tree.isTacticSequenceKind kind
+  | _ => false
+
+private partial def containsPrefixedTacticLayoutOwner : Tree -> Bool
+  | tree@(.node (.raw kind) children)
+  | tree@(.node (.tactic kind _ _ _ _) children) =>
+      Tree.tacticKindOwnsStructuralLayout kind
+      || Tree.isCalcTree tree
+      || children.any containsPrefixedTacticLayoutOwner
+  | .node _ children => children.any containsPrefixedTacticLayoutOwner
+  | _ => false
+
 private partial def attachPrefixToOperandHead (prefixTree : Tree) : Tree → Tree
   | .node kind children =>
-      match kind with
-      | .application | .infixChain _ | .indexedInfix _ =>
-          match (List.range children.size).find?
-                  fun index => children[index]?.bind Tree.firstToken? |>.isSome with
-          | some headIndex =>
-              match children[headIndex]? with
-              | some head =>
-                  .node kind
-                    (children.set! headIndex (attachPrefixToOperandHead prefixTree head))
-              | none => .node kind children
-          | none => .node kind children
-      | .suffixGroup => .node .suffixGroup (#[prefixTree] ++ children)
-      | _ => .node .suffixGroup #[prefixTree, .node kind children]
+      let contentIndexes :=
+        (List.range children.size).filter
+          fun index => children[index]?.bind Tree.firstToken? |>.isSome
+      if isTransparentTacticSequenceWrapperKind kind then
+        match contentIndexes with
+        | [childIndex] =>
+            match children[childIndex]? with
+            | some child =>
+                .node kind
+                  (children.set! childIndex (attachPrefixToOperandHead prefixTree child))
+            | none => .node kind children
+        | _ => .node .suffixGroup #[prefixTree, .node kind children]
+      else
+        match kind with
+        | .application | .infixChain _ | .indexedInfix _ =>
+            match contentIndexes.head? with
+            | some headIndex =>
+                match children[headIndex]? with
+                | some head =>
+                    .node kind
+                      (children.set! headIndex
+                        (attachPrefixToOperandHead prefixTree head))
+                | none => .node kind children
+            | none => .node kind children
+        | .suffixGroup => .node .suffixGroup (#[prefixTree] ++ children)
+        | _ => .node .suffixGroup #[prefixTree, .node kind children]
   | operand => .node .suffixGroup #[prefixTree, operand]
 
 private partial def regroupSpacedTacticFirstOperands : Tree → Tree
@@ -2107,11 +2149,17 @@ private partial def regroupSpacedTacticFirstOperands : Tree → Tree
 private def regroupTacticSequenceWrapperPrefix : Tree → Tree
   | .node kind@(.tactic _ _ _ _ _) children =>
       .node kind
-      <| regroupRightmostSuffixChildren children
+      <| regroupRightmostOwnedChildren children
           (fun tree => if Tree.isTacticSequenceTree tree then some tree else none)
           fun left right =>
-            left.singleToken?.any (·.role == .atom)
-            && Tree.sharesSourceLineWith left right
+            if left.singleToken?.any (·.role == .atom)
+                && Tree.sharesSourceLineWith left right then
+              if containsPrefixedTacticLayoutOwner right then
+                some <| attachPrefixToOperandHead left right
+              else
+                some <| .node .suffixGroup #[left, right]
+            else
+              none
   | tree => tree
 
 private def tacticEndsWithDetachedBodySuffix (parserOwnedBodies : ParserOwnedBodyMap)
@@ -3236,6 +3284,9 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
     | some patterns =>
         .node (.raw kind) <| children.set! 1 (regroupMatchPatterns patterns)
     | none => .node (.raw kind) children
+  else if kind == `Lean.Parser.Term.matchExprAlt
+          || kind == `Lean.Parser.Term.matchExprElseAlt then
+    .node (.raw kind) (regroupAttachedDoRhs children)
   else if kind == `Lean.Parser.Term.doIf then
     let children := regroupAttachedDoRhs children
     (regroupDoIfThenElseChain? children).getD
@@ -3459,6 +3510,7 @@ def regroupTacticAlternativeChildren (children : Array Tree) : Array Tree :=
   let regrouped? : Option (Array Tree) := do
     let lhs ← children[0]?
     let .node (.raw `null) rhsChildren ← children[1]? | none
+    let rhsChildren := regroupAttachedBodyIntroducerChildren rhsChildren
     let bodyIndex ← rhsChildren.findIdx? Tree.isTacticSequenceTree
     let body ← rhsChildren[bodyIndex]?
     let header := .node .suffixGroup <| #[lhs] ++ childrenRange rhsChildren 0 bodyIndex

@@ -1812,6 +1812,7 @@ def FlowRenderContext.stateForForcedNestedChild?
         if (OriginalTree.plan? child).isSome
             && (!flow.plan.formatsOriginalLeadingBoundary index
                 || !OriginalTree.canUseStructuralOverflowFallback child)
+            && !flow.childSourceFirstLineFitsAfterPrefix state index child
             && !childFit.get.flat then
           some <| flow.withBreak state breakPoint
         else

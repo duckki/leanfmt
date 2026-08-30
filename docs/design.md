@@ -100,7 +100,15 @@ leading boundary belongs to the complete `<| operand` group so both adjacent
 boundaries do not break and leave the operator alone. Established suffixes such
 as `by`, `do`, and `calc` keep using suffix attachment. A comment-led or
 nonfitting protected operand may retain its source break after `<|` because its
-first line cannot safely move onto the operator line.
+first line cannot safely move onto the operator line. An authored source break
+alone does not protect that boundary: when the complete first line fits, it
+moves beside `<|` and the operand's own structural body indentation applies.
+
+Parser-owned modifiers stay with the argument they introduce. For example,
+`simpa only [` remains one header even when the bracketed collection wraps
+internally. An attached body introducer likewise remains a suffix of an
+alternative, so generated term syntax uses `=> do` while an ordinary
+non-suffix alternative body begins on the following indented line.
 
 ### Preserve intentional source breaks selectively
 
@@ -1371,6 +1379,10 @@ a structural `cases` or `induction`, the tactic header remains protected while
 the proof body exposes the existing elimination layout. Nested alternative
 bodies therefore receive the same two-level indentation as a direct
 elimination tactic.
+A single-token tactic prefix such as `classical` shares that structural base
+with the following elimination tactic, even when Lean inserts transparent
+tactic-sequence wrappers between them. Its `with` remains attached to the
+elimination header and alternatives align with the complete prefixed tactic.
 
 A term-taking tactic retains its tactic prefix while the final term keeps its
 own structural layout. For an ordinary application, this keeps the tactic and

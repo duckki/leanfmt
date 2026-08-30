@@ -281,6 +281,13 @@ Current logical regroupings are:
 | Lake DSL commands | Lake package and library commands need their `where` configuration body to share the command base, while Git dependency clauses need one rule to own the complete `from git` header and revision suffix. | Optional configuration wrappers are replaced by their `where` and field children. Dependency-name, source, and Git wrappers are spliced into the raw `requireDecl` node in source order. |
 | Multi-item delimited collections | Brace terms, arrays, lists, tuples, anonymous constructors, and matrix vectors need one balanced rule to own opening, item, and closing breaks. | Parser sequence wrappers are spliced only when they contain an actual comma or matrix-row semicolon, so delimiters, items, and separators become direct children of the original raw collection node. Unseparated custom-syntax fragments and singleton wrappers remain intact to preserve the established base for one multiline item. |
 
+A parser-owned header groups a single-token modifier with a following delimited
+argument. The delimiter then owns the collection's internal flow without allowing the
+modifier to detach. A single-token tactic prefix is carried through transparent,
+single-content tactic-sequence wrappers only when the descendant contains a structural
+tactic layout owner. The prefix then joins that owner's first structural head; unrelated
+proof islands retain their established suffix grouping.
+
 Tactic-sequence nodes are hard proof-extraction boundaries. Regrouping may enter
 an owned tactic to expose its final proof, but it cannot absorb sibling tactics
 or a following command into that proof. When a suffix group contains an
@@ -516,7 +523,9 @@ Rule-authoring methods compile into these plan properties:
   its first line beside the already-rendered prefix, delegate wrapping to that child
   rather than taking the boundary immediately before it. Such a rule requires a
   genuinely single-line flat probe and does not reactivate the boundary merely because
-  it existed in the source. A comment at that boundary still activates the break, so
+  it existed in the source. Protected source emission uses the same first-line fit
+  probe: a movable first line rejoins the prefix, while a genuinely nonfitting first
+  line keeps its structural post-prefix boundary. A comment at that boundary still activates the break, so
   its continuation indentation is structural. Refutable `let` fallback clauses use
   this to keep `|` with the fallback's first term; annotated declarations use it only
   between a modifier container and its extensible command. Named arguments use the
