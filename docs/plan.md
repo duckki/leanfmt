@@ -11,21 +11,6 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ## Open issues
 
-### Incidental continuation columns
-
-Nested applications, named arguments, infix operands, and closing delimiters can
-inherit a far-right token column instead of a stable structural base. This
-produces staircases such as:
-
-```lean
-outer (inner longArgument
-                         shortArgument
-                           )
-```
-
-The same root shape can displace a tiny second infix operand or the first row of
-a `calc` block while neighboring rows use the expected base.
-
 ### Detached suffix bodies
 
 Some suffix-like owners can be stranded on a line before their body. Reviewed
@@ -49,13 +34,6 @@ as `local macro "name" : tactic =>` should remain one flow, and a modifier shoul
 not become an orphan line above its command.
 
 ## Progress
-
-### Application ownership
-
-Give nested applications, proof arguments, named arguments, infix operands, and
-their closers one stable continuation base. Add representative Mathlib
-regressions, verify that compact applications still fit, and run the local gate
-plus GraphQL, quantum, and Mathlib checkpoint validation.
 
 ### Suffix body ownership
 

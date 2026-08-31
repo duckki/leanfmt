@@ -1872,45 +1872,9 @@ private partial def containsMultiTacticProofBody : SyntaxTree.Tree → Bool
 def applicationPeerParenthesizedArgument (segment : Segment) (index : Nat) : Bool :=
   (segment.child? index).any SyntaxTree.Tree.isParenthesized
 
-def applicationPeerTypeAscriptionArgument (segment : Segment) (index : Nat) : Bool :=
-  (segment.child? index).any SyntaxTree.Tree.isParenthesizedTypeAscription
-
 def applicationPeerProofArgument (segment : Segment) (index : Nat) : Bool :=
   applicationPeerParenthesizedArgument segment index
   && childHasNestedProofBody segment index
-
-def applicationBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
-  let patternFunBreaks :=
-    (childBoundaryBreaks segment 1).filter
-      fun breakPoint =>
-        childIsPatternLambdaArgument segment breakPoint.index
-  if !patternFunBreaks.isEmpty then
-    patternFunBreaks
-  else
-    let argumentBreaks := childBoundaryBreaks segment 1
-    let proofArgumentBreaks :=
-      argumentBreaks.filter
-        fun breakPoint => applicationPeerProofArgument segment breakPoint.index
-    if 2 <= proofArgumentBreaks.length then
-      let firstParenthesizedIndex? :=
-        (argumentBreaks.find?
-          fun breakPoint =>
-            applicationPeerParenthesizedArgument segment breakPoint.index)
-        |>.map (·.index)
-      argumentBreaks.filter
-        fun breakPoint =>
-          applicationPeerProofArgument segment breakPoint.index
-          || (applicationPeerTypeAscriptionArgument segment breakPoint.index
-              && firstParenthesizedIndex? != some breakPoint.index)
-          || (previousContentIndex? segment breakPoint.index).any
-              fun previousIndex => applicationPeerProofArgument segment previousIndex
-    else
-      argumentBreaks.filter
-        fun breakPoint =>
-          !applicationArgumentStaysAttached context segment breakPoint.index
-
-def applicationHasPatternLambda (_context : RuleContext) (segment : Segment) : Bool :=
-  segment.indexes.any fun index => childIsPatternLambdaArgument segment index
 
 def applicationHasMultipleStructuredProofArguments
     (_context : RuleContext) (segment : Segment)
@@ -1921,6 +1885,30 @@ def applicationHasMultipleStructuredProofArguments
         applicationPeerProofArgument segment index
         && segment.indexes.any
             fun index => (segment.child? index).any containsMultiTacticProofBody
+
+def applicationBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
+  let patternFunBreaks :=
+    (childBoundaryBreaks segment 1).filter
+      fun breakPoint =>
+        childIsPatternLambdaArgument segment breakPoint.index
+  if !patternFunBreaks.isEmpty then
+    patternFunBreaks
+  else
+    let argumentBreaks := childBoundaryBreaks segment 1
+    if applicationHasMultipleStructuredProofArguments context segment then
+      argumentBreaks.filter
+        fun breakPoint =>
+          applicationPeerParenthesizedArgument segment breakPoint.index
+          || (previousContentIndex? segment breakPoint.index).any
+              fun previousIndex =>
+                applicationPeerParenthesizedArgument segment previousIndex
+    else
+      argumentBreaks.filter
+        fun breakPoint =>
+          !applicationArgumentStaysAttached context segment breakPoint.index
+
+def applicationHasPatternLambda (_context : RuleContext) (segment : Segment) : Bool :=
+  segment.indexes.any fun index => childIsPatternLambdaArgument segment index
 
 def pipeProjBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   match boundaryBreak? segment 1 0 with
@@ -2833,6 +2821,7 @@ def typeAscriptionRule : LineBreakRule :=
 def namedArgumentRule : LineBreakRule :=
   {
     name := "namedArgument"
+    formatOriginalChildLeadingBoundary := fun _ _ index => index == 4
     keepPrefixWithChildFirstLine := fun _ _ index => index == 4
     flow := fun _ _ => true
     breakPoints := namedArgumentBreaks

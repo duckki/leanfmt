@@ -4146,7 +4146,7 @@ def assertProofBodyUntouched (env : Lean.Environment) : IO Unit := do
   let formatted ← Formatter.formatSourceWithEnv env source "proof-body-untouched.lean"
   assertEq "proof body untouched" source formatted
 
-def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit := do
+def assertTermTakingTacticsAttachOperandHead (baseEnv : Lean.Environment) : IO Unit := do
   let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
   let source :=
     "theorem termTakingTactics (value : Nat) : True := by\n"
@@ -4427,10 +4427,70 @@ def assertTermTakingTacticsAttachOperandHead (_env : Lean.Environment) : IO Unit
     (← codePreservedIgnoringWhitespace env nestedProofArgumentsSource
         nestedProofArgumentsResult.formatted)
 
+  let parenthesizedPeerSource :=
+    "theorem tacticWithParenthesizedPeers : True := by\n"
+    ++ "  induction n with\n"
+    ++ "  | succ n hn =>\n"
+    ++ "    exact AddMonoidHom.bijective_of_surjective_of_bijective_of_right_exact _ _ _ _\n"
+    ++ "      (F.mapExtAddHom S.X₂ Y n)\n"
+    ++ "      (F.mapExtAddHom S.X₁ Y n)\n"
+    ++ "      (F.mapExtAddHom S.X₃ Y (n + 1))\n"
+    ++ "      (by\n"
+    ++ "        simp\n"
+    ++ "        rfl)\n"
+    ++ "      (by\n"
+    ++ "        simp\n"
+    ++ "        rfl)\n"
+  let parenthesizedPeerExpected :=
+    "theorem tacticWithParenthesizedPeers : True := by\n"
+    ++ "  induction n with\n"
+    ++ "  | succ n hn =>\n"
+    ++ "      exact AddMonoidHom.bijective_of_surjective_of_bijective_of_right_exact _ _ _ _\n"
+    ++ "        (F.mapExtAddHom S.X₂ Y n)\n"
+    ++ "        (F.mapExtAddHom S.X₁ Y n)\n"
+    ++ "        (F.mapExtAddHom S.X₃ Y (n + 1))\n"
+    ++ "        (by\n"
+    ++ "          simp\n"
+    ++ "          rfl)\n"
+    ++ "        (by\n"
+    ++ "          simp\n"
+    ++ "          rfl)\n"
+  let parenthesizedPeerResult ←
+    Formatter.formatSourceWithEnvDetailed env parenthesizedPeerSource
+      "tactic-parenthesized-peer-arguments.lean" { lineWidth := 100 }
+  assertTrue "parenthesized peer arguments do not fall back"
+    (!parenthesizedPeerResult.fellBack)
+  assertEq "parenthesized peers retain the application continuation base"
+    parenthesizedPeerExpected parenthesizedPeerResult.formatted
+  assertTrue "parenthesized peer argument formatting preserves code"
+    (← codePreservedIgnoringWhitespace env parenthesizedPeerSource
+        parenthesizedPeerResult.formatted)
+  let parenthesizedPeerTree ←
+    SyntaxTree.parseModuleStringWithEnv baseEnv parenthesizedPeerSource
+      "tactic-parenthesized-peer-arguments-tree.lean"
+  let some peerApplication :=
+    findTreeNodeStartingWith? .application "exact" parenthesizedPeerTree.tree
+  | throw <| IO.userError "expected the peer application tree"
+  let peerSegment := Formatter.LineBreakRules.Segment.ofTree peerApplication
+  let peerBreaks := Formatter.LineBreakRules.applicationBreaks {} peerSegment
+  let parenthesizedPeerCount :=
+    peerSegment.indexes.countP
+      fun index => (peerSegment.child? index).any SyntaxTree.Tree.isParenthesized
+  assertTrue "the peer application exposes its parenthesized arguments"
+    (3 <= parenthesizedPeerCount)
+  for index in peerSegment.indexes do
+    if (peerSegment.child? index).any SyntaxTree.Tree.isParenthesized then
+      assertTrue "every parenthesized peer has an application boundary"
+        (peerBreaks.any fun breakPoint => breakPoint.index == index)
+      let nextIndex := index + 1
+      if (peerSegment.child? nextIndex >>= SyntaxTree.Tree.firstToken?).isSome then
+        assertTrue "the run after a parenthesized peer has an application boundary"
+          (peerBreaks.any fun breakPoint => breakPoint.index == nextIndex)
+
   let interleavedProofArgumentsSource :=
     "theorem tacticWithInterleavedProofArguments : True := by\n"
-    ++ "  exact pendingScopeShapeMemberBool_foldl_insert_of_all\n"
-    ++ "    raw possible ([] : List PendingScopeShape)\n"
+    ++ "  exact pendingScopeShapeMemberBool_foldl_insert_of_all raw possible\n"
+    ++ "    ([] : List PendingScopeShape)\n"
     ++ "    (by intro candidate hcandidate; simp [pendingScopeShapeMemberBool] at hcandidate)\n"
     ++ "    hall shape\n"
     ++ "    (by simpa [pendingScopeShapeSet] using hshape)\n"
@@ -8240,6 +8300,49 @@ def assertNamedArgumentKeepsClosingDelimiterAttached (env : Lean.Environment)
       "commented-named-argument-formatted.lean"
   assertEq "commented named argument formatting is idempotent"
     commentedFormatted commentedAgain
+
+  let overflowingValueSource :=
+    "theorem namedArgumentWithUnbreakableValue (n : Nat) : True := by\n"
+    ++ "  induction n with\n"
+    ++ "  | zero =>\n"
+    ++ "    exact longFunctionNameWithEnoughCharactersForBreaking\n"
+    ++ "      (left :=\n"
+    ++ "                [Selection.field responseName fieldName leftArguments [] childSelectionSet]\n"
+    ++ "              )\n"
+    ++ "        (right :=\n"
+    ++ "                    [Selection.field responseName fieldName rightArguments [] childSelectionSet]\n"
+    ++ "                  )\n"
+    ++ "      remainingArgument\n"
+    ++ "      (by\n"
+    ++ "        simp\n"
+    ++ "        rfl)\n"
+    ++ "      (by\n"
+    ++ "        simp\n"
+    ++ "        rfl)\n"
+  let overflowingValueExpected :=
+    "theorem namedArgumentWithUnbreakableValue (n : Nat) : True := by\n"
+    ++ "  induction n with\n"
+    ++ "  | zero =>\n"
+    ++ "      exact longFunctionNameWithEnoughCharactersForBreaking\n"
+    ++ "        (left :=\n"
+    ++ "          [Selection.field responseName fieldName leftArguments [] childSelectionSet])\n"
+    ++ "        (right :=\n"
+    ++ "          [Selection.field responseName fieldName rightArguments [] childSelectionSet])\n"
+    ++ "        remainingArgument\n"
+    ++ "        (by\n"
+    ++ "          simp\n"
+    ++ "          rfl)\n"
+    ++ "        (by\n"
+    ++ "          simp\n"
+    ++ "          rfl)\n"
+  let overflowingValueFormatted ←
+    Formatter.formatSourceWithEnv env overflowingValueSource
+      "overflowing-named-argument-value.lean" { lineWidth := 88 }
+  assertEq "named argument uses its value break before detaching the close"
+    overflowingValueExpected overflowingValueFormatted
+  assertTrue "overflowing named argument preserves code"
+    (← codePreservedIgnoringWhitespace env overflowingValueSource
+        overflowingValueFormatted)
 
 def assertNestedApplicationHonorsSourceBreaks (env : Lean.Environment) : IO Unit := do
   let source :=

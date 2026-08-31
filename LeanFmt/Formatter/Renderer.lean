@@ -964,8 +964,8 @@ partial def probeLayoutWithoutRuleBreaks?
                       let rendered :=
                         state.emitOriginalTree child
                           (formatLeadingBoundary :=
-                            formatOriginalChildLeadingBoundary state.context segment index
-                          )
+                            formatOriginalChildLeadingBoundary state.context segment
+                              index)
                           (islandPlan? := some islandPlan)
                       if layoutProbeHasNotOverflowed rendered then some rendered else none
                   | none =>
@@ -2410,18 +2410,37 @@ mutual
     match SyntaxTree.Tree.firstToken? segment.parent with
     | none => renderChildren state segment
     | some _ =>
-        let flow : FlowRenderContext :=
-          {
-            segment
-            plan
-            sourceBreaks :=
-              if plan.preservesSourceBreaks then
-                sourceBreaksAllowedByBreakPointsInState state segment plan.breakPoints
-              else
-                []
-            entryState := state
-          }
-        renderFlowChildren state flow segment.start false
+        let tightSuffixIndex? :=
+          segment.indexes.find?
+            fun index =>
+              plan.keepsPrefixWithChildFirstLine index
+              && (segment.child? index).any
+                  fun child =>
+                    (LineBreakRules.Segment.ofTree child).size == 0
+                    && !commentForcesBreakAt state.source segment index
+        let earlierBreaks :=
+          match tightSuffixIndex? with
+          | some suffixIndex =>
+              plan.breakPoints.filter fun point => point.index < suffixIndex
+          | none => []
+        let needsEarlierBreaks :=
+          !earlierBreaks.isEmpty && !(measureLayout state segment false).fits
+        if needsEarlierBreaks then
+          renderBalancedSegment state segment { plan with breakPoints := earlierBreaks }
+            false
+        else
+          let flow : FlowRenderContext :=
+            {
+              segment
+              plan
+              sourceBreaks :=
+                if plan.preservesSourceBreaks then
+                  sourceBreaksAllowedByBreakPointsInState state segment plan.breakPoints
+                else
+                  []
+              entryState := state
+            }
+          renderFlowChildren state flow segment.start false
 
   partial def renderFlowChildren
       (state : RenderState) (flow : FlowRenderContext) (index : Nat)
@@ -2516,6 +2535,7 @@ mutual
   partial def renderBalancedSegment
       (state : RenderState) (segment : LineBreakRules.Segment)
       (plan : LayoutPlan.Plan)
+      (resolvePartialSegments : Bool := true)
       : RenderState :=
     if plan.breakPoints.isEmpty then
       renderChildren state segment
@@ -2533,7 +2553,9 @@ mutual
           : RenderState :=
         let state := stateForPiece state firstPiece
         let rendered :=
-          if preserveSuffix then
+          if !resolvePartialSegments then
+            renderChildren state (segment.slice start stop)
+          else if preserveSuffix then
             renderSegmentRange state segment start stop
           else
             renderSegmentRange { state with lineFitSuffixWidth := 0 } segment start stop

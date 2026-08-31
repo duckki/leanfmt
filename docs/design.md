@@ -953,11 +953,12 @@ conditional, or nested application uses the tactic application's structural
 base. It does not align beneath the final character of `exact`, `refine`, or a
 similar tactic head.
 
-Two or more parenthesized proof arguments use peer boundaries when the
-application does not fit. This keeps each proof attached to its parentheses
-without forcing compact proof arguments onto separate lines. When ordinary
-arguments occur between proof arguments, their first argument starts a peer run
-at the application base and the remaining fitting arguments stay on that line:
+When two or more structured parenthesized proof arguments require peer layout,
+every parenthesized argument uses the same peer boundary. This keeps ordinary
+terms, named arguments, type ascriptions, proof arguments, and their closing
+delimiters on one application continuation base. An ordinary argument after a
+parenthesized peer starts a new run at that base; its remaining fitting
+arguments stay on the same line:
 
 ```lean
 exact inductionPrinciple motives
@@ -970,10 +971,6 @@ exact inductionPrinciple motives
 An application with exactly one simple parenthesized proof argument may test
 that complete argument in its compact form. It remains on one line when the
 whole application fits; multiple proof arguments keep the peer structure above.
-
-A parenthesized type ascription after the first parenthesized argument in the
-leading run retains its peer boundary. The ascription therefore moves intact
-instead of using its internal break first.
 
 A multiline named argument keeps its closing parenthesis attached to the final
 line of the value:
@@ -989,6 +986,15 @@ Nat.recOn
 
 When a trailing line comment prevents attachment, the closing parenthesis moves
 to a new line at the opening parenthesis's column.
+
+When the value and closing parenthesis do not fit together, the value break after
+`:=` takes priority over detaching the parenthesis:
+
+```lean
+f
+  (right :=
+    [longApplication firstArgument secondArgument thirdArgument])
+```
 
 Projection chains do not break before a dot. The application around a
 projection may still wrap:
