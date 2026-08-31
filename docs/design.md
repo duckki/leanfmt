@@ -943,6 +943,11 @@ argument, including structured arguments such as `let`, `if`, `match`, and
 structure instances. No special-case preference between parent and child
 breaks is needed.
 
+A parenthesized syntax extension uses the same balanced delimiter rule as core
+parenthesized syntax. Width pressure may use the body's ordinary application
+breaks before considering the closing boundary; the extension does not need a
+kind-specific rule.
+
 When a tactic is parsed as a spaced application, a multiline lambda,
 conditional, or nested application uses the tactic application's structural
 base. It does not align beneath the final character of `exact`, `refine`, or a
@@ -961,6 +966,10 @@ exact inductionPrinciple motives
   (by
     exact secondCase)
 ```
+
+An application with exactly one simple parenthesized proof argument may test
+that complete argument in its compact form. It remains on one line when the
+whole application fits; multiple proof arguments keep the peer structure above.
 
 A parenthesized type ascription after the first parenthesized argument in the
 leading run retains its peer boundary. The ascription therefore moves intact
@@ -1403,6 +1412,9 @@ exact Or.inl (by simp [hselected])
 ```
 
 Authored multiline tactic content remains protected.
+A detached braced tactic sequence moves as one protected body beneath its
+owning tactic. Its internal relative indentation is retained rather than
+recomputed from the brace's previous source column.
 A term-taking tactic remains attached to the first line of its operand. The
 operand then follows its own structural rules: an application head starts a new
 base for ordinary argument flow, while a lambda keeps its introducer with the
@@ -1723,8 +1735,11 @@ def run : IO Unit := do
 
 Statement boundaries are structural and remain on separate lines.
 
-A semicolon explicitly joins adjacent statements. If the complete sequence
-fits, it may remain on one line even when the source broke after `;`:
+A semicolon explicitly joins adjacent statements. The same policy applies to
+inline tactic sequences: the boundaries immediately beside `;` are suppressed
+while the complete joined sequence fits. A tactic that starts on a later source
+line after a trailing semicolon retains its peer boundary because that line
+structure delimits the preceding proof.
 
 ```lean
 IO.println usage; pure 0

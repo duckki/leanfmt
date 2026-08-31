@@ -2,6 +2,10 @@ import Lean
 import Init.Tactics
 
 syntax (name := projectSyntax) "project_syntax" : term
+syntax (name := projectBigSum) "psum " ident " in " term ", " term : term
+namespace Mathlib.Tactic.TermCongr
+syntax (name := termCongr) "pcongr(" "$" term ")" : term
+end Mathlib.Tactic.TermCongr
 declare_syntax_cat projectClause
 syntax (name := projectInClause) " in " ident : projectClause
 syntax "#project_clause" projectClause : command

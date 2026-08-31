@@ -2516,15 +2516,12 @@ def assertParenthesizedProofIgnoresStaleSourceColumn (env : Lean.Environment)
     ++ "  innerFunction firstArgument (by\n"
     ++ "                                             exact proof)\n"
   let expected :=
-    "def parenthesizedProof :=\n"
-    ++ "  innerFunction firstArgument\n"
-    ++ "    (by\n"
-    ++ "      exact proof)\n"
+    "def parenthesizedProof :=\n" ++ "  innerFunction firstArgument (by exact proof)\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "parenthesized-proof-stale-source-column.lean" { lineWidth := 100 }
   assertTrue "parenthesized proof indentation does not fall back" (!result.fellBack)
-  assertEq "parenthesized proof uses its structural body indentation"
+  assertEq "a fitting parenthesized proof ignores its stale source indentation"
     expected result.formatted
   assertTrue "parenthesized proof structural indentation preserves code"
     (← codePreservedIgnoringWhitespace env source result.formatted)
@@ -10917,8 +10914,7 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
     ++ "  | pop\n"
     ++ "\n"
     ++ "theorem casesDefaultAlternative (o : CasesDefaultExample) : True := by\n"
-    ++ "  simp only;\n"
-    ++ "  cases o with simp only\n"
+    ++ "  simp only; cases o with simp only\n"
     ++ "  | push value =>\n"
     ++ "      have h : True := True.intro\n"
     ++ "      refine by\n"
@@ -17187,6 +17183,135 @@ def assertParserOwnedSuffixAndPipeBoundaries (env : Lean.Environment) : IO Unit 
       ++ "    using proof\n")
     86
 
+def assertCompactAndProtectedLayoutConsistency (_env : Lean.Environment) : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let check (name source expected : String) (lineWidth : Nat := 100) : IO Unit := do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source s!"{name}.lean" { lineWidth }
+    assertTrue s!"{name} formatting does not fall back" (!result.fellBack)
+    assertEq s!"{name} uses the shared compact or protected layout" expected
+      result.formatted
+    assertTrue s!"{name} formatting preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    let formattedAgain ←
+      Formatter.formatSourceWithEnv env result.formatted s!"{name}-formatted.lean"
+        { lineWidth }
+    assertEq s!"{name} formatting is idempotent" result.formatted formattedAgain
+
+  check "fitting-semicolon-proof"
+    ("def fittingSemicolon :=\n"
+      ++ "  (fun f => by ext; exact Equiv.ulift.injective (hF.map_injective (by simp)))\n")
+    ("def fittingSemicolon :=\n"
+      ++ "  (fun f => by ext; exact Equiv.ulift.injective (hF.map_injective (by simp)))\n")
+
+  check "trailing-semicolon-tactic-peers"
+    ("theorem trailingSemicolonTacticPeers : True := by\n"
+      ++ "  have first : True := by\n"
+      ++ "    exact True.intro;\n"
+      ++ "  have second : True := by\n"
+      ++ "    exact first;\n"
+      ++ "  exact second\n")
+    ("theorem trailingSemicolonTacticPeers : True := by\n"
+      ++ "  have first : True := by\n"
+      ++ "    exact True.intro;\n"
+      ++ "  have second : True := by\n"
+      ++ "    exact first;\n"
+      ++ "  exact second\n")
+
+  check "fitting-proof-argument"
+    ("theorem compactProofArgument : True :=\n"
+      ++ "  curry_injective (by\n"
+      ++ "    rw [curry_uncurry, ← curry_pre_app, curry_uncurry])\n")
+    ("theorem compactProofArgument : True :=\n"
+      ++ "  curry_injective (by rw [curry_uncurry, ← curry_pre_app, curry_uncurry])\n")
+
+  check "source-attached-attribute"
+    ("@[simp] lemma operation_sum (f : I → M) : op (psum x in s, f x) = psum x in s, op (f x) := proof\n")
+    ("@[simp] lemma operation_sum (f : I → M) : op (psum x in s, f x) = psum x in s, op (f x) := proof\n")
+
+  check "protected-braced-tactic"
+    ("theorem bracedAllGoals : True := by\n"
+      ++ "  all_goals\n"
+      ++ "  { simp only [shortComplexH1]\n"
+      ++ "    ext\n"
+      ++ "    simp }\n")
+    ("theorem bracedAllGoals : True := by\n"
+      ++ "  all_goals\n"
+      ++ "    { simp only [shortComplexH1]\n"
+      ++ "      ext\n"
+      ++ "      simp }\n")
+
+  check "documented-local-recursion"
+    ("def localComment := fun c s =>\n"
+      ++ "  let rec /-- Loop body of `localComment`. -/\n"
+      ++ "  loop (toks) (state : Nat) : Nat :=\n"
+      ++ "    let start := state\n"
+      ++ "    start\n"
+      ++ "  loop c s\n")
+    ("def localComment :=\n"
+      ++ "  fun c s =>\n"
+      ++ "    let rec /-- Loop body of `localComment`. -/\n"
+      ++ "    loop (toks) (state : Nat) : Nat :=\n"
+      ++ "      let start := state\n"
+      ++ "      start\n"
+      ++ "    loop c s\n")
+
+  check "quotation-parent-suffix"
+    ("def quotationSuffix := outerWrapper (`(term|\n"
+      ++ "  veryLongFunctionName firstArgument secondArgument thirdArgument fourthArgument)\n"
+      ++ "  )\n")
+    ("def quotationSuffix :=\n"
+      ++ "  outerWrapper\n"
+      ++ "    (`(term|\n"
+      ++ "      veryLongFunctionName firstArgument secondArgument thirdArgument fourthArgument))\n")
+    60
+
+  check "parser-owned-closing-suffix"
+    ("structure ParserOwnedProof where\n"
+      ++ "  proof : True\n"
+      ++ "\n"
+      ++ "def parserOwnedClosingSuffix : ParserOwnedProof where\n"
+      ++ "  proof := by\n"
+      ++ "    exact\n"
+      ++ "      pcongr($((FunctorToTypes.shrinkMap.{w} (Functor.whiskerRight τ (forget _))).naturality f) x)\n")
+    ("structure ParserOwnedProof where\n"
+      ++ "  proof : True\n"
+      ++ "\n"
+      ++ "def parserOwnedClosingSuffix : ParserOwnedProof where\n"
+      ++ "  proof := by\n"
+      ++ "    exact pcongr($((FunctorToTypes.shrinkMap.{w} (Functor.whiskerRight τ (forget _))).naturality f)\n"
+      ++ "                    x)\n")
+
+  check "parenthesized-proof-followed-by-documented-command"
+    ("theorem precedingParenthesizedProof : True := by\n"
+      ++ "  all_goals\n"
+      ++ "    (cases h\n"
+      ++ "     all_goals\n"
+      ++ "       (refine ofCoeffs_degree_pos_of_back_ne_zero _ ?_ ?_\n"
+      ++ "        · simp\n"
+      ++ "        · intro hzero\n"
+      ++ "          simp at hzero\n"
+      ++ "          exact absurd hzero (zmod64_one_ne_zero_of_one_lt (by decide))))\n"
+      ++ "\n"
+      ++ "/-- A polynomial with a nonzero coefficient at `n` and no storage beyond `n`\n"
+      ++ "has degree exactly `n`. -/\n"
+      ++ "private theorem followingDocumentedDeclaration : True := by\n"
+      ++ "  exact True.intro\n")
+    ("theorem precedingParenthesizedProof : True := by\n"
+      ++ "  all_goals\n"
+      ++ "    (cases h\n"
+      ++ "     all_goals\n"
+      ++ "       (refine ofCoeffs_degree_pos_of_back_ne_zero _ ?_ ?_\n"
+      ++ "        · simp\n"
+      ++ "        · intro hzero\n"
+      ++ "          simp at hzero\n"
+      ++ "          exact absurd hzero (zmod64_one_ne_zero_of_one_lt (by decide))))\n"
+      ++ "\n"
+      ++ "/-- A polynomial with a nonzero coefficient at `n` and no storage beyond `n`\n"
+      ++ "has degree exactly `n`. -/\n"
+      ++ "private theorem followingDocumentedDeclaration : True := by\n"
+      ++ "  exact True.intro\n")
+
 def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
     : IO Unit := do
   let fallbackSource :=
@@ -17611,6 +17736,7 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertStructuralHeadersOwnAttachedBodies env
   assertParserOwnedClauseBodies env
   assertParserOwnedSuffixAndPipeBoundaries env
+  assertCompactAndProtectedLayoutConsistency env
   assertFallbackAndConditionalSuffixesStayAttached env
   assertIfThenElseRuleBreaksBalancedShape env
   assertShortIfThenElseStaysFlatInEquationArm env

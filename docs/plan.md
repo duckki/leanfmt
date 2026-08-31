@@ -11,23 +11,64 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ## Open issues
 
-### Compact and protected layouts
+### Incidental continuation columns
 
-Fitting semicolon tactic sequences, `if` expressions, proof applications, and
-source-attached attributes can expand unnecessarily. Protected source-layout
-islands such as braced `all_goals` blocks must retain their relative shape while
-the surrounding base indentation changes.
+Nested applications, named arguments, infix operands, and closing delimiters can
+inherit a far-right token column instead of a stable structural base. This
+produces staircases such as:
+
+```lean
+outer (inner longArgument
+                         shortArgument
+                           )
+```
+
+The same root shape can displace a tiny second infix operand or the first row of
+a `calc` block while neighboring rows use the expected base.
+
+### Detached suffix bodies
+
+Some suffix-like owners can be stranded on a line before their body. Reviewed
+examples include a refutable fallback `|`, low-priority `<|`, `suffices ... from`,
+and extension syntax such as `says`:
+
+```lean
+let some value := source
+|
+  fallback
+```
+
+Movable code should stay with its suffix when it fits; a structural break should
+otherwise establish one body base rather than inherit the suffix token column.
+
+### Command header flow
+
+Declaration binders, short local macro headers, and scoped notation modifiers
+can break at incidental parser-wrapper boundaries. A fitting command header such
+as `local macro "name" : tactic =>` should remain one flow, and a modifier should
+not become an orphan line above its command.
 
 ## Progress
 
-### Checkpoint 3: compact and protected consistency
+### Application ownership
 
-Add focused regressions for fitting semicolon sequences, conditionals,
-applications, attributes, and protected braced tactic blocks. Reconcile fit
-selection with the existing compact-layout and original-island policies without
-weakening width or preservation diagnostics. Run the full local gate and light
-GraphQL, quantum, Hex, and Mathlib checkpoint validations, review performance and
-formatting changes, then commit.
+Give nested applications, proof arguments, named arguments, infix operands, and
+their closers one stable continuation base. Add representative Mathlib
+regressions, verify that compact applications still fit, and run the local gate
+plus GraphQL, quantum, and Mathlib checkpoint validation.
+
+### Suffix body ownership
+
+Unify the body boundary for refutable fallbacks, `<|`, `from`, and parser-defined
+suffix forms without keyword-specific renderer logic. Cover fitting and broken
+forms, then run the local gate and focused external validation.
+
+### Header consistency and release gate
+
+Align declaration binders, macro headers, and command modifiers through existing
+annotated-declaration and signature flows. After focused validation, run the full
+GraphQL, quantum, Hex, and Mathlib release gate and review the complete formatting
+diff before release.
 
 ## Validation standard
 

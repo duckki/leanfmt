@@ -1503,8 +1503,22 @@ def tacticSequenceItemBreaks (context : RuleContext) (segment : Segment)
     | _ :: rest =>
         rest.filterMap
           fun index =>
-            if (segment.child? index).bind SyntaxTree.Tree.firstToken?
-                |>.any SyntaxTree.Token.isClosingDelimiter then
+            let followsInlineSemicolon :=
+              (previousContentIndex? segment index).any
+                fun previousIndex =>
+                  match segment.child? previousIndex, segment.child? index with
+                  | some previous, some child =>
+                      match previous.lastToken?, child.firstToken? with
+                      | some previousToken, some firstToken =>
+                          previousToken.lexeme == ";"
+                          && !SpaceRules.hasLineStructure
+                                (previousToken.trailing.text ++ firstToken.leading.text)
+                      | _, _ => false
+                  | _, _ => false
+            if childStartsWithLexeme segment index ";"
+                || followsInlineSemicolon
+                || ((segment.child? index).bind SyntaxTree.Tree.firstToken?
+                    |>.any SyntaxTree.Token.isClosingDelimiter) then
               none
             else
               boundaryBreak? segment index 0
@@ -2657,8 +2671,9 @@ def annotatedDeclarationRule : LineBreakRule :=
     useExistingBreaks := fun _ _ => true
     flow := fun context segment => !(annotatedDeclarationBreaks context segment).isEmpty
     inheritBase :=
-      fun _ segment =>
+      fun context segment =>
         treeContainsRawKind `Lean.Parser.Command.structCtor segment.parent
+        || parentIsRawKind context `Lean.Parser.Term.letRecDecl
     breakPoints := annotatedDeclarationBreaks
   }
 
@@ -4804,7 +4819,6 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `TopCat.Presheaf.attrSheaf_restrict) _ => some defaultRule
   | .node (.raw `TopCat.Presheaf.attrSheaf_restrict_1) _ => some defaultRule
   | .node (.raw `aliasIn) _ => some defaultRule
-  | .node (.raw `Mathlib.Tactic.TermCongr.termCongr) _ => some defaultRule
   | .node (.raw `Mathlib.Tactic.dsimpPercent) _ => some defaultRule
   | .node (.raw `Mathlib.Meta.FunProp.funPropTacStx) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.registerTryTactic) _ => some defaultRule

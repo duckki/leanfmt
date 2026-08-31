@@ -2065,10 +2065,11 @@ private def regroupDoIfElseBodySuffix : Tree → Tree
 private def regroupTacticTerminalDelimiter : Tree → Tree
   | .node kind@(.tactic rawKind containsSequence isOwner _ isSpacedApplication)
       children =>
-      let terminalToken? :=
+      let terminalIndex? :=
         ((List.range children.size).filter
           fun index => children[index]?.bind Tree.firstToken? |>.isSome).getLast?
-        |>.bind fun index => children[index]? >>= Tree.firstToken?
+      let terminalToken? :=
+        terminalIndex?.bind fun index => children[index]? >>= Tree.firstToken?
       let delimiterWasDetached :=
         terminalToken?.any fun token => token.leading.text.contains '\n'
       let grouped :=
@@ -2077,7 +2078,21 @@ private def regroupTacticTerminalDelimiter : Tree → Tree
       if grouped == children then
         .node kind children
       else if !isOwner && delimiterWasDetached then
-        .node (.tactic rawKind containsSequence true true isSpacedApplication) grouped
+        match terminalIndex? with
+        | some index =>
+            match children[index]? with
+            | some body =>
+                if body.isTacticSequenceTree then
+                  let header :=
+                    .node (.tactic rawKind false false false isSpacedApplication)
+                      (children.set! index .missing)
+                  .node .parserOwnedBody
+                    #[header, .node (.proofBody body.containsTacticLayoutOwner) #[body]]
+                else
+                  .node (.tactic rawKind containsSequence true true isSpacedApplication)
+                    grouped
+            | none => .node kind grouped
+        | none => .node kind grouped
       else
         .node kind grouped
   | tree => tree
@@ -2154,7 +2169,8 @@ private def regroupTacticSequenceWrapperPrefix : Tree → Tree
           fun left right =>
             if left.singleToken?.any (·.role == .atom)
                 && Tree.sharesSourceLineWith left right then
-              if containsPrefixedTacticLayoutOwner right then
+              if left.singleToken?.any (·.lexeme != "·")
+                  && containsPrefixedTacticLayoutOwner right then
                 some <| attachPrefixToOperandHead left right
               else
                 some <| .node .suffixGroup #[left, right]
@@ -3820,6 +3836,27 @@ private partial def annotateLetExpressionsWithIndex (facts : LetBodyParserFactIn
 def annotateLetExpressions (facts : Array LetBodyParserFact) (tree : Tree) : Tree :=
   annotateLetExpressionsWithIndex (indexLetBodyParserFacts facts) tree
 
+private partial def regroupSimpleApplicationProofArgumentsWithSummary : Tree → Tree × Bool
+  | .missing => (.missing, false)
+  | .leaf token => (.leaf token, false)
+  | .node kind children =>
+      let summaries := children.map regroupSimpleApplicationProofArgumentsWithSummary
+      let children := summaries.map (fun summary => summary.1)
+      let tree := .node kind children
+      let proofArgumentCount :=
+        summaries.foldl (fun count summary => if summary.2 then count + 1 else count) 0
+      let tree :=
+        if kind == .application && proofArgumentCount == 1 then
+          (Tree.groupSimpleTrailingProofArgument? tree).getD tree
+        else
+          tree
+      let containsProofBody :=
+        kind == .proofBody false || kind == .proofBody true || 0 < proofArgumentCount
+      (tree, containsProofBody)
+
+private def regroupSimpleApplicationProofArguments (tree : Tree) : Tree :=
+  (regroupSimpleApplicationProofArgumentsWithSummary tree).1
+
 def extractTree
     (source : String) (stx : Syntax)
     (letBodyParserFacts : Array LetBodyParserFact := #[])
@@ -3829,6 +3866,7 @@ def extractTree
     : Tree :=
   regroupTopLevelAnnotations
   <| annotateLetExpressions letBodyParserFacts
+  <| regroupSimpleApplicationProofArguments
   <| regroupTreeWithPrecedences infixPrecedences spacedApplicationKinds parserOwnedBodies
   <| removeOverlappingSourceTokens source
   <| extractRawTree source stx

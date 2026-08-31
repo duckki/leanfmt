@@ -489,6 +489,9 @@ private def isQuotationLayoutIsland (tree : SyntaxTree.Tree) : Bool :=
 
 private def isProofLayoutIsland (tree : SyntaxTree.Tree) : Bool :=
   match tree with
+  | tree@(.node (.tactic `Lean.Parser.Tactic.paren _ _ _ _) children) =>
+      treeHasInternalLineBreakTrivia tree
+      && (SyntaxTree.Tree.node (.proofBody true) children).proofBodyHasMultipleTactics
   | .node .application children =>
       let rec laterArgumentHasProofLambda (previous : List SyntaxTree.Tree)
           : List SyntaxTree.Tree → Bool
@@ -513,6 +516,7 @@ private def isProofLayoutIsland (tree : SyntaxTree.Tree) : Bool :=
 
 private def proofLayoutRebasesFromFirstToken : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _
+  | .node (.tactic `Lean.Parser.Tactic.paren _ _ _ _) _
   | .node (.raw `«term{_}») _ => true
   | _ => false
 
@@ -832,7 +836,10 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
   let retainsRelativeLayout :=
     islandPlan?.any fun plan => plan.policy.relativeLayout == .retain
   let retainsInlineRelativeLayout := retainsRelativeLayout || proofLayout || calcLayout
-  let hasLineBreakTrivia := retainsInlineRelativeLayout && treeHasLineBreakTrivia tree
+  let hasLineBreakTrivia :=
+    retainsInlineRelativeLayout
+    && (treeHasLineBreakTrivia tree
+        || (quotation && SpaceRules.hasLineStructure sourceText))
   let originalLeadingHasLineStructure := SpaceRules.hasLineStructure originalLeading
   let formattedLeadingDetachesIsland :=
     !originalLeadingHasLineStructure && SpaceRules.hasLineStructure leading
@@ -858,7 +865,10 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     if !inlineMultilineLayoutIsland then
       none
     else
-      match treeContinuationIndent? request.sourceMap tree, request.lastToken? with
+      let continuationIndent? :=
+        (treeContinuationIndent? request.sourceMap tree).orElse
+          fun _ => sourceContinuationIndent? sourceText
+      match continuationIndent?, request.lastToken? with
       | some sourceIndent, some leftToken =>
           let sourceAnchor := request.sourceMap.columnAt leftToken.span.start
           let outputAnchor := lineWidth request.currentLine - leftToken.lexeme.length
@@ -928,13 +938,20 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
         else if quotationStartsOnLine then
           some (sourceIndent, targetIndent)
         else if proofLayout || calcLayout || quotation then
-          some
-            (
-              sourceIndent,
-              fittingTargetColumn request.source request.sourceMap tree sourceText
-                sourceIndent targetIndent request.lineWidth
-                request.lineFitSuffixWidth
-            )
+          let fittedTarget :=
+            fittingTargetColumn request.source request.sourceMap tree sourceText
+              sourceIndent targetIndent request.lineWidth request.lineFitSuffixWidth
+          let fittedTarget :=
+            if quotation then
+              let structuralTarget :=
+                if quotationStartsOnLine then
+                  (leadingColumn / indentationSpaces + 1) * indentationSpaces
+                else
+                  request.currentIndent + indentationSpaces
+              max structuralTarget fittedTarget
+            else
+              fittedTarget
+          some (sourceIndent, fittedTarget)
         else
           some (sourceIndent, targetIndent)
     | none => none
