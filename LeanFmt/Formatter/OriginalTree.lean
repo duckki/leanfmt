@@ -1,5 +1,6 @@
 import LeanFmt.Formatter.LineBreakRules
 import LeanFmt.Formatter.Rebase
+import LeanFmt.Formatter.SourceBoundary
 import LeanFmt.Formatter.SpaceRules
 
 namespace LeanFmt
@@ -87,6 +88,24 @@ private def treeContinuationIndent?
         minimum?)
     none
 
+private def treeContentContinuationIndent?
+    (sourceMap : SyntaxTree.SourcePositionMap) (tree : SyntaxTree.Tree)
+    : Option Nat := do
+  let firstToken ← tree.firstToken?
+  let firstLine := sourceMap.lineNumberAt firstToken.span.start
+  tree.tokens.toList.reverse
+  |>.dropWhile (fun token => SpaceRules.isDelimiterCloserToken token.lexeme)
+  |>.foldl
+      (fun minimum? token =>
+        if firstLine < sourceMap.lineNumberAt token.span.start then
+          let column := sourceMap.columnAt token.span.start
+          match minimum? with
+          | some minimum => some (min minimum column)
+          | none => some column
+        else
+          minimum?)
+      none
+
 private def treeTrailingDelimiterIndent?
     (sourceMap : SyntaxTree.SourcePositionMap) (tree : SyntaxTree.Tree)
     : Option Nat := do
@@ -96,8 +115,10 @@ private def treeTrailingDelimiterIndent?
   |>.takeWhile (fun token => SpaceRules.isDelimiterCloserToken token.lexeme)
   |>.foldl
       (fun minimum? token =>
+        let boundary := SourceBoundary.beforeToken token
         if firstLine < sourceMap.lineNumberAt token.span.start
-            && SpaceRules.hasLineStructure token.leading.text then
+            && boundary.hasLineStructure
+            && !boundary.hasComment then
           let column := sourceMap.columnAt token.span.start
           match minimum? with
           | some minimum => some (min minimum column)
@@ -126,6 +147,13 @@ private def floorContinuationIndent (minimum : Nat) (text : String) : String :=
   | [] => ""
   | first :: rest =>
       String.intercalate "\n" <| first :: rest.map (floorLineIndent minimum)
+
+private def alignFinalLineIndent (target : Nat) (text : String) : String :=
+  match (SpaceRules.normalizeLineEndings text).splitOn "\n" |>.reverse with
+  | [] | [_] => text
+  | last :: preceding =>
+      let content := (last.dropWhile SpaceRules.isHorizontalWhitespace).toString
+      String.intercalate "\n" <| preceding.reverse ++ [spaces target ++ content]
 
 private def rebaseTokenLexeme
     (treeSourceColumn treeTargetColumn sourceColumn targetColumn : Nat)
@@ -316,7 +344,7 @@ private partial def containsQuotationTree : SyntaxTree.Tree → Bool
       isQuotationTree tree || children.any containsQuotationTree
 
 private def isQqSyntaxTree : SyntaxTree.Tree → Bool
-  | .node (.raw `Qq.«termQ(__)») _ => true
+  | .node (.raw kind) _ => (toString kind).startsWith "Qq.«termQ("
   | .node (.infixChain `Qq.«term_=Q_») _ => true
   | _ => false
 
@@ -825,8 +853,14 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     && (treeHasLineBreakTrivia tree
         || (quotation && SpaceRules.hasLineStructure sourceText))
   let originalLeadingHasLineStructure := SpaceRules.hasLineStructure originalLeading
+  let startsOnOutputLine :=
+    let value :=
+      (currentLineAfterAppend request.currentLine leading).all
+        SpaceRules.isHorizontalWhitespace
+    value
   let formattedLeadingDetachesIsland :=
-    !originalLeadingHasLineStructure && SpaceRules.hasLineStructure leading
+    !originalLeadingHasLineStructure
+    && (SpaceRules.hasLineStructure leading || (0 < sourceColumn && startsOnOutputLine))
   let detachedInlineProofBody :=
     proof
     && hasLineBreakTrivia
@@ -850,7 +884,10 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
       none
     else
       let continuationIndent? :=
-        (treeContinuationIndent? request.sourceMap tree).orElse
+        (if quotation then
+            treeContentContinuationIndent? request.sourceMap tree
+          else
+            treeContinuationIndent? request.sourceMap tree).orElse
           fun _ => sourceContinuationIndent? sourceText
       match continuationIndent?, request.lastToken? with
       | some sourceIndent, some leftToken =>
@@ -869,7 +906,10 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
               movedIndent
           let structuralIndent :=
             if proof then
-              (request.segmentIndentation + 1) * indentationSpaces
+              if formattedLeadingDetachesIsland then
+                (leadingColumn / indentationSpaces + 1) * indentationSpaces
+              else
+                (request.segmentIndentation + 1) * indentationSpaces
             else if proofLayout then
               if originalLeadingHasLineStructure then
                 ({ sourceColumn, outputColumn := leadingColumn }
@@ -886,18 +926,23 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
             else if quotation then
               request.currentIndent + indentationSpaces
             else if usesPendingIndent then
-              leadingColumn
+              if formattedLeadingDetachesIsland then
+                leadingColumn + indentationSpaces
+              else
+                leadingColumn
             else
               request.currentIndent
           let movedIndent :=
             if sourceAnchor < sourceIndent then
               movedIndent
             else
-              sourceIndent
+              request.layoutAnchor.shiftColumn sourceIndent
           let targetIndent :=
-            if proofLayout
-                && !originalLeadingHasLineStructure
-                && !proofLayoutRebasesFromFirstToken tree then
+            if retainsRelativeLayout && formattedLeadingDetachesIsland then
+              structuralIndent
+            else if proofLayout
+                    && !originalLeadingHasLineStructure
+                    && !proofLayoutRebasesFromFirstToken tree then
               structuralIndent
             else if proofLayout
                     && request.respectPendingIndent
@@ -1053,52 +1098,68 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
           (targetColumn?.getD (request.layoutAnchor.outputColumn + indentationSpaces))
     else
       rebased
+  let detachedInlineProofRebase? :=
+    if detachedInlineProofBody then
+      sourceContinuationIndent? sourceText
+      |>.map
+          fun sourceIndent =>
+            (sourceIndent, (leadingColumn / indentationSpaces + 1) * indentationSpaces)
+    else
+      none
   let sourceTextRebase? :=
-    match inlineContinuationColumns?,
-          request.rebaseSourceTextTargetColumn? with
-    | some continuationColumns, some targetColumn =>
-        let detachedProofLayoutRebasesFromFirstToken :=
-          formattedLeadingDetachesIsland
-          && !LineBreakRules.treeContainsRawKind `Lean.calc tree
-          && !LineBreakRules.treeContainsRawKind `Lean.calcTactic tree
-          && !tree.containsNodeKind .calcBody
-          && (proofLayoutRebasesFromFirstToken tree
-              || sourceColumn <= continuationColumns.1)
-        if proof
-            || (proofLayout
-                && (detachedProofLayoutRebasesFromFirstToken
-                    || (originalLeadingHasLineStructure
-                        && proofLayoutRebasesFromFirstToken tree))) then
-          some (sourceColumn, targetColumn)
-        else if calcLayout then
-          some
-            (
-              continuationColumns.1,
-              (targetColumn / indentationSpaces + 1) * indentationSpaces
-            )
-        else
-          some continuationColumns
-    | some continuationColumns, none => some continuationColumns
-    | none, some targetColumn =>
-        if calcLayout then
-          (treeContinuationIndent? request.sourceMap tree).map
-            fun sourceIndent =>
-              (sourceIndent, (targetColumn / indentationSpaces + 1) * indentationSpaces)
-        else if proof
-                && (treeContinuationIndent? request.sourceMap tree).any
-                    fun sourceIndent => sourceIndent < sourceColumn then
-          none
-        else
-          some (sourceColumn, targetColumn)
-    | none, none =>
-        if calcLayout then
-          (treeContinuationIndent? request.sourceMap tree).map
-            fun sourceIndent =>
-              (sourceIndent, (leadingColumn / indentationSpaces + 1) * indentationSpaces)
-        else
-          targetColumn?.map
-            fun targetColumn =>
-              (sourceColumn, targetColumn)
+    detachedInlineProofRebase?.orElse
+      fun _ =>
+        match inlineContinuationColumns?,
+              request.rebaseSourceTextTargetColumn? with
+        | some continuationColumns, some targetColumn =>
+            let detachedProofLayoutRebasesFromFirstToken :=
+              formattedLeadingDetachesIsland
+              && !LineBreakRules.treeContainsRawKind `Lean.calc tree
+              && !LineBreakRules.treeContainsRawKind `Lean.calcTactic tree
+              && !tree.containsNodeKind .calcBody
+              && (proofLayoutRebasesFromFirstToken tree
+                  || sourceColumn <= continuationColumns.1)
+            if proof
+                || (proofLayout
+                    && (detachedProofLayoutRebasesFromFirstToken
+                        || (originalLeadingHasLineStructure
+                            && proofLayoutRebasesFromFirstToken tree))) then
+              some (sourceColumn, targetColumn)
+            else if calcLayout then
+              some
+                (
+                  continuationColumns.1,
+                  (targetColumn / indentationSpaces + 1) * indentationSpaces
+                )
+            else
+              some continuationColumns
+        | some continuationColumns, none => some continuationColumns
+        | none, some targetColumn =>
+            if calcLayout then
+              (treeContinuationIndent? request.sourceMap tree).map
+                fun sourceIndent =>
+                  (
+                    sourceIndent,
+                    (targetColumn / indentationSpaces + 1) * indentationSpaces
+                  )
+            else if proof
+                    && (treeContinuationIndent? request.sourceMap tree).any
+                        fun sourceIndent => sourceIndent < sourceColumn then
+              none
+            else
+              some (sourceColumn, targetColumn)
+        | none, none =>
+            if calcLayout then
+              (treeContinuationIndent? request.sourceMap tree).map
+                fun sourceIndent =>
+                  (
+                    sourceIndent,
+                    (leadingColumn / indentationSpaces + 1) * indentationSpaces
+                  )
+            else
+              targetColumn?.map
+                fun targetColumn =>
+                  (sourceColumn, targetColumn)
   let sourceText :=
     match islandPlan?.map (·.kind) with
     | some .syntaxComment =>
@@ -1139,6 +1200,10 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
     if isQq then
       let outputColumn := lineWidth <| currentLineAfterAppend request.currentLine leading
       floorContinuationIndent outputColumn sourceText
+    else if quotation
+            && !quotationStartsOnLine
+            && (treeTrailingDelimiterIndent? request.sourceMap tree).isSome then
+      alignFinalLineIndent request.currentIndent sourceText
     else
       sourceText
   some

@@ -6,57 +6,12 @@ is release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Application continuation ownership
-
-Later arguments can inherit an incidental function-name column after a tactic
-suffix or a multiline peer:
-
-```lean
-simpa
-  using! longFunctionName
-          firstArgument secondArgument
-```
-
-Continuation runs should return to the application's structural base.
-
-### Suffix and separator attachment
-
-Fitting suffixes can detach from the header they complete, including `then`,
-`:= do`, tactic `says`, and low-priority pipes:
-
-```lean
-discharger : TacticM Unit :=
-  do
-```
-
-Existing suffix ownership should keep these tokens with their natural header
-without adding token-specific renderer behavior.
-
-### Delimiter ownership
-
-Parenthesized tactic bodies and generated quotations can leave an opening or
-closing parenthesis on a line by itself:
-
-```lean
-induction value with
-  (
-    ...
-  )
-```
-
-Delimited trees should retain their delimiters while their contents use the
-surrounding structural base.
-
-### Command boundary spacing
-
-When a compact macro becomes multiline, the following declaration can lose the
-blank line that separates commands. Command spacing should depend on command
-boundaries, not on whether a command happened to fit before formatting.
-
 ### Large-project validation latency
 
-Hex's slowest formatter batch is about 298 seconds. The output is correct, but
-the batch is close to the historical timeout and remains a performance target.
+Hex's slowest formatter batch varied from 145 to 326 seconds across equivalent
+checkpoint runs. Mathlib batches were usually 18 to 42 seconds, with one at 89
+seconds. Output and diagnostics are correct, but tail latency remains a
+performance target.
 
 ## Progress
 
@@ -80,9 +35,15 @@ establish it.
 
 ### Checkpoint 3: delimiters, command boundaries, and release gate
 
-Add focused tests for detached parentheses and command spacing. Fix the shared
-delimiter and command-sequence ownership, review complete external diffs, then
-run the full GraphQL, quantum, Hex, and exact Mathlib `v4.33.0` release gate.
+Complete delimiter-closer rebasing, command-sequence spacing, modified
+declaration ownership, compact `match_expr` alternatives, structural `using`
+continuations, and parser-safe `initialize` operands. The complete local gate,
+GraphQL, quantum, and width-100 Hex validation passed; quantum produced no
+formatting changes. The exact Mathlib `v4.33.0` baseline formatted 8,311 files
+with every diagnostic at zero and passed both post-format builds. A subsequent
+width-100 checkpoint covered all 84 formatter batches. After a focused
+`initialize` correction at batch 74, its failing file and batches 74 through 84
+were rerun cleanly.
 
 ## Validation standard
 
@@ -109,5 +70,7 @@ for the release gate.
 
 Mathlib validation uses exact `v4.33.0` commit
 `db584cd6d46c92f209a44c0f1c829460d327499d`, formats only `Mathlib`, and uses
-the Lake cache. The final gate recreates or resets the validation clone and runs
-the clean, changed-module, and aggregate post-format builds.
+the Lake cache. The release gate recreates or resets the validation clone and
+runs the clean, changed-module, and aggregate post-format builds. Later
+formatter-only reviews may reuse that exact baseline when its revision,
+toolchain, selector, and source manifest remain unchanged.

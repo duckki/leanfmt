@@ -332,6 +332,41 @@ def assertTacticQuotationAntiquotationPreserved (env : Lean.Environment) : IO Un
     Formatter.formatSourceWithEnv env movedResult.formatted
       "moved-command-quotation-formatted.lean" { lineWidth := 60 }
   assertEq "moved command quotation is idempotent" movedResult.formatted movedAgain
+  let movedStandaloneCloserSource :=
+    "def movedStandaloneQuotationCloser := do\n"
+    ++ "  let mut result : Array (TSyntax `command) := #[]\n"
+    ++ "  result :=\n"
+    ++ "    result.push\n"
+    ++ "    <| ← `(\n"
+    ++ "      private def generatedValue :\n"
+    ++ "        Nat := 0\n"
+    ++ "      )\n"
+    ++ "  pure result\n"
+  let movedStandaloneCloserExpected :=
+    "def movedStandaloneQuotationCloser := do\n"
+    ++ "  let mut result : Array (TSyntax `command) := #[]\n"
+    ++ "  result :=\n"
+    ++ "    result.push\n"
+    ++ "    <| ← `(\n"
+    ++ "      private def generatedValue :\n"
+    ++ "        Nat := 0\n"
+    ++ "    )\n"
+    ++ "  pure result\n"
+  let movedStandaloneCloserResult ←
+    Formatter.formatSourceWithEnvDetailed env movedStandaloneCloserSource
+      "moved-standalone-quotation-closer.lean" { lineWidth := 60 }
+  assertTrue "a moved standalone quotation closer does not fall back"
+    (!movedStandaloneCloserResult.fellBack)
+  assertEq "a standalone quotation closer aligns with its structural owner"
+    movedStandaloneCloserExpected movedStandaloneCloserResult.formatted
+  assertTrue "standalone quotation closer formatting preserves code"
+    (← codePreservedIgnoringWhitespace env movedStandaloneCloserSource
+        movedStandaloneCloserResult.formatted)
+  let movedStandaloneCloserAgain ←
+    Formatter.formatSourceWithEnv env movedStandaloneCloserResult.formatted
+      "moved-standalone-quotation-closer-formatted.lean" { lineWidth := 60 }
+  assertEq "standalone quotation closer formatting is idempotent"
+    movedStandaloneCloserResult.formatted movedStandaloneCloserAgain
   let inlineMultilineSource :=
     "scoped macro (name := transfer_rw) \"transfer_rw\" : tactic => `(tactic|\n"
     ++ "    (repeat first | rw [← to_nat_inj] | rw [← lt_to_nat] | rw [← le_to_nat]\n"
@@ -1330,6 +1365,49 @@ def assertSetOptionInBreaksAfterIn (env : Lean.Environment) : IO Unit := do
   let termFormatted ← Formatter.formatSourceWithEnv env termSource "set-option-term.lean"
   assertEq "term set_option reuses the option-prefix body boundary"
     termSource termFormatted
+
+def assertCommentedScopedCommandWrappersPreserveCode (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "set_option linter.flexible false in -- scoped lint suppression\n"
+    ++ "open Nat in\n"
+    ++ "/-- A declaration under stacked scoped commands. -/\n"
+    ++ "theorem commentedScopedCommand : True := by\n"
+    ++ "  exact True.intro\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "commented-scoped-command.lean"
+  assertTrue "commented scoped command wrappers do not cause a format fallback"
+    (!result.fellBack)
+  assertTrue "commented scoped command wrappers preserve code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  assertEq "commented scoped command wrappers remain idempotent"
+    result.formatted
+    (← Formatter.formatSourceWithEnv env result.formatted
+        "commented-scoped-command-second.lean")
+
+  let structureSource :=
+    "theorem longSimpInsideStructure : True := by\n"
+    ++ "  let wrapped : Wrapped := {\n"
+    ++ "    first := by\n"
+    ++ "      have this : True := by\n"
+    ++ "        simpa only [firstRewrite] using! firstProof\n"
+    ++ "      simpa only [← (longFunctionName n).eq_of_inter_nonempty hK.le hS\n"
+    ++ "        ((longFunctionName n).smul_finset a) this] using! firstProof\n"
+    ++ "    second := by\n"
+    ++ "      simpa only [secondRewrite] using! secondProof\n"
+    ++ "  }\n"
+    ++ "  exact True.intro\n"
+    ++ "\n"
+    ++ "set_option linter.style.whitespace false in -- keep manual alignment\n"
+    ++ "theorem followingScopedCommand : True := by\n"
+    ++ "  exact True.intro\n"
+  let structureResult ←
+    Formatter.formatSourceWithEnvDetailed env structureSource
+      "long-simp-inside-structure.lean" { lineWidth := 100 }
+  assertTrue "a long simp tactic inside a structure does not lose following fields"
+    (!structureResult.fellBack)
+  assertTrue "a long simp tactic inside a structure preserves code"
+    (← codePreservedIgnoringWhitespace env structureSource structureResult.formatted)
 
 def assertDocumentedTopLevelDeclarationKeepsBaseIndent (env : Lean.Environment)
     : IO Unit := do
@@ -2526,6 +2604,40 @@ def assertQqApplicationArgumentUsesStructuralBoundary (env : Lean.Environment)
   assertEq "a moved multiline Qq argument cannot escape its structural base"
     multilineExpected multilineFirstPass
 
+  let generatedKindSource :=
+    "open scoped Qq\n"
+    ++ "\n"
+    ++ "def generatedQqClosingShell :=\n"
+    ++ "  some\n"
+    ++ "    q1(veryLongFunctionNameForQuotedApplication firstArgument\n"
+    ++ "      secondArgument)\n"
+  let generatedKindExpected :=
+    "open scoped Qq\n"
+    ++ "\n"
+    ++ "def generatedQqClosingShell :=\n"
+    ++ "  some\n"
+    ++ "    q1(veryLongFunctionNameForQuotedApplication firstArgument\n"
+    ++ "      secondArgument)\n"
+  let generatedKindTree ←
+    SyntaxTree.parseModuleStringWithEnv env generatedKindSource
+      "generated-qq-closing-shell-tree.lean"
+  let generatedQqTree ←
+    match findTreeNode? (.raw `Qq.«termQ(__)_1») generatedKindTree.tree with
+    | some tree => pure tree
+    | none => throw <| IO.userError "generated Qq syntax did not retain its parser kind"
+  assertTrue "generated Qq parser kinds use the Qq original-layout policy"
+    (Formatter.OriginalTree.classify? generatedQqTree == some .qq)
+  let generatedKindResult ←
+    Formatter.formatSourceWithEnvDetailed env generatedKindSource
+      "generated-qq-closing-shell.lean" { lineWidth := 60 }
+  assertTrue "generated Qq closing-shell formatting does not fall back"
+    (!generatedKindResult.fellBack)
+  assertEq "a generated Qq island preserves its attached outer closer"
+    generatedKindExpected generatedKindResult.formatted
+  assertTrue "generated Qq closing-shell formatting preserves code"
+    (← codePreservedIgnoringWhitespace env generatedKindSource
+        generatedKindResult.formatted)
+
 def assertParenthesizedProofIgnoresStaleSourceColumn (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -3290,10 +3402,10 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
         commentedFallbackResult.formatted)
   assertTextContains "commented do-let fallback indents its body beneath the pipe"
     commentedFallbackResult.formatted
-    ("        | -- We put this here rather than using a big try block.\n"
-      ++ "          -- The fallback remains nested after the surrounding body moves.\n"
-      ++ "          sinit s\n"
-      ++ "        let s := s.pushFold lit\n")
+    ("      | -- We put this here rather than using a big try block.\n"
+      ++ "        -- The fallback remains nested after the surrounding body moves.\n"
+      ++ "        sinit s\n"
+      ++ "      let s := s.pushFold lit\n")
   let commentedFallbackAgain ←
     Formatter.formatSourceWithEnv env commentedFallbackResult.formatted
       "commented-do-let-fallback-formatted.lean"
@@ -3465,7 +3577,7 @@ def assertDoMatchExprAlternativesPreserveBranches (env : Lean.Environment) : IO 
   assertTextContains "do match_expr branch body starts after arrow" formatted
     "  | Matrix.vecCons _ n x xs => do\n    let tail ← matchExprExample xs\n"
   assertTextContains "do match_expr fallback branch stays separate"
-    formatted "  | _ =>\n    return e\n"
+    formatted "  | _ =>\n      return e\n"
   assertTextLacks "do match_expr alternatives do not merge" formatted "return tail | _"
   let formattedAgain ←
     Formatter.formatSourceWithEnv env formatted
@@ -5103,6 +5215,29 @@ def assertStructuralBasesAndClosingDelimiters (env : Lean.Environment) : IO Unit
     closingExpected closingResult.formatted
   assertTrue "structural base and closing delimiter cases preserve code"
     (← codePreservedIgnoringWhitespace env closingSource closingResult.formatted)
+  let inlineProofSource :=
+    "theorem inlineProofArgumentOverflow : True := by\n"
+    ++ "  have : (w.weights.filter (· ∈ s)).sum (fun x k ↦ k) ≠ 0 :=\n"
+    ++ "    (sum_pos (by simp +contextual [lt_iff_le_and_ne, eq_comm]) <| by simpa [ne_iff, filter_apply]).ne'\n"
+    ++ "  exact True.intro\n"
+  let inlineProofExpected :=
+    "theorem inlineProofArgumentOverflow : True := by\n"
+    ++ "  have : (w.weights.filter (· ∈ s)).sum (fun x k ↦ k) ≠ 0 :=\n"
+    ++ "    (sum_pos (by simp +contextual [lt_iff_le_and_ne, eq_comm]) <| by\n"
+    ++ "      simpa [ne_iff, filter_apply]).ne'\n"
+    ++ "  exact True.intro\n"
+  let inlineProofTree ←
+    SyntaxTree.parseModuleStringWithEnv env inlineProofSource
+      "inline-proof-argument-overflow-tree.lean"
+  assertTrue "an attached proof after a multiline shell owns its local body base"
+    ((findTreeNode? .tacticAttachedProof inlineProofTree.tree).isSome)
+  let inlineProofResult ←
+    Formatter.formatSourceWithEnvDetailed env inlineProofSource
+      "inline-proof-argument-overflow.lean" { lineWidth := 100 }
+  assertTrue "an inline proof argument overflow does not fall back"
+    (!inlineProofResult.fellBack)
+  assertEq "an inline proof argument breaks at its proof body"
+    inlineProofExpected inlineProofResult.formatted
 
 def assertMovedInlineProofBodiesRemainParseable (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -6284,6 +6419,45 @@ def assertInitializeUsesStructuralDeclarationHeader (env : Lean.Environment)
   assertEq "implicit initialize do-sequence formatting is idempotent"
     implicitDoResult.formatted implicitDoAgain
 
+  let recordSource :=
+    "initialize hintExtension\n"
+    ++ "    : SimplePersistentEnvExtension (Nat × TSyntax `tactic) (List (Nat × TSyntax `tactic)) ←\n"
+    ++ "  registerSimplePersistentEnvExtension {\n"
+    ++ "    addEntryFn := (·.cons)\n"
+    ++ "    addImportedFn := mkStateFromImportedEntries (·.cons) {}\n"
+    ++ "  }\n"
+  let recordResult ←
+    Formatter.formatSourceWithEnvDetailed env recordSource
+      "initialize-assigned-record-application.lean" { lineWidth := 100 }
+  assertTrue "an assigned initialize record application does not fall back"
+    (!recordResult.fellBack)
+  assertEq "an assigned initialize keeps its top-level application attached"
+    recordSource recordResult.formatted
+  assertTrue "assigned initialize record formatting preserves code"
+    (← codePreservedIgnoringWhitespace env recordSource recordResult.formatted)
+  let recordAgain ←
+    Formatter.formatSourceWithEnv env recordResult.formatted
+      "initialize-assigned-record-application-formatted.lean" { lineWidth := 100 }
+  assertEq "assigned initialize record formatting is idempotent"
+    recordResult.formatted recordAgain
+
+  let detachedSource :=
+    "initialize\n"
+    ++ "  Batteries.Linter.UnreachableTactic.ignoreTacticKindsRef.modify fun s => s.insert ``registerHintStx\n"
+  let detachedResult ←
+    Formatter.formatSourceWithEnvDetailed env detachedSource
+      "initialize-detached-implicit-sequence.lean" { lineWidth := 100 }
+  assertTrue "a detached direct initialize does not fall back" (!detachedResult.fellBack)
+  assertEq "a detached direct initialize retains its parser-significant source break"
+    detachedSource detachedResult.formatted
+  assertTrue "detached direct initialize formatting preserves code"
+    (← codePreservedIgnoringWhitespace env detachedSource detachedResult.formatted)
+  let detachedAgain ←
+    Formatter.formatSourceWithEnv env detachedResult.formatted
+      "initialize-detached-implicit-sequence-formatted.lean" { lineWidth := 100 }
+  assertEq "detached direct initialize formatting is idempotent"
+    detachedResult.formatted detachedAgain
+
 def assertDeclarationSignatureFitStopsBeforeBrokenByBody (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -7040,6 +7214,35 @@ def assertLowPriorityPipeBoundaryPolicy (env : Lean.Environment) : IO Unit := do
       "low-priority-pipe-boundary-policy-formatted.lean" { lineWidth := 70 }
   assertEq "low-priority pipe boundary policy is idempotent"
     result.formatted formattedAgain
+  let conditionalSource :=
+    "def pipeIf (condition : Bool) :=\n"
+    ++ "  pure <|\n"
+    ++ "    if condition then\n"
+    ++ "      true\n"
+    ++ "    else\n"
+    ++ "      false\n"
+  let conditionalExpected :=
+    "def pipeIf (condition : Bool) :=\n"
+    ++ "  pure\n"
+    ++ "  <| if condition then\n"
+    ++ "        true\n"
+    ++ "      else\n"
+    ++ "        false\n"
+  let conditionalResult ←
+    Formatter.formatSourceWithEnvDetailed env conditionalSource
+      "low-priority-pipe-conditional-source-break.lean" { lineWidth := 48 }
+  assertTrue "low-priority pipe conditional does not fall back"
+    (!conditionalResult.fellBack)
+  assertEq "an ordinary pipe operand has one token-space after the operator"
+    conditionalExpected conditionalResult.formatted
+  assertTrue "low-priority pipe conditional preserves code"
+    (← codePreservedIgnoringWhitespace env conditionalSource conditionalResult.formatted)
+  let conditionalAgain ←
+    Formatter.formatSourceWithEnv env conditionalResult.formatted
+      "low-priority-pipe-conditional-source-break-formatted.lean"
+      { lineWidth := 48 }
+  assertEq "low-priority pipe conditional is idempotent"
+    conditionalResult.formatted conditionalAgain
   let tacticSource :=
     "theorem tacticPipeProofFitsWidth : True := by\n"
     ++ "  obtain ⟨e₂, he₂⟩ := (MulEquiv.prodComm.toMonoidHom.comp f).exists_mrange_eq_mgraph (by simpa) <|\n"
@@ -10937,6 +11140,60 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
       "induction-default-body-formatted.lean"
   assertEq "induction default-body formatting is idempotent"
     inductionDefaultBodyFormatted inductionDefaultBodyAgain
+
+  let parenthesizedDefaultSource :=
+    "theorem parenthesizedDefaultAlternative (value : Nat) : True := by\n"
+    ++ "  induction value with\n"
+    ++ "      (\n"
+    ++ "    simp only [Nat.add_zero]\n"
+    ++ "    simp only [Nat.zero_add])\n"
+    ++ "  | zero => trivial\n"
+    ++ "  | succ value hypothesis => trivial\n"
+  let parenthesizedDefaultExpected :=
+    "theorem parenthesizedDefaultAlternative (value : Nat) : True := by\n"
+    ++ "  induction value with (\n"
+    ++ "    simp only [Nat.add_zero]\n"
+    ++ "    simp only [Nat.zero_add])\n"
+    ++ "  | zero => trivial\n"
+    ++ "  | succ value hypothesis => trivial\n"
+  let parenthesizedDefaultResult ←
+    Formatter.formatSourceWithEnvDetailed env parenthesizedDefaultSource
+      "parenthesized-induction-default-alternative.lean" { lineWidth := 100 }
+  assertTrue "a parenthesized default alternative does not fall back"
+    (!parenthesizedDefaultResult.fellBack)
+  assertEq "a parenthesized default alternative attaches its opener to with"
+    parenthesizedDefaultExpected parenthesizedDefaultResult.formatted
+  assertTrue "parenthesized default-alternative formatting preserves code"
+    (← codePreservedIgnoringWhitespace env parenthesizedDefaultSource
+        parenthesizedDefaultResult.formatted)
+
+  let parenthesizedDoCloserSource :=
+    "def parenthesizedDoCloser :=\n"
+    ++ "  wrapper\n"
+    ++ "    (fun e => do\n"
+    ++ "      try\n"
+    ++ "        pure e\n"
+    ++ "      catch _ =>\n"
+    ++ "        pure e\n"
+    ++ "      )\n"
+  let parenthesizedDoCloserExpected :=
+    "def parenthesizedDoCloser :=\n"
+    ++ "  wrapper\n"
+    ++ "    (fun e => do\n"
+    ++ "      try\n"
+    ++ "        pure e\n"
+    ++ "      catch _ =>\n"
+    ++ "        pure e)\n"
+  let parenthesizedDoCloserResult ←
+    Formatter.formatSourceWithEnvDetailed env parenthesizedDoCloserSource
+      "parenthesized-do-closing-boundary.lean" { lineWidth := 60 }
+  assertTrue "a multiline parenthesized do body does not fall back"
+    (!parenthesizedDoCloserResult.fellBack)
+  assertEq "a removable source break cannot detach a fitting closing parenthesis"
+    parenthesizedDoCloserExpected parenthesizedDoCloserResult.formatted
+  assertTrue "parenthesized do closer formatting preserves code"
+    (← codePreservedIgnoringWhitespace env parenthesizedDoCloserSource
+        parenthesizedDoCloserResult.formatted)
 
   let casesWithoutWithSource :=
     "theorem casesWithoutWith (value : Nat) : True := by\n" ++ "  cases value\n"
@@ -14940,7 +15197,7 @@ def assertFormatterArchitecture : IO Unit := do
       ]
   let regroupedCustomDeclaration := SyntaxTree.regroupTree customDeclaration
   assertTrue "extended declarations regroup leading modifiers with their command"
-    (regroupedCustomDeclaration.containsNodeKind .annotatedDeclaration)
+    (regroupedCustomDeclaration.containsNodeKind .modifiedDeclaration)
   let customDeclarationSegment :=
     Formatter.LineBreakRules.Segment.ofTree regroupedCustomDeclaration
   let customDeclarationPlan :=
@@ -16230,6 +16487,7 @@ def assertSyntaxDeclarationsHaveRules (env : Lean.Environment) : IO Unit := do
     ++ "      term.replaceM\n"
     ++ "        fun e ↦\n"
     ++ "          return if e == x then some res else if e == y then some arg else none\n"
+    ++ "\n"
     ++ "macro (name := expandFoldr) \"expand_foldr% \"\n"
     ++ "  \"(\" x:ident ppSpace y:ident \" => \" term:term \") \" init:term:max \" [\" args:term,* \"]\"\n"
     ++ "  : term =>\n"
@@ -16250,6 +16508,37 @@ def assertSyntaxDeclarationsHaveRules (env : Lean.Environment) : IO Unit := do
       "macro-pattern-flow-idempotent.lean" { lineWidth := 100 }
   assertEq "long macro pattern formatting is idempotent"
     longPatternFormatted longPatternFormattedAgain
+
+  let adjacentMacroSource :=
+    "macro (name := firstBoundaryMacro) \"first_boundary_macro \" first:term second:term third:term fourth:term : term =>\n"
+    ++ "  `(id $first)\n"
+    ++ "macro \"second_boundary_macro\" : term => `(0)\n"
+  let adjacentMacroResult ←
+    Formatter.formatSourceWithEnvDetailed env adjacentMacroSource
+      "adjacent-multiline-macros.lean" { lineWidth := 72 }
+  assertTrue "adjacent multiline macro formatting does not fall back"
+    (!adjacentMacroResult.fellBack)
+  assertTextContains "a multiline macro keeps a command boundary before its peer"
+    adjacentMacroResult.formatted "`(id $first)\n\nmacro \"second_boundary_macro\""
+  assertTrue "adjacent multiline macro formatting preserves code"
+    (← codePreservedIgnoringWhitespace env adjacentMacroSource
+        adjacentMacroResult.formatted)
+
+  let attributedMacroSource :=
+    "@[inherit_doc] macro (name := firstAttributedBoundaryMacro) \"first_attributed_boundary_macro \" first:term second:term : term =>\n"
+    ++ "  `(id $first)\n"
+    ++ "@[inherit_doc] macro \"second_attributed_boundary_macro\" : term => `(0)\n"
+  let attributedMacroResult ←
+    Formatter.formatSourceWithEnvDetailed env attributedMacroSource
+      "adjacent-attributed-macros.lean" { lineWidth := 72 }
+  assertTrue "adjacent attributed macro formatting does not fall back"
+    (!attributedMacroResult.fellBack)
+  assertTextContains "annotations retain the macro command boundary classification"
+    attributedMacroResult.formatted
+    "`(id $first)\n\n@[inherit_doc] macro \"second_attributed_boundary_macro\""
+  assertTrue "adjacent attributed macro formatting preserves code"
+    (← codePreservedIgnoringWhitespace env attributedMacroSource
+        attributedMacroResult.formatted)
 
 def assertElaborationSyntaxHasRules (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -17573,8 +17862,7 @@ def assertParserOwnedSuffixAndPipeBoundaries (env : Lean.Environment) : IO Unit 
       ++ "  match_expr value with\n"
       ++ "  | Constructor first second => do\n"
       ++ "    pure first\n"
-      ++ "  | _ =>\n"
-      ++ "    throwError \"unsupported\"\n")
+      ++ "  | _ => throwError \"unsupported\"\n")
 
   check "anonymous-have-colon"
     ("theorem anonymousHaveColon : True := by\n"
@@ -17961,6 +18249,338 @@ def assertOptionalAccessSuffixPropagatesApplicationFit (env : Lean.Environment)
   assertEq "optional-access application formatting is idempotent"
     result.formatted formattedAgain
 
+def assertReviewedMathlibConsistencyShapes (env : Lean.Environment) : IO Unit := do
+  let equationSource :=
+    "private lemma le_mkStrictMonoAux (x : Nat -> Nat) : forall n, x n <= x n\n"
+    ++ "  | 0 => by simp\n"
+    ++ "  | n + 1 => by simp\n"
+  let equationFormatted ←
+    Formatter.formatSourceWithEnv env equationSource
+      "reviewed-equation-declaration.lean" { lineWidth := 100 }
+  assertEq "equation alternatives retain the declaration body base"
+    equationSource equationFormatted
+
+  let quantifiedEquationSource :=
+    "private lemma sinPoly_natDegree_le : ∀ n : Nat, n ≤ n\n"
+    ++ "  | 0\n"
+    ++ "  | 1 => by simp\n"
+    ++ "  | n + 2 => by simp\n"
+  let quantifiedEquationFormatted ←
+    Formatter.formatSourceWithEnv env quantifiedEquationSource
+      "reviewed-quantified-equation-declaration.lean" { lineWidth := 100 }
+  assertEq "quantified equation alternatives retain the declaration body base"
+    quantifiedEquationSource quantifiedEquationFormatted
+
+  let privateEquationSource :=
+    "private lemma sinPoly_add_cosPoly_eval (theta : Nat)\n"
+    ++ "    : ∀ n : Nat,\n"
+    ++ "        n = n ∧ n + n = n + n ∧ n * n = n * n\n"
+    ++ "  | 0 => by simp\n"
+    ++ "  | n + 1 => by simp\n"
+  let privateEquationFormatted ←
+    Formatter.formatSourceWithEnv env privateEquationSource
+      "reviewed-private-equation-declaration.lean" { lineWidth := 100 }
+  assertEq "a declaration modifier stays with its equation declaration"
+    privateEquationSource privateEquationFormatted
+
+  let bareNameReturnSource :=
+    "lemma prod_rotate_eq_one_of_prod_eq_one\n"
+    ++ "    : ∀ {values : List Nat}, values = values\n"
+    ++ "  | [] => by rfl\n"
+  let bareNameReturnFormatted ←
+    Formatter.formatSourceWithEnv env bareNameReturnSource
+      "reviewed-bare-name-return-colon.lean" { lineWidth := 100 }
+  assertEq "a bare declaration name keeps the declaration continuation for its colon"
+    bareNameReturnSource bareNameReturnFormatted
+
+  let matchExprSource :=
+    "def inferBase (e : Expr) := do\n"
+    ++ "  match_expr e with\n"
+    ++ "  | MvPolynomial _ R _ => pure R\n"
+    ++ "  | _ => failure\n"
+  let matchExprFormatted ←
+    Formatter.formatSourceWithEnv env matchExprSource
+      "reviewed-match-expr-alternatives.lean" { lineWidth := 100 }
+  assertEq "fitting match_expr alternative bodies remain attached"
+    matchExprSource matchExprFormatted
+
+  let usingSource :=
+    "theorem usingContinuation (n : Int) (h : True) : True := by\n"
+    ++ "  induction n using Int.negInduction with\n"
+    ++ "  | nat n => simpa only [Int.even_coe_nat]\n"
+    ++ "      using! coeff_ne_zero <| by exact h\n"
+    ++ "  | neg ih n => simpa only [Int.natAbs_neg, Int.even_neg]\n"
+    ++ "        using! ih n <| by exact h\n"
+  let usingExpected :=
+    "theorem usingContinuation (n : Int) (h : True) : True := by\n"
+    ++ "  induction n using Int.negInduction with\n"
+    ++ "  | nat n =>\n"
+    ++ "      simpa only [Int.even_coe_nat]\n"
+    ++ "        using! coeff_ne_zero <| by exact h\n"
+    ++ "  | neg ih n =>\n"
+    ++ "      simpa only [Int.natAbs_neg, Int.even_neg]\n"
+    ++ "        using! ih n <| by exact h\n"
+  let usingFormatted ←
+    Formatter.formatSourceWithEnv env usingSource
+      "reviewed-simpa-using-continuation.lean" { lineWidth := 100 }
+  assertEq "using continuations follow their simpa header base"
+    usingExpected usingFormatted
+
+  let rebasedInfixSource :=
+    "def rebasedInfixProof :=\n"
+    ++ "  (fun value => by simpa using firstLongApplicationWithEnoughCharactersToBreak value +\n"
+    ++ "          secondLongApplication value)\n"
+  let rebasedInfixExpected :=
+    "def rebasedInfixProof :=\n"
+    ++ "  (fun value => by\n"
+    ++ "    simpa using firstLongApplicationWithEnoughCharactersToBreak value +\n"
+    ++ "      secondLongApplication value)\n"
+  let rebasedInfixFormatted ←
+    Formatter.formatSourceWithEnv env rebasedInfixSource
+      "reviewed-rebased-infix-proof.lean" { lineWidth := 60 }
+  assertEq "a moved proof rebases its infix continuation"
+    rebasedInfixExpected rebasedInfixFormatted
+
+  let inductionUsingSource :=
+    "theorem inductionUsingApplication (s H : Nat) : True := by\n"
+    ++ "  induction s, H using IsConstructible.induction_of_isTopologicalBasis\n"
+    ++ "      _ (isTopologicalBasis_basic_opens (R := R)) with\n"
+    ++ "  | first => trivial\n"
+  let inductionUsingExpected :=
+    "theorem inductionUsingApplication (s H : Nat) : True := by\n"
+    ++ "  induction s, H\n"
+    ++ "    using IsConstructible.induction_of_isTopologicalBasis\n"
+    ++ "      _ (isTopologicalBasis_basic_opens (R := R)) with\n"
+    ++ "  | first => trivial\n"
+  let inductionUsingFormatted ←
+    Formatter.formatSourceWithEnv env inductionUsingSource
+      "reviewed-induction-using-application.lean" { lineWidth := 72 }
+  assertEq "a moved using application rebases its arguments"
+    inductionUsingExpected inductionUsingFormatted
+
+  let attachedDoSource :=
+    "meta def delabSetImageSubtype : Delab :=\n"
+    ++ "  whenPPOption getPPCoercions do\n"
+    ++ "    let value := 0\n"
+    ++ "    pure value\n"
+  let attachedDoFormatted ←
+    Formatter.formatSourceWithEnv env attachedDoSource
+      "reviewed-attached-do-application.lean" { lineWidth := 100 }
+  assertEq "a fitting application stays with its attached do suffix"
+    attachedDoSource attachedDoFormatted
+
+  let initializeRecordSource :=
+    "initialize registerBuiltinAttribute {\n"
+    ++ "    name := `aliasIn\n"
+    ++ "    descr := \"create alias in another namespace\"\n"
+    ++ "    applicationTime := .afterCompilation\n"
+    ++ "  }\n"
+  let initializeRecordExpected :=
+    "initialize registerBuiltinAttribute {\n"
+    ++ "  name := `aliasIn\n"
+    ++ "  descr := \"create alias in another namespace\"\n"
+    ++ "  applicationTime := .afterCompilation\n"
+    ++ "}\n"
+  let initializeRecordFormatted ←
+    Formatter.formatSourceWithEnv env initializeRecordSource
+      "reviewed-initialize-record.lean" { lineWidth := 72 }
+  assertEq "initialize keeps its layout-sensitive record operand attached"
+    initializeRecordExpected initializeRecordFormatted
+
+  let initializeFunctionSource :=
+    "initialize ringCleanupRef.set fun expression => do\n"
+    ++ "  return (← cleanup expression).value\n"
+  let initializeFunctionFormatted ←
+    Formatter.formatSourceWithEnv env initializeFunctionSource
+      "reviewed-initialize-function.lean" { lineWidth := 100 }
+  assertEq "a fitting initialize function header remains attached"
+    initializeFunctionSource initializeFunctionFormatted
+
+  let multilineAlternativeSource :=
+    "theorem normalizeSelectionSet_directiveFree (schema : Schema)\n"
+    ++ "    : ∀ parentType selectionSet,\n"
+    ++ "        selectionSetDirectiveFree selectionSet\n"
+    ++ "        -> selectionSetDirectiveFree\n"
+    ++ "            (normalizeSelectionSet schema parentType selectionSet) := by\n"
+    ++ "  intro parentType selectionSet\n"
+    ++ "  induction parentType, selectionSet using normalizeSelectionSet.induct schema with\n"
+    ++ "  | case1 parentType =>\n"
+    ++ "      intro hfree\n"
+    ++ "      trivial\n"
+    ++ "  | case2 parentType rest responseName fieldName arguments directives\n"
+    ++ "      selectionSet hlookup hrest =>\n"
+    ++ "      intro hfree\n"
+    ++ "      have hrestFree :=\n"
+    ++ "        selectionSetDirectiveFree_tail hfree\n"
+    ++ "      have hfilteredRestFree :\n"
+    ++ "          selectionSetDirectiveFree\n"
+    ++ "            (withoutFieldSelectionsWithResponseName schema responseName rest) :=\n"
+    ++ "        withoutFieldSelectionsWithResponseName_directiveFree schema responseName rest hrestFree\n"
+    ++ "      simpa [normalizeSelectionSet, hlookup] using hrest hfilteredRestFree\n"
+  let multilineAlternativeFormatted ←
+    Formatter.formatSourceWithEnv env multilineAlternativeSource
+      "reviewed-multiline-alternative-body.lean" { lineWidth := 90 }
+  assertEq "a multiline alternative body keeps the alternative base"
+    multilineAlternativeSource multilineAlternativeFormatted
+
+  let nestedAssignmentSource :=
+    "theorem nestedAssignmentProof (value : Nat) : True := by\n"
+    ++ "  cases value with\n"
+    ++ "  | zero => trivial\n"
+    ++ "  | succ childDepth =>\n"
+    ++ "      have hspecAppend :\n"
+    ++ "          (groupedFieldVisitResult responseName\n"
+    ++ "            (completeValue schema resolvers variableValues (childDepth + 1)\n"
+    ++ "              (.named typeName) fields source)).fst =\n"
+    ++ "            (groupedFieldVisitResult responseName\n"
+    ++ "              (completeValue schema resolvers variableValues (childDepth + 1)\n"
+    ++ "                (.named typeName) fields sourceWithEnoughCharactersForBoundaryXYZ)).fst := by\n"
+    ++ "        cases proof\n"
+    ++ "      trivial\n"
+  let nestedAssignmentFormatted ←
+    Formatter.formatSourceWithEnv env nestedAssignmentSource
+      "reviewed-nested-assignment-proof.lean" { lineWidth := 90 }
+  assertTextContains "a nested proof assignment keeps by attached to its separator"
+    nestedAssignmentFormatted ")).fst := by\n"
+  assertTextLacks "a nested proof assignment cannot strand by after its separator"
+    nestedAssignmentFormatted ":=\n        by\n"
+
+  let privateInitializeSource :=
+    "private initialize defaultReference : IO.Ref (Option Nat) ←\n" ++ "  IO.mkRef none\n"
+  let privateInitializeFormatted ←
+    Formatter.formatSourceWithEnv env privateInitializeSource
+      "reviewed-private-initialize.lean" { lineWidth := 100 }
+  assertEq "a declaration modifier stays with a multiline command header"
+    privateInitializeSource privateInitializeFormatted
+
+  let inlineAttributeSource :=
+    "@[inline] def compactAttributedDeclaration (value : Nat) : Nat := value\n"
+  let inlineAttributeFormatted ←
+    Formatter.formatSourceWithEnv env inlineAttributeSource
+      "reviewed-inline-attribute.lean" { lineWidth := 100 }
+  assertEq "a fitting inline attribute remains with its declaration"
+    inlineAttributeSource inlineAttributeFormatted
+
+  let loopSource :=
+    "def forLoop (values : List Nat) : IO Unit :=\n"
+    ++ "  for value in values do\n"
+    ++ "    IO.println value\n"
+    ++ "    IO.println (value + 1)\n"
+    ++ "\n"
+    ++ "def repeatLoop (values : List Nat) : IO Unit := do\n"
+    ++ "  let mut remaining := values\n"
+    ++ "  repeat do\n"
+    ++ "    let _ :: tail := remaining | return\n"
+    ++ "    remaining := tail\n"
+  let loopFormatted ←
+    Formatter.formatSourceWithEnv env loopSource
+      "reviewed-do-loop-suffixes.lean" { lineWidth := 100 }
+  assertEq "fitting loop headers retain their do suffix" loopSource loopFormatted
+
+  let refutableLetSource :=
+    "def refutableLetFallback (candidate : Option Nat) : IO Nat := do\n"
+    ++ "  let some value := candidate\n"
+    ++ "  | do\n"
+    ++ "      pure 0\n"
+    ++ "  pure value\n"
+  let refutableLetFormatted ←
+    Formatter.formatSourceWithEnv env refutableLetSource
+      "reviewed-refutable-let-do.lean" { lineWidth := 100 }
+  let refutableLetExpected :=
+    "def refutableLetFallback (candidate : Option Nat) : IO Nat := do\n"
+    ++ "  let some value := candidate\n"
+    ++ "  | do pure 0\n"
+    ++ "  pure value\n"
+  assertEq "a refutable let breaks before its attached fallback introducer"
+    refutableLetExpected refutableLetFormatted
+
+  let namedArgumentSource :=
+    "def namedArgumentCloser :=\n"
+    ++ "  transform value\n"
+    ++ "    (post :=\n"
+    ++ "      fun current =>\n"
+    ++ "        try\n"
+    ++ "          pure current\n"
+    ++ "        catch exception =>\n"
+    ++ "          throwError \"unable to transform {exception}\")\n"
+  let namedArgumentFormatted ←
+    Formatter.formatSourceWithEnv env namedArgumentSource
+      "reviewed-named-argument-closer.lean" { lineWidth := 60 }
+  assertEq "a fitting named-argument closer remains on its value line"
+    namedArgumentSource namedArgumentFormatted
+
+  let wrappedNamedArgumentSource :=
+    "def wrappedNamedArgumentCloser :=\n"
+    ++ "  let rec loop : List Nat → Option Nat\n"
+    ++ "    | [] => none\n"
+    ++ "    | indexMore :: rest =>\n"
+    ++ "        match candidate with\n"
+    ++ "        | none => loop rest\n"
+    ++ "        | some child =>\n"
+    ++ "            let rendered? :=\n"
+    ++ "              match plan with\n"
+    ++ "              | some islandPlan =>\n"
+    ++ "                  let rendered :=\n"
+    ++ "                    state.emitOriginalTree child\n"
+    ++ "                      (formatLeadingBoundary :=\n"
+    ++ "                        formatOriginalChildLeadingBoundary state.context segment indexMore\n"
+    ++ "                          )\n"
+    ++ "                      (islandPlan? := some islandPlan)\n"
+    ++ "                  if condition then some rendered else none\n"
+    ++ "              | none => none\n"
+    ++ "            rendered?\n"
+    ++ "  loop indexes\n"
+  let wrappedNamedArgumentExpected :=
+    "def wrappedNamedArgumentCloser :=\n"
+    ++ "  let rec loop : List Nat → Option Nat\n"
+    ++ "    | [] => none\n"
+    ++ "    | indexMore :: rest =>\n"
+    ++ "        match candidate with\n"
+    ++ "        | none => loop rest\n"
+    ++ "        | some child =>\n"
+    ++ "            let rendered? :=\n"
+    ++ "              match plan with\n"
+    ++ "              | some islandPlan =>\n"
+    ++ "                  let rendered :=\n"
+    ++ "                    state.emitOriginalTree child\n"
+    ++ "                      (formatLeadingBoundary :=\n"
+    ++ "                        formatOriginalChildLeadingBoundary state.context segment\n"
+    ++ "                          indexMore)\n"
+    ++ "                      (islandPlan? := some islandPlan)\n"
+    ++ "                  if condition then some rendered else none\n"
+    ++ "              | none => none\n"
+    ++ "            rendered?\n"
+    ++ "  loop indexes\n"
+  let wrappedNamedArgumentFormatted ←
+    Formatter.formatSourceWithEnv env wrappedNamedArgumentSource
+      "reviewed-wrapped-named-argument-closer.lean" { lineWidth := 90 }
+  assertEq "a wrapped named-argument closer remains attached to its value"
+    wrappedNamedArgumentExpected wrappedNamedArgumentFormatted
+
+  let pipeSource :=
+    "def lowPriorityPipeBase (facts : List Nat) := do\n"
+    ++ "  return Prod.snd <| facts.foldl (fun (count, values) fact =>\n"
+    ++ "    (count + 1, fact :: values)) (0, [])\n"
+    ++ "\n"
+    ++ "def lowPriorityIf (condition : Bool) :=\n"
+    ++ "  veryLongFunctionNameForLowPriorityIf firstArgument secondArgument\n"
+    ++ "  <| if condition then firstResult else secondResult\n"
+  let pipeExpected :=
+    "def lowPriorityPipeBase (facts : List Nat) := do\n"
+    ++ "  return Prod.snd\n"
+    ++ "  <| facts.foldl\n"
+    ++ "      (fun (count, values) fact =>\n"
+    ++ "        (count + 1, fact :: values))\n"
+    ++ "      (0, [])\n"
+    ++ "\n"
+    ++ "def lowPriorityIf (condition : Bool) :=\n"
+    ++ "  veryLongFunctionNameForLowPriorityIf firstArgument secondArgument\n"
+    ++ "  <| if condition then firstResult else secondResult\n"
+  let pipeFormatted ←
+    Formatter.formatSourceWithEnv env pipeSource
+      "reviewed-low-priority-base.lean" { lineWidth := 72 }
+  assertEq "low-priority pipes return to their logical base" pipeExpected pipeFormatted
+
 def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertSyntaxTreeRoundTrip env
   assertNonSourceLexemesPreserveModule env
@@ -17993,6 +18613,7 @@ def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertDelimitedCollectionsFlattenOnlySeparatedItems
 
 def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
+  assertReviewedMathlibConsistencyShapes env
   assertBorrowedTermUsesUnaryPrefixRule env
   assertSafeArrayIndexKeepsPostfixQuestion env
   assertGetElemBracketStaysAttachedAcrossWrap env
@@ -18012,6 +18633,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertCustomNotationBracketSpacing
   assertOperatorLikeModifierTokenPreservesParse env
   assertSetOptionInBreaksAfterIn env
+  assertCommentedScopedCommandWrappersPreserveCode env
   assertDocumentedTopLevelDeclarationKeepsBaseIndent env
   assertModifiedTopLevelCommandsUseLineBase env
   assertCommandInWrapperPreservesBreakAfterIn env

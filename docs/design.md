@@ -453,6 +453,21 @@ import Very.Long.Module.Name.ThatRemainsOneImportCommand
 syntax "widget" : term
 ```
 
+A single-expression `initialize` command keeps its keyword with the expression
+head. Its top-level application arguments remain on that header line because a
+command-base continuation would be parsed as another implicit initializer
+statement. Nested bodies still use the command base:
+
+```lean
+initialize registerBuiltinAttribute {
+  name := `sample
+  descr := "sample attribute"
+}
+
+initialize cleanupRef.set fun expression => do
+  return (← cleanup expression).value
+```
+
 Long `assert_not_exists` commands put their identifier list on continuation
 lines and fill each line up to the configured width:
 
@@ -514,7 +529,9 @@ Macro signatures form a header flow independently of their expansion body. A
 fitting header remains on one line even when the body is multiline; an
 overflowing header may flow between parser-owned pattern arguments before it
 breaks before its type, and the body then starts one level inside the command.
-A leading `do` or `by` stays with `=>` as the body's introducer suffix.
+A leading `do` or `by` stays with `=>` as the body's introducer suffix. When a
+macro renders multiline, it has the same blank command boundary before its next
+declaration as other multiline declarations, including through attributes.
 
 ```lean
 local macro "map_simp" : tactic =>
@@ -1398,7 +1415,9 @@ def pipeHave :=
 
 When a `by` proof is the right operand of `<|`, the introducer remains attached
 to the operator and its body starts one level below the surrounding expression
-base:
+base. If the tactic shell before that proof is already multiline, the proof body
+uses the shell's rounded local base; it does not inherit an incidental inline
+token column:
 
 ```lean
 theorem pipedProof : True :=
@@ -1720,6 +1739,19 @@ theorem casesExample (value : Nat) : True := by
       exact True.intro
   | succ value =>
       exact True.intro
+```
+
+An unlabeled parenthesized default alternative keeps its opening parenthesis
+with `with`. The enclosed tactic sequence uses one body indentation, and a
+fitting closing parenthesis stays on its final line:
+
+```lean
+theorem inductionDefault (value : Nat) : True := by
+  induction value with (
+    simp only [Nat.add_zero]
+    simp only [Nat.zero_add])
+  | zero => trivial
+  | succ value hypothesis => trivial
 ```
 
 A long `induction ... generalizing` header wraps between generalized identifiers.

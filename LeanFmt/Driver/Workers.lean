@@ -192,7 +192,7 @@ def formatFile (loader : EnvironmentLoader) (options : Options) (path : FilePath
     let (source, readMs) ← timeIO <| IO.FS.readFile path
     let (env, environmentMs) ←
       timeIO
-      <|  if options.profile then
+      <| if options.profile then
             loader.environmentForSourceProfiled options source path.toString
           else
             loader.environmentForSource options source path.toString
@@ -341,8 +341,7 @@ def loadRequestedNativeLibraries : IO Unit := do
 def loadRequestedPlugins : IO Unit := do
   match ← IO.getEnv pluginsEnvironmentVariable with
   | some value =>
-      Lean.withImporting do
-        (runtimePaths value).forM fun path => Lean.loadPlugin path
+      Lean.withImporting do (runtimePaths value).forM fun path => Lean.loadPlugin path
   | none => pure ()
 
 def inheritRequestedRuntimeEnvironment (environment : Array (String × Option String))
@@ -364,7 +363,7 @@ def loadWorkerProcessContext (cwd? : Option FilePath) : IO WorkerProcessContext 
     let detail := output.stderr.trimAscii.toString
     throw
     <| IO.userError
-    <|  if detail.isEmpty then
+    <| if detail.isEmpty then
           s!"`{lake} env` exited with code {output.exitCode}"
         else
           s!"`{lake} env` exited with code {output.exitCode}: {detail}"

@@ -1723,6 +1723,12 @@ def FlowRenderContext.nextBreakIndex (flow : FlowRenderContext) (index : Nat) : 
   | some breakPoint => breakPoint.index
   | none => flow.segment.stop
 
+def FlowRenderContext.suffixMayContinueAcrossBreak
+    (flow : FlowRenderContext) (index : Nat)
+    : Bool :=
+  flow.plan.keepsPrefixWithChildFirstLine index
+  || groupedSuffixMayContinueAcrossRuleBreak flow.segment index
+
 def FlowRenderContext.stateForPieceFit
     (flow : FlowRenderContext) (state : RenderState) (index : Nat)
     : RenderState :=
@@ -1733,7 +1739,7 @@ def FlowRenderContext.stateForPieceFit
     match flow.segment.child? (nextBreakIndex - 1) with
     | some child =>
         let suffixStop :=
-          if groupedSuffixMayContinueAcrossRuleBreak flow.segment nextBreakIndex then
+          if flow.suffixMayContinueAcrossBreak nextBreakIndex then
             flow.segment.stop
           else
             nextBreakIndex
@@ -1741,6 +1747,19 @@ def FlowRenderContext.stateForPieceFit
           lineFitSuffixForChild state flow.segment (nextBreakIndex - 1) suffixStop child
         { state with lineFitSuffixWidth := suffixWidth }
     | none => state
+
+def FlowRenderContext.stateForChildFit
+    (flow : FlowRenderContext) (state : RenderState) (index : Nat)
+    (child : SyntaxTree.Tree)
+    : RenderState :=
+  let nextBreakIndex := flow.nextBreakIndex index
+  let suffixStop :=
+    if flow.suffixMayContinueAcrossBreak nextBreakIndex then
+      flow.segment.stop
+    else
+      nextBreakIndex
+  let suffixWidth := lineFitSuffixForChild state flow.segment index suffixStop child
+  { state with lineFitSuffixWidth := suffixWidth }
 
 def FlowRenderContext.measurePiece
     (flow : FlowRenderContext) (state : RenderState) (index : Nat)
@@ -1755,14 +1774,14 @@ def FlowRenderContext.measureChild
     (childSegment : LineBreakRules.Segment)
     (respectSourceBreaks : Bool := true)
     : LayoutProbe :=
-  let probe := { flow.stateForPieceFit state index with context }
+  let probe := { flow.stateForChildFit state index childSegment.parent with context }
   measureLayout probe childSegment respectSourceBreaks
 
 def FlowRenderContext.childFirstLineFits
     (flow : FlowRenderContext) (state : RenderState) (index : Nat)
     (context : LineBreakRules.RuleContext) (child : SyntaxTree.Tree)
     : Bool :=
-  let probe := { flow.stateForPieceFit state index with context }
+  let probe := { flow.stateForChildFit state index child with context }
   let (rendered, _) := renderFirstLineOfTree probe child
   !outputIntroducedLineBreak probe rendered
   && lineFitsWithTrailingWidth rendered.currentLine rendered.lineFitSuffixWidth
@@ -1772,21 +1791,31 @@ def FlowRenderContext.childSourceFirstLineFitsAfterPrefix
     (flow : FlowRenderContext) (state : RenderState) (index : Nat)
     (child : SyntaxTree.Tree)
     : Bool :=
-  let probe := flow.stateForPieceFit state index
+  let probe := flow.stateForChildFit state index child
   match probe.lastToken?, child.firstToken?,
         treeFirstSourceLineWidth? probe.source child with
   | some left, some first, some firstLineWidth =>
       let spacingWidth := (SpaceRules.spaceBetweenTokens left first).length
       treeSourceHasLineStructure probe.source child
-      && probe.currentColumn + spacingWidth + firstLineWidth <= probe.options.lineWidth
+      && probe.currentColumn + spacingWidth + firstLineWidth + probe.lineFitSuffixWidth
+          <= probe.options.lineWidth
   | _, _, _ => false
 
 def FlowRenderContext.withBreak
     (flow : FlowRenderContext) (state : RenderState)
     (breakPoint : LineBreakRules.BreakPoint)
     : RenderState :=
-  let entryIndentation := flow.entryState.segmentIndentation
-  let entryBaseColumn := flow.entryState.segmentBaseColumn
+  let entryIndentation :=
+    if flow.plan.base == .rounded && outputIntroducedLineBreak flow.entryState state then
+      max flow.entryState.segmentIndentation
+        (indentationLevelForColumn state.currentIndent)
+    else
+      flow.entryState.segmentIndentation
+  let entryBaseColumn :=
+    if entryIndentation == flow.entryState.segmentIndentation then
+      flow.entryState.segmentBaseColumn
+    else
+      entryIndentation * indentationSpaces
   let base :=
     ruleBreakBase flow.entryState flow.segment flow.plan
       entryBaseColumn entryIndentation breakPoint
@@ -1958,7 +1987,7 @@ mutual
     else if plan.isMandatory && !plan.breakPoints.isEmpty then
       renderBalancedSegment state segment plan
     else if plan.breakPoints.isEmpty && !plan.isFlow then
-      renderChildren state segment
+      renderBalancedSegment state segment plan
     else if plan.preservesSourceBreaks then
       renderUsingExistingBreaks state segment plan
     else
@@ -2449,7 +2478,12 @@ mutual
           | none => []
         let needsEarlierBreaks :=
           !earlierBreaks.isEmpty && !(measureLayout state segment false).fits
-        if needsEarlierBreaks then
+        let tightSuffixIsDelimiterCloser :=
+          tightSuffixIndex?.any
+            fun index =>
+              (segment.child? index >>= SyntaxTree.Tree.firstToken?).any
+                fun token => SpaceRules.isDelimiterCloserToken token.lexeme
+        if needsEarlierBreaks && !tightSuffixIsDelimiterCloser then
           renderBalancedSegment state segment { plan with breakPoints := earlierBreaks }
             false
         else
@@ -2489,10 +2523,6 @@ mutual
               state
           let childSegment := LineBreakRules.Segment.ofTree child
           let childContext := state.context.push flow.segment index
-          let childFit : Thunk LayoutProbe :=
-            ⟨fun _ =>
-              flow.measureChild state index childContext childSegment
-                (index == flow.segment.start)⟩
           let keepsPrefixWithChildFirstLine :=
             flow.plan.keepsPrefixWithChildFirstLine index
           let childFirstLineFits :=
@@ -2507,10 +2537,24 @@ mutual
           let childIsDelimiterCloser :=
             child.firstToken?.any
               fun token => SpaceRules.isDelimiterCloserToken token.lexeme
+          let attachDelimiterCloser :=
+            childIsDelimiterCloser
+            && keepsPrefixWithChildFirstLine
+            && !childStartsWithLineBreakingComment
+          let state :=
+            if attachDelimiterCloser then
+              { state with pendingIndent? := none }
+            else
+              state
+          let childFit : Thunk LayoutProbe :=
+            ⟨fun _ =>
+              flow.measureChild state index childContext childSegment
+                (index == flow.segment.start)⟩
           let keepPrefixWithChildFirstLine :=
             (keepsPrefixWithChildFirstLine
               && !childStartsWithLineBreakingComment
-              && (childFirstLineFits
+              && (childIsDelimiterCloser
+                  || childFirstLineFits
                   || flow.childSourceFirstLineFitsAfterPrefix state index child))
             || (!childIsDelimiterCloser
                 && childStartsWithLineBreakingComment
@@ -2520,7 +2564,7 @@ mutual
             let before := state
             let nextBreakIndex := flow.nextBreakIndex index
             let suffixStop :=
-              if groupedSuffixMayContinueAcrossRuleBreak flow.segment nextBreakIndex then
+              if flow.suffixMayContinueAcrossBreak nextBreakIndex then
                 flow.segment.stop
               else
                 nextBreakIndex
@@ -2553,7 +2597,9 @@ mutual
                 renderNestedAndContinue state
               else if childFit.fits
                       && !(keepPrefixWithChildFirstLine
-                            && childStartsWithLineBreakingComment) then
+                            && (childStartsWithLineBreakingComment
+                                || (childIsDelimiterCloser
+                                    && state.pendingIndent?.isSome))) then
                 renderFlowChildren (state.commitLayoutProbe childFit) flow (index + 1)
                   false
               else if (if keepsPrefixWithChildFirstLine then
@@ -2577,7 +2623,27 @@ mutual
       (resolvePartialSegments : Bool := true)
       : RenderState :=
     if plan.breakPoints.isEmpty then
-      renderChildren state segment
+      segment.indexes.foldl
+        (fun state index =>
+          match segment.child? index with
+          | some child =>
+              let childIsDelimiterCloser :=
+                child.firstToken?.any
+                  fun token => SpaceRules.isDelimiterCloserToken token.lexeme
+              let commentForcesBreak :=
+                commentForcesBreakAt state.source segment index
+                || (commentTriviaBeforeTree? state child).any
+                    fun trivia => (SourceBoundary.ofText trivia).commentForcesBreak
+              let state :=
+                if childIsDelimiterCloser
+                    && plan.keepsPrefixWithChildFirstLine index
+                    && !commentForcesBreak then
+                  { state with pendingIndent? := none }
+                else
+                  state
+              renderNestedSegment state segment index child
+          | none => state)
+        state
     else
       let entryIndentation := state.segmentIndentation
       let entryBaseColumn := state.segmentBaseColumn

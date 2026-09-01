@@ -156,13 +156,15 @@ def RuleContext.parentWrapsStructureFieldDefaultValue (context : RuleContext) : 
       && grandparent.childIsLast
   | _ => false
 
-def RuleContext.parentIsAnnotatedDeclaration (context : RuleContext) : Bool :=
+def RuleContext.parentIsDeclarationPrefixOwner (context : RuleContext) : Bool :=
   match context.ancestors with
-  | parent :: _ => parent.nodeKind? == some .annotatedDeclaration
+  | parent :: _ =>
+      parent.nodeKind? == some .annotatedDeclaration
+      || parent.nodeKind? == some .modifiedDeclaration
   | _ => false
 
 def defaultInheritBase (context : RuleContext) (segment : Segment) : Bool :=
-  context.parentIsAnnotatedDeclaration
+  context.parentIsDeclarationPrefixOwner
   || context.parentIsSingletonArrayItemWrapper
   || segment.rawKind? == some `Lean.Parser.Term.letDecl
   || (segment.rawKind? == some `null && context.parentIsCommandBinderList)
@@ -400,19 +402,26 @@ inductive CommandKind where
   | moduleDoc
   | declaration
   | other
-deriving BEq, Repr
+deriving BEq, Repr, Inhabited
 
-def commandKind (tree : SyntaxTree.Tree) : CommandKind :=
-  if treeIsRawKind tree `Lean.Parser.Module.moduleTk then
-    .moduleKeyword
-  else if treeIsRawKind tree `Lean.Parser.Module.import then
-    if treeFirstLexeme? tree == some "public" then .publicImport else .ordinaryImport
-  else if treeIsRawKind tree `Lean.Parser.Command.moduleDoc then
-    .moduleDoc
-  else if treeIsRawKind tree `Lean.Parser.Command.declaration then
-    .declaration
-  else
-    .other
+partial def commandKind : SyntaxTree.Tree → CommandKind
+  | .node .annotatedDeclaration children | .node .modifiedDeclaration children =>
+      children.foldr
+        (fun child kind =>
+          if kind == .other && treeHasContent child then commandKind child else kind)
+        .other
+  | tree =>
+      if treeIsRawKind tree `Lean.Parser.Module.moduleTk then
+        .moduleKeyword
+      else if treeIsRawKind tree `Lean.Parser.Module.import then
+        if treeFirstLexeme? tree == some "public" then .publicImport else .ordinaryImport
+      else if treeIsRawKind tree `Lean.Parser.Command.moduleDoc then
+        .moduleDoc
+      else if treeIsRawKind tree `Lean.Parser.Command.declaration
+              || treeIsRawKind tree `Lean.Parser.Command.macro then
+        .declaration
+      else
+        .other
 
 inductive CommandSequenceKind where
   | module
@@ -893,19 +902,34 @@ def parentIsBinderDefaultWrapper (context : RuleContext) : Bool :=
       && parent.childIndex == 3
   | _ => false
 
+def framePathIsInitializeValue : List Frame → Bool
+  | parent :: rest =>
+      parent.rawKind? == some `Lean.Parser.Command.initialize
+      || (parent.nodeKind? == some .definition
+          && parent.childIndex == 3
+          && rest.head?.bind Frame.rawKind? == some `Lean.Parser.Command.initialize)
+  | [] => false
+
+def applicationIsInitializeValue (context : RuleContext) : Bool :=
+  framePathIsInitializeValue context.ancestors
+
 def spacedApplicationOwnsNestedBase : List Frame -> Bool
   | [] => false
   | parent :: rest =>
-      match parent.segment.parent with
-      | .node (.tactic _ _ _ _ true) _
-      | .node .parserOwnedHeader _
-      | .node .parserOwnedBody _
-      | .node (.raw `Lean.Parser.Term.fromTerm) _ => true
-      | .node .suffixGroup _
-      | .node (.raw `null) _
-      | .node (.infixChain `«term_<|_») _
-      | .node .lowPriorityInfixRhs _ => spacedApplicationOwnsNestedBase rest
-      | _ => false
+      if parent.nodeKind? == some .application && framePathIsInitializeValue rest then
+        true
+      else
+        match parent.segment.parent with
+        | .node (.tactic _ _ _ _ true) _
+        | .node .parserOwnedHeader _
+        | .node .parserOwnedBody _
+        | .node (.tacticEliminationHeader _) _
+        | .node (.raw `Lean.Parser.Term.fromTerm) _ => true
+        | .node .suffixGroup _
+        | .node (.raw `null) _
+        | .node (.infixChain `«term_<|_») _
+        | .node .lowPriorityInfixRhs _ => spacedApplicationOwnsNestedBase rest
+        | _ => false
 
 def nullInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   defaultInheritBase context segment
@@ -1848,10 +1872,7 @@ def exportBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint 
 def applicationArgumentStaysAttached
     (context : RuleContext) (segment : Segment) (index : Nat)
     : Bool :=
-  attachedBodyStart segment index
-  || (childIsRawKind segment index `Lean.Parser.Term.structInst
-      && context.ancestors.any
-          fun frame => frame.rawKind? == some `Lean.Parser.Command.initialize)
+  attachedBodyStart segment index || applicationIsInitializeValue context
 
 private def proofBodyHasMultipleTactics : SyntaxTree.Tree → Bool :=
   SyntaxTree.Tree.proofBodyHasMultipleTactics
@@ -1975,7 +1996,10 @@ def applicationRule : LineBreakRule :=
         && (applicationHasPatternLambda context segment
             || applicationHasMultipleStructuredProofArguments context segment)
     flow := fun _ _ => true
-    inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
+    inheritBase :=
+      fun context _ =>
+        applicationIsInitializeValue context
+        || spacedApplicationOwnsNestedBase context.ancestors
     breakPoints := applicationBreaks
   }
 
@@ -2679,6 +2703,13 @@ def annotatedDeclarationRule : LineBreakRule :=
     breakPoints := annotatedDeclarationBreaks
   }
 
+def modifiedDeclarationRule : LineBreakRule :=
+  {
+    name := "modifiedDeclaration"
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index => annotatedDeclarationKeepsModifierPrefix segment index
+  }
+
 def declarationModifierRule : LineBreakRule :=
   {
     name := "declarationModifier"
@@ -3200,7 +3231,7 @@ def matchExprAltBreaks (_context : RuleContext) (segment : Segment) : List Break
     if attachedBodyStart segment 3 then
       none
     else
-      boundaryBreak? segment 3 1
+      boundaryBreak? segment 3 alternativeBodyIndentLevels
   [leadingBreak? segment segment.start 0, bodyBreak].filterMap id
 
 def doBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
@@ -3730,6 +3761,16 @@ def suffixGroupRule : LineBreakRule :=
 def tacticAssignmentProofRule : LineBreakRule :=
   { suffixGroupRule with name := "tacticAssignmentProof", flow := fun _ _ => false }
 
+def tacticAttachedProofRule : LineBreakRule :=
+  {
+    suffixGroupRule with
+      name := "tacticAttachedProof"
+      mandatory := fun _ _ => false
+      flow := fun _ _ => true
+      inheritBase := fun _ _ => false
+      roundUpBaseIndentation := true
+  }
+
 def namedDiscriminantRule : LineBreakRule :=
   {
     name := "namedDiscriminant"
@@ -3753,6 +3794,10 @@ def parenRule : LineBreakRule :=
   {
     name := "paren"
     flow := fun context segment => !(patternAliasParenBreaks context segment).isEmpty
+    formatOriginalChildLeadingBoundary :=
+      fun _ segment index => index + 1 == segment.stop
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index => index + 1 == segment.stop
     inheritBase :=
       fun context _ =>
         parentIsRawKind context `Lean.Parser.Term.namedPattern
@@ -3913,11 +3958,14 @@ def tacticIdentifierClauseRule : LineBreakRule :=
     breakPoints := tacticIdentifierClauseBreaks
   }
 
+def expressionHeadStartAlignment (context : RuleContext) : StartAlignment :=
+  if parentIsNodeKind context .lowPriorityInfixRhs then .none else .preferred
+
 def ifThenElseRule : LineBreakRule :=
   {
     name := "ifThenElse"
     useExistingBreaks := fun _ _ => true
-    startAlignment := fun _ _ => .preferred
+    startAlignment := fun context _ => expressionHeadStartAlignment context
     inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
     roundUpBaseIndentation := true
     breakPoints := ifThenElseBreaks
@@ -3927,7 +3975,7 @@ def dependentIfThenElseRule : LineBreakRule :=
   {
     name := "dependentIfThenElse"
     useExistingBreaks := fun _ _ => true
-    startAlignment := fun _ _ => .preferred
+    startAlignment := fun context _ => expressionHeadStartAlignment context
     inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
     roundUpBaseIndentation := true
     breakPoints := dependentIfThenElseBreaks
@@ -3937,7 +3985,7 @@ def ifLetThenElseRule : LineBreakRule :=
   {
     name := "ifLetThenElse"
     useExistingBreaks := fun _ _ => true
-    startAlignment := fun _ _ => .preferred
+    startAlignment := fun context _ => expressionHeadStartAlignment context
     inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
     roundUpBaseIndentation := true
     breakPoints := ifLetThenElseBreaks
@@ -3948,7 +3996,7 @@ def ifThenElseChainRule : LineBreakRule :=
     name := "ifThenElseChain"
     mandatory := ifThenElseChainMandatory
     useExistingBreaks := fun _ _ => true
-    startAlignment := fun _ _ => .preferred
+    startAlignment := fun context _ => expressionHeadStartAlignment context
     inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
     roundUpBaseIndentation := true
     breakPoints := ifThenElseChainBreaks
@@ -4067,7 +4115,8 @@ def matchAltRule : LineBreakRule :=
 def matchExprAltRule : LineBreakRule :=
   {
     name := "matchExprAlt"
-    mandatory := fun _ _ => true
+    useExistingBreaks := fun _ _ => true
+    flow := fun _ _ => true
     inheritBase := fun _ _ => true
     breakPoints := matchExprAltBreaks
   }
@@ -4825,8 +4874,8 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `finiteness) _ => some defaultRule
   | .node (.raw `eqns) _ => some defaultRule
   | .node (.raw `positivity) _ => some defaultRule
-  | .node (.raw `Mathlib.Meta.Positivity.Meta.Positivity.Tactic.Positivity.positivity) _
-    => some defaultRule
+  | .node (.raw `Mathlib.Meta.Positivity.Meta.Positivity.Tactic.Positivity.positivity)
+      _ => some defaultRule
   | .node (.raw `norm_num) _ => some defaultRule
   | .node (.raw `prioLow) _ => some defaultRule
   | .node (.raw `prioMid) _ => some defaultRule
@@ -4906,6 +4955,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   -- Syntax with specialized formatting rules.
   | .node (.raw `Lean.Parser.Command.declaration) _ => some declarationRule
   | .node .annotatedDeclaration _ => some annotatedDeclarationRule
+  | .node .modifiedDeclaration _ => some modifiedDeclarationRule
   | .node (.raw `Lean.Parser.Command.structure) _ => some structureRule
   | .node .structureHeader _ => some structureHeaderRule
   | .node .structureConstructor _ => some structureConstructorRule
@@ -4949,6 +4999,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.whereDecls) _ => some whereDeclsRule
   | .node .suffixGroup _ => some suffixGroupRule
   | .node .tacticAssignmentProof _ => some tacticAssignmentProofRule
+  | .node .tacticAttachedProof _ => some tacticAttachedProofRule
   | .node .namedDiscriminant _ => some namedDiscriminantRule
   | .node (.raw `Lean.Parser.Command.whereStructInst) _ => some whereStructInstRule
   | .node (.raw `Lean.Parser.Command.mutual) _ => some mutualRule
@@ -4985,6 +5036,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.doCatch) _ => some doCatchRule
   | .node (.raw `Lean.Parser.Term.doCatchMatch) _ => some doRule
   | .node (.raw `Lean.Parser.Term.doFor) _ => some doForRule
+  | .node (.raw `Lean.Parser.Term.termFor) _ => some doForRule
   | .node (.raw `Lean.Parser.Term.doWhile) _ => some doForRule
   | .node (.raw `Lean.Parser.Term.doFinally) _ => some doFinallyRule
   | .node (.raw `Lean.Parser.Term.doContinue) _ => some defaultRule

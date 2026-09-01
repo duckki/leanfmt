@@ -58,5 +58,6 @@ end ProjectGenerated
 namespace Qq
 
 scoped syntax (name := «termQ(__)») "q(" term (" : " term)? ")" : term
+scoped syntax (name := «termQ(__)_1») "q1(" term ")" : term
 
 end Qq
