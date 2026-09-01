@@ -3491,11 +3491,11 @@ def assertShowFromBreaksLikeAssignment (env : Lean.Environment) : IO Unit := do
     ++ "    pure ()\n"
     ++ "\n"
     ++ "def showLongExample : Result :=\n"
-    ++ "  show Result from\n"
-    ++ "    veryLongFunctionNameForShowFormatting firstArgumentNameForShowFormatting\n"
-    ++ "      secondArgumentNameForShowFormatting thirdArgumentNameForShowFormatting\n"
+    ++ "  show Result from veryLongFunctionNameForShowFormatting\n"
+    ++ "    firstArgumentNameForShowFormatting secondArgumentNameForShowFormatting\n"
+    ++ "    thirdArgumentNameForShowFormatting\n"
   let formatted ← Formatter.formatSourceWithEnv env source "show-from-breaks.lean"
-  assertEq "show/from breaks like assignment" expected formatted
+  assertEq "show/from keeps the suffix with its application body" expected formatted
 
 def assertDoControlWrapperRules (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -10429,8 +10429,7 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
     ++ "  project_simp? proposition says exact True.intro\n"
   let detachedParserOwnedBodyExpected :=
     "theorem detachedParserOwnedBody : True := by\n"
-    ++ "  project_simp? proposition says\n"
-    ++ "    exact True.intro\n"
+    ++ "  project_simp? proposition says exact True.intro\n"
     ++ "\n"
     ++ "theorem inlineParserOwnedBody : True := by project_simp? proposition says exact True.intro\n"
   let detachedParserOwnedBodyResult ←
@@ -10448,6 +10447,47 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
       "detached-parser-owned-tactic-body-formatted.lean"
   assertEq "detached parser-owned tactic body formatting is idempotent"
     detachedParserOwnedBodyResult.formatted detachedParserOwnedBodyAgain
+
+  let longParserOwnedBodySource :=
+    "theorem longParserOwnedBody : True := by\n"
+    ++ "  project_simp? [firstNormalizationLemma, secondNormalizationLemma, thirdNormalizationLemma] says\n"
+    ++ "    exact proofTerm firstArgument secondArgument\n"
+  let longParserOwnedBodyExpected :=
+    "theorem longParserOwnedBody : True := by\n"
+    ++ "  project_simp? [firstNormalizationLemma, secondNormalizationLemma,\n"
+    ++ "    thirdNormalizationLemma]\n"
+    ++ "  says exact proofTerm firstArgument secondArgument\n"
+  let longParserOwnedBodyResult ←
+    Formatter.formatSourceWithEnvDetailed env longParserOwnedBodySource
+      "long-parser-owned-tactic-body.lean" { lineWidth := 72 }
+  assertTrue "a long parser-owned body does not fall back"
+    (!longParserOwnedBodyResult.fellBack)
+  assertEq "a parser-owned suffix stays with its movable body head"
+    longParserOwnedBodyExpected longParserOwnedBodyResult.formatted
+  assertTrue "a long parser-owned body preserves code"
+    (← codePreservedIgnoringWhitespace env longParserOwnedBodySource
+        longParserOwnedBodyResult.formatted)
+
+  let brokenParserOwnedBodySource :=
+    "theorem brokenParserOwnedBody : True := by\n"
+    ++ "  project_try? veryLongNormalizationProcedure firstNormalizationArgument secondNormalizationArgument thirdNormalizationArgument project_says\n"
+    ++ "    simp only [firstResultLemma, secondResultLemma, thirdResultLemma, fourthResultLemma]\n"
+  let brokenParserOwnedBodyExpected :=
+    "theorem brokenParserOwnedBody : True := by\n"
+    ++ "  project_try? veryLongNormalizationProcedure firstNormalizationArgument\n"
+    ++ "    secondNormalizationArgument thirdNormalizationArgument\n"
+    ++ "  project_says\n"
+    ++ "    simp only [firstResultLemma, secondResultLemma, thirdResultLemma, fourthResultLemma]\n"
+  let brokenParserOwnedBodyResult ←
+    Formatter.formatSourceWithEnvDetailed env brokenParserOwnedBodySource
+      "broken-parser-owned-tactic-body.lean" { lineWidth := 72 }
+  assertTrue "a broken parser-owned body does not fall back"
+    (!brokenParserOwnedBodyResult.fellBack)
+  assertEq "a parser-owned suffix establishes the base of its broken body"
+    brokenParserOwnedBodyExpected brokenParserOwnedBodyResult.formatted
+  assertTrue "a broken parser-owned body preserves code"
+    (← codePreservedIgnoringWhitespace env brokenParserOwnedBodySource
+        brokenParserOwnedBodyResult.formatted)
 
   let tacticFamilySource :=
     "theorem tacticFamilyCoverage (h : Prop) [Decidable h] : True := by\n"
@@ -11020,8 +11060,7 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
     ++ "  simp only; cases o with simp only\n"
     ++ "  | push value =>\n"
     ++ "      have h : True := True.intro\n"
-    ++ "      refine by\n"
-    ++ "        -- Preserve this comment inside the branch body.\n"
+    ++ "      refine by -- Preserve this comment inside the branch body.\n"
     ++ "        exact h\n"
     ++ "  | pop =>\n"
     ++ "      trivial\n"
@@ -17241,6 +17280,103 @@ def assertParserOwnedSuffixAndPipeBoundaries (env : Lean.Environment) : IO Unit 
       ++ "  <| show left = right by\n"
       ++ "    exact proof\n")
 
+  check "low-priority-pipe-comment-boundary"
+    ("def pipeCommentBoundary : Nat :=\n"
+      ++ "  outerFunctionWithEnoughCharactersToBreak\n"
+      ++ "  <|\n"
+      ++ "    -- This comment starts the right operand.\n"
+      ++ "    innerValue\n")
+    ("def pipeCommentBoundary : Nat :=\n"
+      ++ "  outerFunctionWithEnoughCharactersToBreak\n"
+      ++ "  <| -- This comment starts the right operand.\n"
+      ++ "    innerValue\n")
+    64
+
+  check "low-priority-pipe-have-head"
+    ("theorem pipeHaveHead : True :=\n"
+      ++ "  outerProofFunction firstArgument secondArgument\n"
+      ++ "  <|\n"
+      ++ "    have value : True := proof\n"
+      ++ "    value\n")
+    ("theorem pipeHaveHead : True :=\n"
+      ++ "  outerProofFunction firstArgument secondArgument\n"
+      ++ "  <|  have value : True := proof\n"
+      ++ "      value\n")
+    64
+
+  check "nested-low-priority-pipe-have-head"
+    ("def nestedPipeHave :=\n"
+      ++ "  .intro (firstProofWithEnoughCharactersToRequireBreaking firstArgument secondArgument)\n"
+      ++ "  <|\n"
+      ++ "    have value : True := proof\n"
+      ++ "    value\n")
+    ("def nestedPipeHave :=\n"
+      ++ "  .intro (firstProofWithEnoughCharactersToRequireBreaking firstArgument secondArgument)\n"
+      ++ "  <|  have value : True := proof\n"
+      ++ "      value\n")
+    100
+
+  check "nested-low-priority-pipe-anonymous-have-head"
+    ("def nestedPipeAnonymousHave :=\n"
+      ++ "  .intro (firstProofWithEnoughCharactersToRequireBreaking firstArgument secondArgument)\n"
+      ++ "  <|\n"
+      ++ "    have : IsLeftCancelAdd ResultType := proof\n"
+      ++ "    inferredResult\n")
+    ("def nestedPipeAnonymousHave :=\n"
+      ++ "  .intro (firstProofWithEnoughCharactersToRequireBreaking firstArgument secondArgument)\n"
+      ++ "  <|  have : IsLeftCancelAdd ResultType := proof\n"
+      ++ "      inferredResult\n")
+    100
+
+  check "low-priority-pipe-match-head"
+    ("def pipeMatchHead :=\n"
+      ++ "  logInfoAt sourceLocation\n"
+      ++ "  <|\n"
+      ++ "    match declaration with\n"
+      ++ "    | some value => value\n"
+      ++ "    | none => defaultValue\n")
+    ("def pipeMatchHead :=\n"
+      ++ "  logInfoAt sourceLocation\n"
+      ++ "  <| match declaration with\n"
+      ++ "      | some value => value\n"
+      ++ "      | none => defaultValue\n")
+
+  check "low-priority-pipe-if-head"
+    ("def pipeIfHead :=\n"
+      ++ "  continueWithAFunctionNameLongEnoughToForceThePipeBoundary nextValue\n"
+      ++ "  <|  if condition then firstValue else secondValue\n")
+    ("def pipeIfHead :=\n"
+      ++ "  continueWithAFunctionNameLongEnoughToForceThePipeBoundary nextValue\n"
+      ++ "  <| if condition then firstValue else secondValue\n")
+    72
+
+  check "nested-show-from-application-head"
+    ("def nestedShowFrom :=\n"
+      ++ "  show ResultTypeWithEnoughCharactersToForceFromOntoAContinuationLine from\n"
+      ++ "  LinearMap.ext_iff.1 <| proofBody\n")
+    ("def nestedShowFrom :=\n"
+      ++ "  show ResultTypeWithEnoughCharactersToForceFromOntoAContinuationLine\n"
+      ++ "    from LinearMap.ext_iff.1 <| proofBody\n")
+    80
+
+  check "nested-show-from-quantifier-application-head"
+    ("def nestedShowFromQuantifier :=\n"
+      ++ "  show\n"
+      ++ "    ∀ value : ResultTypeWithEnoughCharactersToForceTheQuantifierBreak,\n"
+      ++ "      firstProjectionWithEnoughCharacters value = secondProjection value\n"
+      ++ "    from\n"
+      ++ "    LinearMap.ext_iff.1 <|\n"
+      ++ "      nestedProofWithEnoughCharacters firstArgument secondArgument fun x => by\n"
+      ++ "        exact proofBody\n")
+    ("def nestedShowFromQuantifier :=\n"
+      ++ "  show ∀ value : ResultTypeWithEnoughCharactersToForceTheQuantifierBreak,\n"
+      ++ "        firstProjectionWithEnoughCharacters value = secondProjection value\n"
+      ++ "    from LinearMap.ext_iff.1\n"
+      ++ "    <| nestedProofWithEnoughCharacters firstArgument secondArgument\n"
+      ++ "      fun x => by\n"
+      ++ "        exact proofBody\n")
+    100
+
   check "prefixed-induction-suffix"
     ("theorem prefixedInduction : True := by\n"
       ++ "  classical induction values using List.induction with\n"
@@ -17470,6 +17606,32 @@ def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
       "attached-multiline-fallback-suffix-formatted.lean" { lineWidth := 50 }
   assertEq "multiline fallback suffix is idempotent"
     multilineFallbackResult.formatted multilineFallbackAgain
+
+  let multiStatementFallbackSource :=
+    "def multiStatementFallback := do\n"
+    ++ "  let some value ← lookupValue\n"
+    ++ "  |\n"
+    ++ "    -- The comment begins a multi-statement fallback.\n"
+    ++ "    let fallback := defaultValue\n"
+    ++ "    return fallback\n"
+    ++ "  pure value\n"
+  let multiStatementFallbackExpected :=
+    "def multiStatementFallback := do\n"
+    ++ "  let some value ← lookupValue\n"
+    ++ "  | -- The comment begins a multi-statement fallback.\n"
+    ++ "    let fallback := defaultValue\n"
+    ++ "    return fallback\n"
+    ++ "  pure value\n"
+  let multiStatementFallbackResult ←
+    Formatter.formatSourceWithEnvDetailed env multiStatementFallbackSource
+      "attached-multi-statement-fallback-suffix.lean" { lineWidth := 72 }
+  assertTrue "a multi-statement fallback suffix does not fall back"
+    (!multiStatementFallbackResult.fellBack)
+  assertEq "a fallback suffix stays with its leading comment"
+    multiStatementFallbackExpected multiStatementFallbackResult.formatted
+  assertTrue "a multi-statement fallback preserves code"
+    (← codePreservedIgnoringWhitespace env multiStatementFallbackSource
+        multiStatementFallbackResult.formatted)
 
   let conditionalSource :=
     "def conditionalSuffix :=\n"

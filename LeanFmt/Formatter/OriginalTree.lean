@@ -510,8 +510,20 @@ private def isProofLayoutIsland (tree : SyntaxTree.Tree) : Bool :=
       containsProofTree tree
   | .node (.raw `«term{_}») _ =>
       containsProofTree tree
-  | .node (.raw `Lean.Parser.Term.show) _ =>
-      containsProofTree tree
+  | .node (.raw `Lean.Parser.Term.show) children =>
+      let hasFromTerm :=
+        children.any
+          fun child =>
+            match child with
+            | .node (.raw `Lean.Parser.Term.fromTerm) _ => true
+            | _ => false
+      let hasQuantifiedResult :=
+        children.any
+          fun child =>
+            match child with
+            | .node (.raw kind) _ => LineBreakRules.rawKindIsQuantifier kind
+            | _ => false
+      containsProofTree tree && !(hasFromTerm && hasQuantifiedResult)
   | _ => false
 
 private def proofLayoutRebasesFromFirstToken : SyntaxTree.Tree → Bool

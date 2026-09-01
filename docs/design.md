@@ -103,12 +103,19 @@ nonfitting protected operand may retain its source break after `<|` because its
 first line cannot safely move onto the operator line. An authored source break
 alone does not protect that boundary: when the complete first line fits, it
 moves beside `<|` and the operand's own structural body indentation applies.
+Layout-sensitive `let` and `have` operands align their keyword to an indentation
+column after `<|`; this can require two spaces after the operator, and keeps the
+binding body at the same valid Lean layout base.
 
 Parser-owned modifiers stay with the argument they introduce. For example,
 `simpa only [` remains one header even when the bracketed collection wraps
 internally. An attached body introducer likewise remains a suffix of an
 alternative, so generated term syntax uses `=> do` while an ordinary
 non-suffix alternative body begins on the following indented line.
+Parser-defined tactic suffixes follow the same principle: a fitting body may stay
+beside a suffix such as `says`, while a broken body continues from the suffix
+owner's base. Likewise, `show ... from` keeps `from` with the following
+application head and lets that application wrap at its own argument boundaries.
 
 ### Preserve intentional source breaks selectively
 

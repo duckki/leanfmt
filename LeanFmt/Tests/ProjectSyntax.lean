@@ -15,6 +15,9 @@ syntax:max (name := projectTightIndexed) (priority := high) term noWs "[" term "
 syntax (name := contextClassifiedTactic) "context_classified_tactic " ident ident : tactic
 syntax (name := contextTermTactic) "context_term_tactic " term : tactic
 syntax (name := projectSaysTactic) "project_simp? " term " says " tacticSeq : tactic
+syntax (name := projectTryTactic) "project_try? " term : tactic
+syntax (name := projectOptionalSaysTactic)
+  tactic " project_says" (colGt tacticSeq)? : tactic
 syntax (name := projectPrefixedDeclaration) "project_haveI' " letDecl : doElem
 syntax (name := projectTermCommand) "#project_term " ident term : command
 syntax (name := projectWrappedTerm) "project_wrapped " term : term

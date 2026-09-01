@@ -11,20 +11,12 @@ coincide with preservation, formatting, convergence, overflow, or build issues.
 
 ## Open issues
 
-### Detached suffix bodies
+### Application continuation tails
 
-Some suffix-like owners can be stranded on a line before their body. Reviewed
-examples include a refutable fallback `|`, low-priority `<|`, `suffices ... from`,
-and extension syntax such as `says`:
-
-```lean
-let some value := source
-|
-  fallback
-```
-
-Movable code should stay with its suffix when it fits; a structural break should
-otherwise establish one body base rather than inherit the suffix token column.
+Later arguments can inherit the tail of a preceding multiline argument instead
+of returning to the application base. The same ownership gap can leave the
+closing `]` of a broken `simp` or `rw` lemma list on its own line. Continuations
+and collection closers should return to their structural owners.
 
 ### Command header flow
 
@@ -35,11 +27,11 @@ not become an orphan line above its command.
 
 ## Progress
 
-### Suffix body ownership
+### Continuation and header consistency
 
-Unify the body boundary for refutable fallbacks, `<|`, `from`, and parser-defined
-suffix forms without keyword-specific renderer logic. Cover fitting and broken
-forms, then run the local gate and focused external validation.
+Stabilize application tails and tactic-list closers through existing application
+and collection ownership. Validate the focused GraphQL and Mathlib examples
+without changing compact application behavior.
 
 ### Header consistency and release gate
 

@@ -1798,6 +1798,7 @@ def FlowRenderContext.stateForForcedNestedChild?
     (breakAfterPreviousChild : Bool)
     (childFit : Thunk LayoutProbe)
     (keepPrefixWithChildFirstLine : Bool)
+    (childStartsWithLineBreakingComment : Bool)
     : Option RenderState :=
   match flow.breakAt? index with
   | some breakPoint =>
@@ -1809,11 +1810,13 @@ def FlowRenderContext.stateForForcedNestedChild?
           <| state.withPendingIndent
               (state.currentIndent + breakPoint.indentLevels * indentationSpaces)
       else if keepPrefixWithChildFirstLine then
-        if (OriginalTree.plan? child).isSome
-            && (!flow.plan.formatsOriginalLeadingBoundary index
-                || !OriginalTree.canUseStructuralOverflowFallback child)
-            && !flow.childSourceFirstLineFitsAfterPrefix state index child
-            && !childFit.get.flat then
+        if childStartsWithLineBreakingComment then
+          none
+        else if (OriginalTree.plan? child).isSome
+                && (!flow.plan.formatsOriginalLeadingBoundary index
+                    || !OriginalTree.canUseStructuralOverflowFallback child)
+                && !flow.childSourceFirstLineFitsAfterPrefix state index child
+                && !childFit.get.flat then
           some <| flow.withBreak state breakPoint
         else
           none
@@ -1992,9 +1995,20 @@ mutual
       (plan : LayoutPlan.Plan)
       : RenderState :=
     let fallback (_ : Unit) := renderRuleLayout state segment plan
+    let movesLeadingCommentWithPrefix :=
+      segment.indexes.any
+        fun index =>
+          plan.formatsOriginalLeadingBoundary index
+          && commentForcesBreakAt state.source segment index
+          && (segment.child? index).any
+              fun child =>
+                !child.firstToken?.any
+                  fun token => SpaceRules.isDelimiterCloserToken token.lexeme
     if !plan.isFlow then
       fallback ()
-    else if segment.indexes.any fun index => plan.keepsPrefixWithChildFirstLine index then
+    else if movesLeadingCommentWithPrefix
+            || segment.indexes.any
+                fun index => plan.keepsPrefixWithChildFirstLine index then
       fallback ()
     else
       match sourceBreaksForRule? state segment plan with
@@ -2033,6 +2047,7 @@ mutual
   partial def renderNestedSegment
       (state : RenderState) (segment : LineBreakRules.Segment) (index : Nat)
       (child : SyntaxTree.Tree) (suffixStop? : Option Nat := none)
+      (keepLeadingCommentWithPrefix : Bool := false)
       : RenderState :=
     let originalPlan? := OriginalTree.plan? child
     let emitOriginal := originalPlan?.isSome
@@ -2056,9 +2071,10 @@ mutual
     let firstToken? := SyntaxTree.Tree.firstToken? child
     let commentTrivia? := commentTriviaBeforeTree? state child
     let commentForcesBreak :=
-      commentTrivia?.any
-        fun trivia =>
-          (SourceBoundary.ofText trivia).commentForcesBreak
+      (keepLeadingCommentWithPrefix && commentForcesBreakAt state.source segment index)
+      || commentTrivia?.any
+          fun trivia =>
+            (SourceBoundary.ofText trivia).commentForcesBreak
     let inlineCommentNeedsBreak :=
       if state.pendingIndent?.isSome || commentForcesBreak || commentTrivia?.isNone then
         false
@@ -2068,8 +2084,16 @@ mutual
         let (rendered, _) := renderFirstLineOfTree probe child
         !renderedCandidateFits probe rendered
     let state :=
-      if state.pendingIndent?.isSome
-          || (!commentForcesBreak && !inlineCommentNeedsBreak) then
+      if keepLeadingCommentWithPrefix && commentForcesBreak then
+        let indent :=
+          if firstToken?.any
+              fun token => SpaceRules.isDelimiterCloserToken token.lexeme then
+            state.segmentBaseIndent
+          else
+            state.segmentBaseIndent + indentationSpaces
+        state.withCommentBoundaryIndent indent true
+      else if state.pendingIndent?.isSome
+              || (!commentForcesBreak && !inlineCommentNeedsBreak) then
         state
       else
         let indent :=
@@ -2476,11 +2500,22 @@ mutual
               flow.childFirstLineFits state index childContext child
             else
               false
+          let childStartsWithLineBreakingComment :=
+            commentForcesBreakAt state.source flow.segment index
+            || (commentTriviaBeforeTree? state child).any
+                fun trivia => (SourceBoundary.ofText trivia).commentForcesBreak
+          let childIsDelimiterCloser :=
+            child.firstToken?.any
+              fun token => SpaceRules.isDelimiterCloserToken token.lexeme
           let keepPrefixWithChildFirstLine :=
-            keepsPrefixWithChildFirstLine
-            && (childFirstLineFits
-                || flow.childSourceFirstLineFitsAfterPrefix state index child)
-            && !commentForcesBreakAt state.source flow.segment index
+            (keepsPrefixWithChildFirstLine
+              && !childStartsWithLineBreakingComment
+              && (childFirstLineFits
+                  || flow.childSourceFirstLineFitsAfterPrefix state index child))
+            || (!childIsDelimiterCloser
+                && childStartsWithLineBreakingComment
+                && (keepsPrefixWithChildFirstLine
+                    || flow.plan.formatsOriginalLeadingBoundary index))
           let renderNestedAndContinue (state : RenderState) :=
             let before := state
             let nextBreakIndex := flow.nextBreakIndex index
@@ -2491,6 +2526,7 @@ mutual
                 nextBreakIndex
             let renderNested (state : RenderState) :=
               renderNestedSegment state flow.segment index child (some suffixStop)
+                (keepPrefixWithChildFirstLine && childStartsWithLineBreakingComment)
             let rendered := renderNested state
             let rendered :=
               if state.pendingIndent?.isNone
@@ -2508,13 +2544,16 @@ mutual
             renderFlowChildren rendered flow (index + 1)
               (renderedTreeIsMultiline before rendered child)
           match flow.stateForForcedNestedChild? state index child breakAfterPreviousChild
-                  childFit keepPrefixWithChildFirstLine with
+                  childFit keepPrefixWithChildFirstLine
+                  childStartsWithLineBreakingComment with
           | some state => renderNestedAndContinue state
           | none =>
               let childFit := childFit.get
               if segmentHasRuleSourceBreaks state.source childContext childSegment then
                 renderNestedAndContinue state
-              else if childFit.fits then
+              else if childFit.fits
+                      && !(keepPrefixWithChildFirstLine
+                            && childStartsWithLineBreakingComment) then
                 renderFlowChildren (state.commitLayoutProbe childFit) flow (index + 1)
                   false
               else if (if keepsPrefixWithChildFirstLine then

@@ -898,7 +898,8 @@ def spacedApplicationOwnsNestedBase : List Frame -> Bool
   | parent :: rest =>
       match parent.segment.parent with
       | .node (.tactic _ _ _ _ true) _
-      | .node .parserOwnedHeader _ => true
+      | .node .parserOwnedHeader _
+      | .node (.raw `Lean.Parser.Term.fromTerm) _ => true
       | .node .suffixGroup _
       | .node (.raw `null) _
       | .node (.infixChain `«term_<|_») _
@@ -1017,24 +1018,15 @@ def childIsLowPriorityInfixRhs (segment : Segment) (index : Nat) : Bool :=
   | some (.node .lowPriorityInfixRhs _) => true
   | _ => false
 
-def lowPriorityInfixRhsHasMandatoryAlignedBody (segment : Segment) : Bool :=
+def lowPriorityInfixRhsPolicy? (segment : Segment) : Option (Bool × Bool) := do
   if !lowPriorityInfixRhsSegment segment then
-    false
-  else
-    match segment.child? (segment.start + 1) with
-    | some (.node (.letExpression _ _) _) => true
-    | some (.node (.raw kind) _) =>
-        kind == `Lean.Parser.Term.let
-        || kind == `Lean.Parser.Term.letrec
-        || kind == `Lean.Parser.Term.have
-        || kind == `Lean.Parser.Term.haveI
-    | _ => false
+    none
+  let .node (.lowPriorityOperand canFlow hasAttachedBody) _ ←
+    segment.child? segment.start | none
+  some (canFlow, hasAttachedBody)
 
 def lowPriorityInfixRhsHasAttachedBody (segment : Segment) : Bool :=
-  lowPriorityInfixRhsSegment segment
-  && (attachedBodyStart segment (segment.start + 1)
-      || childStartsWithLexeme segment (segment.start + 1) "calc"
-      || lowPriorityInfixRhsHasMandatoryAlignedBody segment)
+  (lowPriorityInfixRhsPolicy? segment).any (·.2)
 
 def childLowPriorityInfixRhsHasAttachedBody (segment : Segment) (index : Nat) : Bool :=
   match segment.child? index with
@@ -1042,8 +1034,7 @@ def childLowPriorityInfixRhsHasAttachedBody (segment : Segment) (index : Nat) : 
   | none => false
 
 def lowPriorityInfixRhsCanFlow (segment : Segment) : Bool :=
-  lowPriorityInfixRhsSegment segment
-  && childStartsWithSuffixKeywordToken segment (segment.start + 1)
+  (lowPriorityInfixRhsPolicy? segment).any (·.1)
 
 def childLowPriorityInfixRhsCanFlow (segment : Segment) (index : Nat) : Bool :=
   match segment.child? index with
@@ -2123,8 +2114,20 @@ def calcBodyBreaks (_context : RuleContext) (segment : Segment) : List BreakPoin
 def calcStepBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   [boundaryBreak? segment 1 1].filterMap id
 
-def fromTermBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
-  [delimiterValueBreak? segment "from"].filterMap id
+def fromTermBreaks (_context : RuleContext) (_segment : Segment) : List BreakPoint :=
+  []
+
+def showBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
+  match firstChildRawKind? segment `Lean.Parser.Term.fromTerm with
+  | some index =>
+      match previousContentIndex? segment index >>= segment.child? with
+      | some (.node (.raw kind) _) =>
+          if rawKindIsQuantifier kind then
+            [boundaryBreak? segment index 1].filterMap id
+          else
+            []
+      | _ => []
+  | none => []
 
 def sufficesBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   [boundaryBreak? segment 3 0].filterMap id
@@ -2257,9 +2260,7 @@ def doFallbackClauseBodyRequiresBreak (segment : Segment) (index : Nat) : Bool :
 
 def doFallbackClauseKeepsPrefixWithBody (segment : Segment) (index : Nat) : Bool :=
   segment.start < index
-  && (segment.child? index).any
-      fun fallback =>
-        directDoSequenceItemCount fallback <= 1
+  && (segment.child? index).any fun fallback => directDoSequenceItemCount fallback <= 1
 
 def doFallbackBodyRequiresBreak (segment : Segment) : Bool :=
   doFallbackClauseIndex? segment
@@ -3098,9 +3099,17 @@ def parserOwnedBodyHasCommentHeader (segment : Segment) : Bool :=
     fun header =>
       header.containsNodeKind (.raw `Lean.Parser.Command.docComment)
 
+def parserOwnedBodyHasSuffixBody (segment : Segment) : Bool :=
+  (segment.child? 1).any (·.containsNodeKind .parserOwnedSuffixBody)
+
 def parserOwnedBodyBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
-  let indentLevels := if parserOwnedBodyHasCommentHeader segment then 0 else 1
+  let indentLevels :=
+    if parserOwnedBodyHasCommentHeader segment
+        || parserOwnedBodyHasSuffixBody segment then
+      0
+    else
+      1
   [boundaryBreak? segment 1 indentLevels].filterMap id
 
 def parserOwnedHeaderBreaks (_context : RuleContext) (segment : Segment)
@@ -3730,12 +3739,12 @@ def infixChainRule : LineBreakRule :=
 def lowPriorityInfixRhsRule : LineBreakRule :=
   {
     name := "lowPriorityInfixRhs"
-    formatOriginalChildLeadingBoundary :=
-      fun _ segment index =>
-        index == segment.start + 1 && !lowPriorityInfixRhsCanFlow segment
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
-    keepPrefixWithChildFirstLine := fun _ segment index => index == segment.start + 1
+    formatOriginalChildLeadingBoundary :=
+      fun _ segment index => index == segment.start + 1
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index => index == segment.start + 1
     breakPoints := lowPriorityInfixRhsBreaks
   }
 
@@ -4069,8 +4078,18 @@ def doUnlessRule : LineBreakRule :=
 def fromTermRule : LineBreakRule :=
   {
     name := "fromTerm"
+    flow := fun _ _ => true
     inheritBase := fun _ _ => true
     breakPoints := fromTermBreaks
+  }
+
+def showRule : LineBreakRule :=
+  {
+    transparentRule with
+      name := "show"
+      flow := fun _ _ => true
+      inheritBase := fun _ _ => true
+      breakPoints := showBreaks
   }
 
 def sufficesRule : LineBreakRule :=
@@ -4491,7 +4510,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.withAnonymousAntiquot) _ => some defaultRule
   | .node (.raw `Lean.Parser.Term.falseVal) _ => some defaultRule
   | .node (.raw `Lean.Parser.Term.cdot) _ => some defaultRule
-  | .node (.raw `Lean.Parser.Term.show) _ => some transparentRule
+  | .node (.raw `Lean.Parser.Term.show) _ => some showRule
   | .node (.raw `Lean.Parser.Term.fromTerm) _ => some fromTermRule
   | .node (.raw `Lean.Parser.Term.byTactic) _ => some byTacticRule
   | .node (.raw `Lean.Parser.Term.byTactic') _ => some byTacticRule
@@ -4883,7 +4902,9 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.infixChain `Lean.Parser.Command.in) _ => some commandInChainRule
   | .node (.infixChain `Lean.Parser.Term.binderTactic) _ =>
       some binderTacticRule
+  | .node (.lowPriorityOperand _ _) _ => some transparentRule
   | .node .lowPriorityInfixRhs _ => some lowPriorityInfixRhsRule
+  | .node .parserOwnedSuffixBody _ => some transparentRule
   | .node (.infixChain _) _ => some infixChainRule
   | .node .ifThenElseClause _ => some transparentRule
   | .node (.ifThenElseChain _) _ => some ifThenElseChainRule
