@@ -9601,6 +9601,19 @@ def assertCurrentLineFitChecksCompletedLines : IO Unit := do
   assertTrue "line fit ignores an untouched pre-existing completed-line overflow"
     (Formatter.currentLineFitsWith alreadyOverflowing "\nx")
 
+def assertWhitespaceNormalizationAndCommentClassification : IO Unit := do
+  assertEq "LF-only trivia is already normalized"
+    "first\nsecond" (Formatter.SpaceRules.normalizeLineEndings "first\nsecond")
+  assertEq "mixed line endings normalize to LF"
+    "first\nsecond\nthird"
+    (Formatter.SpaceRules.normalizeLineEndings "first\r\nsecond\rthird")
+  assertTrue "ordinary whitespace has no comment start"
+    (!Formatter.SpaceRules.hasCommentStart "  \n  ")
+  assertTrue "line comments are detected"
+    (Formatter.SpaceRules.hasCommentStart " -- comment")
+  assertTrue "block comments are detected"
+    (Formatter.SpaceRules.hasCommentStart " /- comment -/")
+
 def tokenAt (lexeme : String) (start stop : String.Pos.Raw) : SyntaxTree.Token :=
   {
     role := .ident
@@ -18848,6 +18861,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertLineFitCountsTrailingComment env
   assertColumnIndentationIsConservative
   assertCurrentLineFitChecksCompletedLines
+  assertWhitespaceNormalizationAndCommentClassification
   assertOriginalTreeUsesParentLeadingWhitespace
   assertOriginalTreeUsesAncestorLeadingWhitespace
   assertMovedProofWidgetsJsxUsesPendingIndent

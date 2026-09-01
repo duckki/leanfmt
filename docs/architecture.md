@@ -42,7 +42,7 @@ The implementation is split by responsibility:
 | `LeanFmt.Formatter.LayoutPlan` | Resolve one rule into a typed, normalized segment plan before rendering. |
 | `LeanFmt.Formatter.Rebase` | Represent one source/output layout anchor and translate source columns through it. |
 | `LeanFmt.Formatter.OriginalTree` | Classify protected source-layout islands, resolve explicit island policies, and plan indentation-preserving source emission. |
-| `LeanFmt.Formatter.Renderer` | Carry render state, choose among resolved layout alternatives, compute indentation, and emit tokens. |
+| `LeanFmt.Formatter.Renderer` | Carry render state and its immutable syntax-tree fact cache, choose among resolved layout alternatives, compute indentation, and emit tokens. |
 | `LeanFmt.Formatter.Trace` | Record and format renderer traces for debugging. |
 | `LeanFmt.Formatter.Diagnostics` | Analyze compact bang syntax, code preservation, overflow, and missing formatting rules. |
 | `LeanFmt.Formatter` | Public formatting API plus `Debug` and `Internal` namespaces for tracing, profiling, and shared pipeline phases. |
@@ -170,6 +170,12 @@ for reconstruction and diagnostics.
 `SourcePositionMap` stores Lean's precomputed line starts for the normalized source.
 Renderer and diagnostic column queries share this map instead of rescanning the source
 prefix for every token.
+
+The renderer also builds an immutable fact tree alongside the lossless syntax tree for
+each formatting pass. It caches protected-layout classification and comment-boundary
+containment, then follows child scopes in lockstep with rendering. The cache records
+decisions owned by `OriginalTree` and `SourceBoundary`; it does not introduce syntax or
+line-break policy in the renderer.
 
 Tokens are exact source leaves:
 

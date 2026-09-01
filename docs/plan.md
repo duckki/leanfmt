@@ -6,12 +6,7 @@ is release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Large-project validation latency
-
-Hex's slowest formatter batch varied from 145 to 326 seconds across equivalent
-checkpoint runs. Mathlib batches were usually 18 to 42 seconds, with one at 89
-seconds. Output and diagnostics are correct, but tail latency remains a
-performance target.
+No known release-blocking formatting or validation issues remain.
 
 ## Progress
 
@@ -44,6 +39,14 @@ with every diagnostic at zero and passed both post-format builds. A subsequent
 width-100 checkpoint covered all 84 formatter batches. After a focused
 `initialize` correction at batch 74, its failing file and batches 74 through 84
 were rerun cleanly.
+
+### Checkpoint 4: large-project tail latency
+
+Cache immutable subtree layout facts across speculative render candidates and
+avoid allocating normalized copies of already-LF source trivia. The isolated Hex
+hot file dropped from about 101 to 32 seconds per formatting pass. The complete
+100-file batch that previously varied from 145 to 326 seconds passed every
+formatter diagnostic in 67 seconds with unchanged formatting behavior.
 
 ## Validation standard
 

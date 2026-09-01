@@ -13,7 +13,10 @@ def isHorizontalWhitespace : Char → Bool
   | _ => false
 
 def normalizeLineEndings (text : String) : String :=
-  (text.replace "\r\n" "\n").replace "\r" "\n"
+  if text.contains '\r' then
+    (text.replace "\r\n" "\n").replace "\r" "\n"
+  else
+    text
 
 def stripLineEndWhitespace (line : String) : String :=
   (line.dropEndWhile isHorizontalWhitespace).toString
@@ -458,7 +461,7 @@ def hasLineStructure (text : String) : Bool :=
   text.contains '\n'
 
 def hasCommentStart (text : String) : Bool :=
-  containsSubstring text "--" || containsSubstring text "/-"
+  text.contains '-' && (containsSubstring text "--" || containsSubstring text "/-")
 
 def isCommentLexeme (text : String) : Bool :=
   text.startsWith "--" || text.startsWith "/-" || text.endsWith "-/"
