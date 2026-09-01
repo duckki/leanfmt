@@ -19,6 +19,8 @@ syntax (name := projectTryTactic) "project_try? " term : tactic
 syntax (name := projectOptionalSaysTactic)
   tactic " project_says" (colGt tacticSeq)? : tactic
 syntax (name := projectPrefixedDeclaration) "project_haveI' " letDecl : doElem
+syntax (name := projectConfiguredPrefixedDeclaration)
+  "project_have_config' " ("[" ident "] ")? letDecl : doElem
 syntax (name := projectTermCommand) "#project_term " ident term : command
 syntax (name := projectWrappedTerm) "project_wrapped " term : term
 syntax (name := projectOptionalTermCommand) "#project_optional " ident (term)? : command

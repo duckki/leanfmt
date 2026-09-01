@@ -96,7 +96,7 @@ inductive NodeKind where
   | calcStep
   | parserOwnedHeader
   | parserOwnedBody
-  | parserOwnedSuffixBody
+  | parserOwnedTacticBody
   | matchHeader
   | matchDiscriminants
   | matchPatterns
@@ -145,7 +145,7 @@ def nodeKindName : NodeKind → String
   | .calcStep => "LeanFmt.SyntaxTree.NodeKind.calcStep"
   | .parserOwnedHeader => "LeanFmt.SyntaxTree.NodeKind.parserOwnedHeader"
   | .parserOwnedBody => "LeanFmt.SyntaxTree.NodeKind.parserOwnedBody"
-  | .parserOwnedSuffixBody => "LeanFmt.SyntaxTree.NodeKind.parserOwnedSuffixBody"
+  | .parserOwnedTacticBody => "LeanFmt.SyntaxTree.NodeKind.parserOwnedTacticBody"
   | .matchHeader => "LeanFmt.SyntaxTree.NodeKind.matchHeader"
   | .matchDiscriminants => "LeanFmt.SyntaxTree.NodeKind.matchDiscriminants"
   | .matchPatterns => "LeanFmt.SyntaxTree.NodeKind.matchPatterns"
@@ -221,7 +221,7 @@ partial def isTacticSequenceTree : Tree → Bool
   | .node (.raw kind) _ => isTacticSequenceKind kind
   | .node (.tactic kind _ _ _ _) _ => isTacticSequenceKind kind
   | .node .suffixGroup children => children[0]?.any isTacticSequenceTree
-  | .node .parserOwnedSuffixBody children => children[0]?.any isTacticSequenceTree
+  | .node .parserOwnedTacticBody _ => true
   | _ => false
 
 private def sharesSourceLineWith (left right : Tree) : Bool :=
@@ -1585,15 +1585,28 @@ private def regroupSpacedApplication?
       none
   commentPayloadBody?.getD <| .node .application (#[head] ++ arguments)
 
+private partial def attachPrefixToDeclarationHeader? (prefixTree : Tree)
+    : Tree → Option Tree
+  | .node kind children => do
+      let index ← children.findIdx? fun child => child.firstToken?.isSome
+      let child ← children[index]?
+      let child ←
+        match child with
+        | .node .declarationHeader _ => some <| .node .suffixGroup #[prefixTree, child]
+        | child => attachPrefixToDeclarationHeader? prefixTree child
+      some <| .node kind (children.set! index child)
+  | _ => none
+
 private def regroupPrefixedDeclaration? (children : Array Tree) : Option Tree := do
-  if children.size != 2 then
+  let content := children.filter fun child => child.firstToken?.isSome
+  if content.size != 2 then
     none
-  let prefixTree ← children[0]?
-  let declaration ← children[1]?
+  let prefixTree ← content[0]?
+  let declaration ← content[1]?
   let _ ← directLeafAtomToken? prefixTree
   if rawKind? declaration != some `Lean.Parser.Term.letDecl then
     none
-  some <| .node .suffixGroup #[prefixTree, declaration]
+  attachPrefixToDeclarationHeader? prefixTree declaration
 
 private def regroupPrefixedApplication? (children : Array Tree)
     : Option (Array Tree) := do
@@ -2135,6 +2148,8 @@ private def regroupParserOwnedBody?
   let (headerPrefix, suffix, body) ←
     splitParserOwnedBody? policy.suffixes (.node (.raw kind) children)
   let suffixOwnsBody := policy.suffixOwnsBody
+  let suffixOwnsTacticBody := suffixOwnsBody && isParserOwnedTacticBody body
+  let suffixStaysWithBody := suffixOwnsBody && !suffixOwnsTacticBody
   let header :=
     match headerPrefix with
     | .node _ children =>
@@ -2145,7 +2160,7 @@ private def regroupParserOwnedBody?
         | some index =>
             let flattenLastChildren (lastChildren : Array Tree) :=
               let lastChildren :=
-                if suffixOwnsBody then
+                if suffixStaysWithBody then
                   lastChildren
                 else
                   let lastContentIndex? :=
@@ -2172,28 +2187,24 @@ private def regroupParserOwnedBody?
                   (attachParserOwnedHeaderHead <| flattenLastChildren lastChildren)
             | some last =>
                 let children :=
-                  if suffixOwnsBody then
+                  if suffixStaysWithBody then
                     children
                   else
                     children.set! index (.node .suffixGroup #[last, suffix])
                 .node .parserOwnedHeader (attachParserOwnedHeaderHead children)
-            | none => if suffixOwnsBody then headerPrefix else suffix
-        | none => if suffixOwnsBody then headerPrefix else suffix
+            | none => if suffixStaysWithBody then headerPrefix else suffix
+        | none => if suffixStaysWithBody then headerPrefix else suffix
     | tree =>
-        if suffixOwnsBody then
+        if suffixStaysWithBody then
           .node .parserOwnedHeader #[tree]
         else
           .node .parserOwnedHeader #[.node .suffixGroup #[tree, suffix]]
   let body :=
-    if suffixOwnsBody then
-      if isParserOwnedTacticBody body then
-        .node .parserOwnedSuffixBody
-          #[
-            .node .suffixGroup
-              #[suffix, .node (.proofBody body.containsTacticLayoutOwner) #[body]]
-          ]
-      else
-        .node .suffixGroup #[suffix, body]
+    if suffixOwnsTacticBody then
+      .node .parserOwnedTacticBody
+        #[.node (.proofBody body.containsTacticLayoutOwner) #[body]]
+    else if suffixStaysWithBody then
+      .node .suffixGroup #[suffix, body]
     else
       body
   some <| .node .parserOwnedBody #[header, body]
@@ -2322,12 +2333,10 @@ private def splitDetachedParserOwnedSuffix?
   splitTrailingOwnedSuffix? suffixes tree
 
 private def attachDetachedParserOwnedBody (header suffix body : Tree) : Tree :=
+  let header := .node .suffixGroup #[header, suffix]
   let body :=
-    .node .parserOwnedSuffixBody
-      #[
-        .node .suffixGroup
-          #[suffix, .node (.proofBody body.containsTacticLayoutOwner) #[body]]
-      ]
+    .node .parserOwnedTacticBody
+      #[.node (.proofBody body.containsTacticLayoutOwner) #[body]]
   .node .parserOwnedBody #[header, body]
 
 private def regroupDirectParserOwnedTacticBody?
@@ -2380,7 +2389,7 @@ private partial def regroupDetachedParserOwnedTacticBodiesCore
       let (children, containsDetached) := loop #[] containsDetached children.toList
       let (children, containsDetached) :=
         match kind, children.toList with
-        | .parserOwnedBody, [_, .node .parserOwnedSuffixBody _] =>
+        | .parserOwnedBody, [_, .node .parserOwnedTacticBody _] =>
             (children, true)
         | .parserOwnedBody, [header, body] =>
             if body.isTacticSequenceTree && !Tree.sharesSourceLineWith header body then
@@ -3404,6 +3413,10 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
     match regroupDoFallbackChildren? children with
     | some grouped => .node (.raw kind) grouped
     | none => .node (.raw kind) children
+  else if kind == `Lean.Parser.Term.binderDefault then
+    .node (.raw kind)
+    <| regroupRightmostSuffixChildren children
+        fun tree => if treeStartsAttachedBody tree then some tree else none
   else if kind == `Lean.Parser.Term.structInst then
     .node (.raw kind) (regroupStructInstChildren children)
   else if kind == `Lean.Parser.Command.optDeclSig

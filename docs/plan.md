@@ -69,10 +69,14 @@ passing.
 
 ### Checkpoint 2: application and suffix consistency
 
-Add focused tests for the reviewed application, local declaration, conditional,
-tactic suffix, and low-priority-pipe examples. Fix shared ownership causes using
-existing application and suffix mechanisms, then run the local gate and light
-GraphQL, quantum, Hex, and Mathlib validation.
+Complete focused coverage for the reviewed application, local declaration,
+conditional, tactic suffix, and low-priority-pipe examples. Shared ownership now
+uses the existing application and suffix mechanisms. The complete local gate,
+GraphQL, quantum, and width-100 Hex validation passed; quantum produced no
+formatting changes, and Hex's previously slow failing batch passed in 126
+seconds. Focused Mathlib probes passed. The Mathlib checkpoint was unavailable
+because this selector has no recorded baseline, so the final full gate will
+establish it.
 
 ### Checkpoint 3: delimiters, command boundaries, and release gate
 

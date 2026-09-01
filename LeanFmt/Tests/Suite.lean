@@ -1700,7 +1700,7 @@ def assertOpaqueCalcRelationRegrouped (env : Lean.Environment) : IO Unit := do
   | _ => throw <| IO.userError "opaque calc step has the wrong grouped node kind"
   assertEq "opaque calc relation regrouping is lossless" source moduleTree.reconstruct
 
-def assertLowPriorityInfixOwnsBothOperatorBoundaries (env : Lean.Environment)
+def assertLowPriorityInfixOwnsStructuralOperatorBoundaries (env : Lean.Environment)
     : IO Unit := do
   let moduleTree ←
     SyntaxTree.parseModuleStringWithEnv env "def x := lhs <| rhs\n"
@@ -1719,8 +1719,19 @@ def assertLowPriorityInfixOwnsBothOperatorBoundaries (env : Lean.Environment)
     | none => throw <| IO.userError "low-priority infix RHS was not regrouped"
   let rhsSegment := Formatter.LineBreakRules.Segment.ofTree rhsGroup
   let rhsRule := Formatter.LineBreakRules.formattingRuleFor rhsGroup
-  assertTrue "low-priority infix RHS owns the post-operator boundary"
-    (rhsRule.breakPoints {} rhsSegment == [{ index := 1, indentLevels := 1 }])
+  assertTrue "an ordinary low-priority RHS does not strand the operator"
+    (rhsRule.breakPoints {} rhsSegment).isEmpty
+  let suffixModuleTree ←
+    SyntaxTree.parseModuleStringWithEnv env "def x := lhs <| by exact rhs\n"
+      "low-priority-suffix-boundary.lean"
+  let suffixRhsGroup ←
+    match findTreeNode? .lowPriorityInfixRhs suffixModuleTree.tree with
+    | some rhsGroup => pure rhsGroup
+    | none => throw <| IO.userError "low-priority suffix RHS was not regrouped"
+  let suffixSegment := Formatter.LineBreakRules.Segment.ofTree suffixRhsGroup
+  let suffixRule := Formatter.LineBreakRules.formattingRuleFor suffixRhsGroup
+  assertTrue "a flowing low-priority suffix retains its post-operator boundary"
+    (suffixRule.breakPoints {} suffixSegment == [{ index := 1, indentLevels := 1 }])
 
 def assertGroupedEqualPrecedenceInfixChain (env : Lean.Environment) : IO Unit := do
   let plusPrecedence := SyntaxTree.parserPrecedence env {} `«term_+_»
@@ -4287,7 +4298,7 @@ def assertTermTakingTacticsAttachOperandHead (baseEnv : Lean.Environment) : IO U
     ++ "    exact (by\n"
     ++ "      simpa [firstRewrite, secondRewrite]\n"
     ++ "        using longFunctionName firstArgument secondArgument\n"
-    ++ "                (by simpa [nestedRewrite] using nestedProof))\n"
+    ++ "          (by simpa [nestedRewrite] using nestedProof))\n"
   let nestedBulletProofResult ←
     Formatter.formatSourceWithEnvDetailed env nestedBulletProofSource
       "nested-proof-body-under-bullet.lean"
@@ -4311,7 +4322,8 @@ def assertTermTakingTacticsAttachOperandHead (baseEnv : Lean.Environment) : IO U
     ++ "      cases second with\n"
     ++ "      | none => exact True.intro\n"
     ++ "      | some value =>\n"
-    ++ "          let head := longFunctionNameForNestedCasesProof value\n"
+    ++ "          let head :=\n"
+    ++ "            longFunctionNameForNestedCasesProof value\n"
     ++ "          have result : True := by exact True.intro\n"
     ++ "          exact veryLongProofFunctionForNestedCases head\n"
     ++ "            result\n"
@@ -4604,10 +4616,10 @@ def assertTermTakingTacticsAttachOperandHead (baseEnv : Lean.Environment) : IO U
     "theorem tacticWithLeadingArgumentsBeforeProofs : True := by\n"
     ++ "  simpa [enqueueExpectedScheduleItems]\n"
     ++ "    using queue_enqueueExpectedScheduleItems_scheduleExpectedPendingChildWork\n"
-    ++ "            (ObjectRef := ObjectRef) schema variableValues work\n"
-    ++ "            ([] : ExpectedScheduleQueue ObjectRef) queue\n"
-    ++ "            (by simp [expectedScheduleQueueItemsNonempty])\n"
-    ++ "            (by simp [expectedScheduleQueueKeysDistinct])\n"
+    ++ "      (ObjectRef := ObjectRef) schema variableValues work\n"
+    ++ "      ([] : ExpectedScheduleQueue ObjectRef) queue\n"
+    ++ "      (by simp [expectedScheduleQueueItemsNonempty])\n"
+    ++ "      (by simp [expectedScheduleQueueKeysDistinct])\n"
   let leadingArgumentsBeforeProofsResult ←
     Formatter.formatSourceWithEnvDetailed env leadingArgumentsBeforeProofsSource
       "tactic-leading-arguments-before-proofs.lean" { lineWidth := 90 }
@@ -7217,12 +7229,20 @@ def assertLowPriorityPipeKeepsStructurallyRenderedOperand (env : Lean.Environmen
     ++ "        (show x ∈ span R ↑t by\n"
     ++ "          rw [ht]\n"
     ++ "          exact hx)\n"
+  let protectedExpected :=
+    "def pipeProtectedShow :=\n"
+    ++ "  le_antisymm (Algebra.adjoin_le fun x hx ↦ show x ∈ Subalgebra.toSubmodule S from subset_span hx)\n"
+    ++ "  <| show Subalgebra.toSubmodule S ≤ Subalgebra.toSubmodule (Algebra.adjoin R ↑t) xxxx from fun x hx ↦\n"
+    ++ "    span_le.mpr (fun _ hx ↦ Algebra.subset_adjoin hx)\n"
+    ++ "      (show x ∈ span R ↑t by\n"
+    ++ "        rw [ht]\n"
+    ++ "        exact hx)\n"
   let protectedResult ←
     Formatter.formatSourceWithEnvDetailed env protectedSource
       "low-priority-pipe-protected-show.lean" { lineWidth := 100 }
   assertTrue "protected pipe operand does not fall back" (!protectedResult.fellBack)
-  assertEq "a nonfitting protected operand retains the post-operator boundary"
-    protectedSource protectedResult.formatted
+  assertEq "a nonfitting protected operand keeps the operator attached"
+    protectedExpected protectedResult.formatted
   assertTrue "protected pipe operand preserves code"
     (← codePreservedIgnoringWhitespace env protectedSource protectedResult.formatted)
 
@@ -7239,8 +7259,8 @@ def assertLowPriorityPipeKeepsStructurallyRenderedOperand (env : Lean.Environmen
       "low-priority-pipe-attached-protected-show.lean" { lineWidth := 100 }
   assertTrue "attached protected pipe operand does not fall back"
     (!attachedProtectedResult.fellBack)
-  assertEq "a detached protected operand rebases its complete source layout"
-    protectedSource attachedProtectedResult.formatted
+  assertEq "an attached protected operand rebases its complete source layout"
+    protectedExpected attachedProtectedResult.formatted
   assertTrue "detached protected pipe operand preserves code"
     (← codePreservedIgnoringWhitespace env attachedProtectedSource
         attachedProtectedResult.formatted)
@@ -10537,8 +10557,8 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
     ++ "theorem inlineParserOwnedBody : True := by\n"
     ++ "  project_simp? proposition says exact True.intro\n"
   let detachedParserOwnedBodyExpected :=
-    "theorem detachedParserOwnedBody : True := by\n"
-    ++ "  project_simp? proposition says exact True.intro\n"
+    "theorem detachedParserOwnedBody : True := by project_simp? proposition says\n"
+    ++ "  exact True.intro\n"
     ++ "\n"
     ++ "theorem inlineParserOwnedBody : True := by project_simp? proposition says exact True.intro\n"
   let detachedParserOwnedBodyResult ←
@@ -10564,8 +10584,8 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
   let longParserOwnedBodyExpected :=
     "theorem longParserOwnedBody : True := by\n"
     ++ "  project_simp? [firstNormalizationLemma, secondNormalizationLemma,\n"
-    ++ "    thirdNormalizationLemma]\n"
-    ++ "  says exact proofTerm firstArgument secondArgument\n"
+    ++ "    thirdNormalizationLemma] says\n"
+    ++ "    exact proofTerm firstArgument secondArgument\n"
   let longParserOwnedBodyResult ←
     Formatter.formatSourceWithEnvDetailed env longParserOwnedBodySource
       "long-parser-owned-tactic-body.lean" { lineWidth := 72 }
@@ -10584,8 +10604,7 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
   let brokenParserOwnedBodyExpected :=
     "theorem brokenParserOwnedBody : True := by\n"
     ++ "  project_try? veryLongNormalizationProcedure firstNormalizationArgument\n"
-    ++ "    secondNormalizationArgument thirdNormalizationArgument\n"
-    ++ "  project_says\n"
+    ++ "    secondNormalizationArgument thirdNormalizationArgument project_says\n"
     ++ "    simp only [firstResultLemma, secondResultLemma, thirdResultLemma, fourthResultLemma]\n"
   let brokenParserOwnedBodyResult ←
     Formatter.formatSourceWithEnvDetailed env brokenParserOwnedBodySource
@@ -17288,7 +17307,7 @@ def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
     ++ "theorem tacticUsing : True := by\n"
     ++ "  simpa [firstLemma, secondLemma, thirdLemma]\n"
     ++ "    using veryLongProofTerm firstArgument\n"
-    ++ "            secondArgument\n"
+    ++ "      secondArgument\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "parser-owned-clause-bodies.lean" { lineWidth := 50 }
@@ -17323,7 +17342,7 @@ def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
     "theorem collectSubfields_pairKeysNodup : True := by\n"
     ++ "  simpa [GraphQL.NormalForm.collectSubfields_eq_collectFields_mergedFieldSelectionSet]\n"
     ++ "    using collectFields_pairKeysNodup schema variableValues objectType objectValue\n"
-    ++ "            (GraphQL.Execution.mergedFieldSelectionSet fields)\n"
+    ++ "      (GraphQL.Execution.mergedFieldSelectionSet fields)\n"
   assertEq "an owned suffix stays with the final wrapping header piece"
     longSuffixExpected longSuffixFormatted
   let manyArgumentsSource :=
@@ -17372,12 +17391,13 @@ def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
   let attachedHeadExpected :=
     "theorem attachedApplicationHead : True := by\n"
     ++ "  simpa [rewriteLemma]\n"
-    ++ s!"    using {attachedHead}\n"
-    ++ "            firstArgument\n"
+    ++ "    using\n"
+    ++ s!"    {attachedHead}\n"
+    ++ "        firstArgument\n"
   let attachedHeadResult ←
     Formatter.formatSourceWithEnvDetailed env attachedHeadSource
       "parser-owned-attached-head-overflow.lean" { lineWidth := 50 }
-  assertEq "an indivisible attached application head may overflow"
+  assertEq "an indivisible attached application head can move to its suffix base"
     attachedHeadExpected attachedHeadResult.formatted
   assertTrue "an indivisible attached application head is not actionable overflow"
     (!attachedHeadResult.fellBack)
@@ -17814,6 +17834,97 @@ def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
   assertEq "an attached else-do suffix is idempotent"
     conditionalFormatted conditionalAgain
 
+def assertReviewedMathlibContinuationAndSuffixes (_env : Lean.Environment) : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let check (name source expected : String) (lineWidth : Nat := 100) : IO Unit := do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source s!"{name}.lean" { lineWidth }
+    assertTrue s!"{name} formatting does not fall back" (!result.fellBack)
+    assertEq s!"{name} uses structural continuation and suffix ownership"
+      expected result.formatted
+    assertTrue s!"{name} formatting preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    let formattedAgain ←
+      Formatter.formatSourceWithEnv env result.formatted s!"{name}-formatted.lean"
+        { lineWidth }
+    assertEq s!"{name} formatting is idempotent" result.formatted formattedAgain
+
+  check "reviewed-using-application-base"
+    ("theorem reviewedUsingApplicationBase : True := by\n"
+      ++ "  simpa using! HasStrictFDerivAt.tendsto_implicitFunctionOfProdDomain\n"
+      ++ "    (hasStrictFDerivAt_uncurry_coprod df₁ df₂ cf₁ cf₂) (by simpa using! if₂u)\n")
+    ("theorem reviewedUsingApplicationBase : True := by\n"
+      ++ "  simpa\n"
+      ++ "    using! HasStrictFDerivAt.tendsto_implicitFunctionOfProdDomain\n"
+      ++ "      (hasStrictFDerivAt_uncurry_coprod df₁ df₂ cf₁ cf₂) (by simpa using! if₂u)\n")
+
+  check "reviewed-long-have-header"
+    ("def reviewedLongHaveHeader := do\n"
+      ++ "  project_have_config'\n"
+      ++ "    longLocalLemmaName : True := by\n"
+      ++ "      exact proof\n"
+      ++ "  pure ()\n")
+    ("def reviewedLongHaveHeader := do\n"
+      ++ "  project_have_config' longLocalLemmaName : True := by\n"
+      ++ "    exact proof\n"
+      ++ "  pure ()\n")
+
+  check "reviewed-multiline-condition-then"
+    ("def reviewedMultilineConditionThen (t : Expr) : TermElabM Expr := do\n"
+      ++ "  if ← (match t with\n"
+      ++ "      | .app t' _ => withNewMCtxDepth <| isDefEq t' cl\n"
+      ++ "      | _ => return false) then\n"
+      ++ "    mkAppM ``Comp.mk #[e]\n"
+      ++ "  else\n"
+      ++ "    return e\n")
+    ("def reviewedMultilineConditionThen (t : Expr) : TermElabM Expr := do\n"
+      ++ "  if ← (match t with\n"
+      ++ "        | .app t' _ => withNewMCtxDepth <| isDefEq t' cl\n"
+      ++ "        | _ => return false) then\n"
+      ++ "    mkAppM ``Comp.mk #[e]\n"
+      ++ "  else\n"
+      ++ "    return e\n")
+
+  check "reviewed-else-if-multiline-condition-then"
+    ("def reviewedElseIfMultilineConditionThen (t : Expr) : TermElabM Expr := do\n"
+      ++ "  if initialCondition then\n"
+      ++ "    return initialResult\n"
+      ++ "  else if\n"
+      ++ "    ← (match t with\n"
+      ++ "        | .app t' _ => withNewMCtxDepth <| isDefEq t' cl\n"
+      ++ "        | _ => return false)\n"
+      ++ "    then\n"
+      ++ "    mkAppM ``Comp.mk #[e]\n"
+      ++ "  else\n"
+      ++ "    return e\n")
+    ("def reviewedElseIfMultilineConditionThen (t : Expr) : TermElabM Expr := do\n"
+      ++ "  if initialCondition then\n"
+      ++ "    return initialResult\n"
+      ++ "  else if ← (match t with\n"
+      ++ "              | .app t' _ => withNewMCtxDepth <| isDefEq t' cl\n"
+      ++ "              | _ => return false) then\n"
+      ++ "    mkAppM ``Comp.mk #[e]\n"
+      ++ "  else\n"
+      ++ "    return e\n")
+
+  check "reviewed-structure-field-do-suffix"
+    ("structure ReviewedConfig where\n"
+      ++ "  discharger : TacticM Unit := do\n"
+      ++ "    evalTactic (← `(tactic| ring1))\n")
+    ("structure ReviewedConfig where\n"
+      ++ "  discharger : TacticM Unit := do\n"
+      ++ "    evalTactic (← `(tactic| ring1))\n")
+
+  check "reviewed-pipe-show-operand"
+    ("theorem reviewedPipeShowOperand : True :=\n"
+      ++ "  le_antisymm firstProofArgumentWithEnoughCharactersToKeepTheLeftApplication\n"
+      ++ "  <|\n"
+      ++ "    show VeryLongPredicateName firstArgument secondArgument thirdArgument from\n"
+      ++ "      proof\n")
+    ("theorem reviewedPipeShowOperand : True :=\n"
+      ++ "  le_antisymm firstProofArgumentWithEnoughCharactersToKeepTheLeftApplication\n"
+      ++ "  <| show VeryLongPredicateName firstArgument secondArgument thirdArgument from proof\n")
+
 def assertOptionalAccessSuffixPropagatesApplicationFit (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -17872,7 +17983,7 @@ def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertProoflessCalcInitialRegrouped env
   assertIndexedCalcRelationRegrouped env
   assertOpaqueCalcRelationRegrouped env
-  assertLowPriorityInfixOwnsBothOperatorBoundaries env
+  assertLowPriorityInfixOwnsStructuralOperatorBoundaries env
   assertGroupedEqualPrecedenceInfixChain env
   assertDoFallbackRegrouping env
   assertParserDescribedSpacedTermsBecomeApplications env
@@ -18167,6 +18278,7 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertIfLetBranchesUseConditionalBase env
   assertDependentIfThenElseKeepsHeaderAndBranchesAligned env
   assertMathlibOwnershipConsistencyShapes env
+  assertReviewedMathlibContinuationAndSuffixes env
   assertElseIfContinuesOnElseLine env
   assertElseIfChainBreaksThenBranchesTogether env
   assertTermMatchAlternativesStayOnOwnLines env

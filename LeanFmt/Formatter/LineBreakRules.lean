@@ -899,6 +899,7 @@ def spacedApplicationOwnsNestedBase : List Frame -> Bool
       match parent.segment.parent with
       | .node (.tactic _ _ _ _ true) _
       | .node .parserOwnedHeader _
+      | .node .parserOwnedBody _
       | .node (.raw `Lean.Parser.Term.fromTerm) _ => true
       | .node .suffixGroup _
       | .node (.raw `null) _
@@ -3111,14 +3112,10 @@ def parserOwnedBodyHasCommentHeader (segment : Segment) : Bool :=
     fun header =>
       header.containsNodeKind (.raw `Lean.Parser.Command.docComment)
 
-def parserOwnedBodyHasSuffixBody (segment : Segment) : Bool :=
-  (segment.child? 1).any (·.containsNodeKind .parserOwnedSuffixBody)
-
 def parserOwnedBodyBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
   let indentLevels :=
-    if parserOwnedBodyHasCommentHeader segment
-        || parserOwnedBodyHasSuffixBody segment then
+    if parserOwnedBodyHasCommentHeader segment then
       0
     else
       1
@@ -3268,7 +3265,10 @@ def infixBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :
 
 def lowPriorityInfixRhsBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
-  [boundaryBreak? segment (segment.start + 1) 1].filterMap id
+  if lowPriorityInfixRhsCanFlow segment then
+    [boundaryBreak? segment (segment.start + 1) 1].filterMap id
+  else
+    []
 
 def infixRuleBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   let breaks := infixBreaks context segment
@@ -3664,6 +3664,35 @@ def suffixGroupHasProofBody (segment : Segment) : Bool :=
       | some (.node (.proofBody _) _) => true
       | _ => false
 
+def suffixGroupIsFinalParserOwnedHeaderChild (context : RuleContext) : Bool :=
+  match context.ancestors with
+  | parent :: _ =>
+      parent.nodeKind? == some .parserOwnedHeader && parent.childIsLast
+  | _ => false
+
+def suffixGroupChildFirstLineStaysAttached
+    (context : RuleContext) (segment : Segment) (index : Nat)
+    : Bool :=
+  segment.start < index
+  && match segment.child? index with
+      | some child =>
+          child.isProofBodyEnvelope
+          || (match child with
+              | .node .application _
+              | .node .declarationHeader _ => true
+              | _ => false)
+          || (child.singleToken?.any
+                fun token =>
+                  suffixKeywordLexeme token.lexeme
+                  || suffixOperatorLexeme token.lexeme
+                  || suffixGroupIsFinalParserOwnedHeaderChild context)
+          || attachedBodyStart segment index
+      | none => false
+
+def suffixGroupHasMovableChild (context : RuleContext) (segment : Segment) : Bool :=
+  segment.indexes.any
+    fun index => suffixGroupChildFirstLineStaysAttached context segment index
+
 def suffixGroupBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   segment.indexes.filterMap
     fun index =>
@@ -3676,7 +3705,9 @@ def suffixGroupRule : LineBreakRule :=
   {
     name := "suffixGroup"
     mandatory := fun _ segment => suffixGroupRequiresProofBodyBreak segment
-    flow := fun _ segment => suffixGroupHasProofBody segment
+    flow :=
+      fun context segment =>
+        suffixGroupHasProofBody segment || suffixGroupHasMovableChild context segment
     inheritBase :=
       fun _ segment =>
         let shell? := segment.child? segment.start
@@ -3691,10 +3722,8 @@ def suffixGroupRule : LineBreakRule :=
     formatOriginalChildLeadingBoundary :=
       fun _ segment index => segment.start < index
     keepPrefixWithChildFirstLine :=
-      fun _ segment index =>
-        match segment.child? index with
-        | some (.node (.proofBody _) _) => true
-        | _ => false
+      fun context segment index =>
+        suffixGroupChildFirstLineStaysAttached context segment index
     breakPoints := suffixGroupBreaks
   }
 
@@ -4928,7 +4957,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
       some binderTacticRule
   | .node (.lowPriorityOperand _ _) _ => some transparentRule
   | .node .lowPriorityInfixRhs _ => some lowPriorityInfixRhsRule
-  | .node .parserOwnedSuffixBody _ => some transparentRule
+  | .node .parserOwnedTacticBody _ => some transparentRule
   | .node (.infixChain _) _ => some infixChainRule
   | .node .ifThenElseClause _ => some transparentRule
   | .node (.ifThenElseChain _) _ => some ifThenElseChainRule

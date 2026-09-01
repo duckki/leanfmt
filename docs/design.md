@@ -93,16 +93,15 @@ def propositionContinuation : Prop :=
 leanfmt generally breaks before operators for this reason. Bodies after `:=`,
 `=>`, `with`, quantifier commas, and similar separators are indented instead.
 The low-priority application operator `<|` is the one exception: its grouped
-right operand also exposes a boundary after the operator for protected source
-layout that cannot safely move onto the operator line. Other infix operators
-expose only their leading boundary. When a non-suffix operand can move, its
-leading boundary belongs to the complete `<| operand` group so both adjacent
-boundaries do not break and leave the operator alone. Established suffixes such
-as `by`, `do`, and `calc` keep using suffix attachment. A comment-led or
-nonfitting protected operand may retain its source break after `<|` because its
-first line cannot safely move onto the operator line. An authored source break
-alone does not protect that boundary: when the complete first line fits, it
-moves beside `<|` and the operand's own structural body indentation applies.
+right operand can expose a boundary after the operator for flowing suffixes.
+Other infix operators expose only their leading boundary. A non-suffix operand
+keeps `<|` with its first line, so the outer infix boundary moves the complete
+`<| operand` group and cannot leave the operator alone. Established suffixes
+such as `by`, `do`, and `calc` keep using suffix attachment and may break their
+body after the attached introducer. An authored source break alone does not
+protect the post-operator boundary. A protected operand moves beside `<|` as a
+complete source-layout island; an indivisible long first line is accepted at
+that logically correct indentation.
 Layout-sensitive `let` and `have` operands align their keyword to an indentation
 column after `<|`; this can require two spaces after the operator, and keeps the
 binding body at the same valid Lean layout base.
@@ -116,6 +115,9 @@ Parser-defined tactic suffixes follow the same principle: a fitting body may sta
 beside a suffix such as `says`, while a broken body continues from the suffix
 owner's base. Likewise, `show ... from` keeps `from` with the following
 application head and lets that application wrap at its own argument boundaries.
+An optional parser child with no source tokens does not separate a declaration
+prefix from its header, so `have`, `let`, and extension forms built from
+`letDecl` keep their keyword with the declaration name.
 
 ### Preserve intentional source breaks selectively
 
