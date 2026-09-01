@@ -335,37 +335,9 @@ private def isBatteriesLibraryNoteSyntaxTree : SyntaxTree.Tree → Bool
       (SyntaxTree.nodeKindName kind).startsWith "Batteries.Util.LibraryNote."
   | _ => false
 
-private def macroPatternHasLineStructure : SyntaxTree.Tree → Bool
-  | .node (.raw `Lean.Parser.Command.macro) children =>
-      match
-          children.findIdx?
-            fun child => LineBreakRules.treeFirstLexeme? child == some "macro",
-          children.findIdx?
-            fun child =>
-              match child with
-              | .node (.raw `Lean.Parser.Command.macroTail) _ => true
-              | _ => false
-      with
-      | some macroIndex, some tailIndex =>
-          let tokens :=
-            List.range' (macroIndex + 1) (tailIndex - (macroIndex + 1))
-            |>.flatMap
-                fun index =>
-                  match children[index]? with
-                  | some child => child.tokens.toList
-                  | none => []
-          (tokens.drop 1).any
-            (fun token => SpaceRules.hasLineStructure token.leading.text)
-          || tokens.dropLast.any
-              fun token => SpaceRules.hasLineStructure token.trailing.text
-      | _, _ => false
-  | _ => false
-
 private def isLayoutSensitiveCommand : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Command.syntax) _ => true
   | .node (.raw `Lean.Parser.Command.syntaxAbbrev) _ => true
-  | tree@(.node (.raw `Lean.Parser.Command.macro) _) =>
-      macroPatternHasLineStructure tree
   | .node (.raw `Lean.Parser.Command.macro_rules) _ => true
   | .node (.raw `Lean.Parser.Command.elab) _ => true
   | .node (.raw `Lean.Parser.Command.elab_rules) _ => true

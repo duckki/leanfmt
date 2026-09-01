@@ -1878,25 +1878,28 @@ def applicationHasMultipleStructuredProofArguments
             fun index => (segment.child? index).any containsMultiTacticProofBody
 
 def applicationBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
-  let patternFunBreaks :=
-    (childBoundaryBreaks segment 1).filter
-      fun breakPoint =>
-        childIsPatternLambdaArgument segment breakPoint.index
-  if !patternFunBreaks.isEmpty then
-    patternFunBreaks
+  if 0 < segment.start then
+    childBoundaryBreaks segment 0
   else
-    let argumentBreaks := childBoundaryBreaks segment 1
-    if applicationHasMultipleStructuredProofArguments context segment then
-      argumentBreaks.filter
+    let patternFunBreaks :=
+      (childBoundaryBreaks segment 1).filter
         fun breakPoint =>
-          applicationPeerParenthesizedArgument segment breakPoint.index
-          || (previousContentIndex? segment breakPoint.index).any
-              fun previousIndex =>
-                applicationPeerParenthesizedArgument segment previousIndex
+          childIsPatternLambdaArgument segment breakPoint.index
+    if !patternFunBreaks.isEmpty then
+      patternFunBreaks
     else
-      argumentBreaks.filter
-        fun breakPoint =>
-          !applicationArgumentStaysAttached context segment breakPoint.index
+      let argumentBreaks := childBoundaryBreaks segment 1
+      if applicationHasMultipleStructuredProofArguments context segment then
+        argumentBreaks.filter
+          fun breakPoint =>
+            applicationPeerParenthesizedArgument segment breakPoint.index
+            || (previousContentIndex? segment breakPoint.index).any
+                fun previousIndex =>
+                  applicationPeerParenthesizedArgument segment previousIndex
+      else
+        argumentBreaks.filter
+          fun breakPoint =>
+            !applicationArgumentStaysAttached context segment breakPoint.index
 
 def applicationHasPatternLambda (_context : RuleContext) (segment : Segment) : Bool :=
   segment.indexes.any fun index => childIsPatternLambdaArgument segment index
@@ -1936,13 +1939,21 @@ def signatureBreaks (context : RuleContext) (segment : Segment) : List BreakPoin
   let typeBreak :=
     match breakBeforeLexeme? segment ":" indentLevels with
     | some breakPoint =>
-        match segment.child? breakPoint.index with
-        | some child =>
-            if treeHasContent child then
-              [breakPoint]
-            else
-              []
-        | none => []
+        let isAnonymousDeclarationHeader :=
+          match segment.parent with
+          | .node .declarationHeader _ =>
+              (previousContentIndex? segment breakPoint.index).isNone
+          | _ => false
+        if isAnonymousDeclarationHeader then
+          []
+        else
+          match segment.child? breakPoint.index with
+          | some child =>
+              if treeHasContent child then
+                [breakPoint]
+              else
+                []
+          | none => []
     | none => []
   typeBreak
 
@@ -1959,8 +1970,9 @@ def applicationRule : LineBreakRule :=
     name := "application"
     mandatory :=
       fun context segment =>
-        applicationHasPatternLambda context segment
-        || applicationHasMultipleStructuredProofArguments context segment
+        segment.start == 0
+        && (applicationHasPatternLambda context segment
+            || applicationHasMultipleStructuredProofArguments context segment)
     flow := fun _ _ => true
     inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
     breakPoints := applicationBreaks
@@ -3538,12 +3550,23 @@ def notationRule : LineBreakRule :=
 def macroRule : LineBreakRule :=
   {
     name := "macro"
-    useExistingBreaks := fun _ _ => true
+    flow := fun _ _ => true
     breakPoints :=
       fun _ segment =>
-        match firstChildRawKind? segment `Lean.Parser.Command.macroTail with
-        | some index => [boundaryBreak? segment index 1].filterMap id
-        | none => []
+        [breakBeforeLexeme? segment ":" 1, breakAfterLexeme? segment "=>" 1]
+        |>.filterMap id
+  }
+
+def macroPatternRule : LineBreakRule :=
+  {
+    name := "macroPattern"
+    flow := fun _ _ => true
+    inheritBase := fun _ _ => true
+    breakPoints :=
+      fun _ segment =>
+        match nonemptyChildIndexes segment with
+        | [] | [_] => []
+        | _ :: rest => rest.filterMap fun index => boundaryBreak? segment index 1
   }
 
 def configEntriesRule : LineBreakRule :=
@@ -4352,6 +4375,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Option.registerOption) _ => some declarationValueRule
   | .node (.raw `Lean.Parser.Command.namedName) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.macroArg) _ => some defaultRule
+  | .node .macroPattern _ => some macroPatternRule
   | .node (.raw `Lean.Parser.Command.macroTail) _ => some notationRule
   | .node (.raw `Lean.Parser.Command.macroRhs) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.attribute) _ => some commandAttributeRule

@@ -327,7 +327,7 @@ def assertTacticQuotationAntiquotationPreserved (env : Lean.Environment) : IO Un
     (← codePreservedIgnoringWhitespace env movedCommandQuotation movedResult.formatted)
   assertTextContains "moved command quotation follows its do body"
     movedResult.formatted
-    "    `(\n"
+    "  `(\n"
   let movedAgain ←
     Formatter.formatSourceWithEnv env movedResult.formatted
       "moved-command-quotation-formatted.lean" { lineWidth := 60 }
@@ -337,11 +337,10 @@ def assertTacticQuotationAntiquotationPreserved (env : Lean.Environment) : IO Un
     ++ "    (repeat first | rw [← to_nat_inj] | rw [← lt_to_nat] | rw [← le_to_nat]\n"
     ++ "     repeat first | rw [add_to_nat] | rw [mul_to_nat] | rw [cast_one] | rw [cast_zero]))\n"
   let inlineMultilineExpected :=
-    "scoped macro (name := transfer_rw) \"transfer_rw\"\n"
-    ++ "  : tactic =>\n"
-    ++ "    `(tactic|\n"
-    ++ "      (repeat first | rw [← to_nat_inj] | rw [← lt_to_nat] | rw [← le_to_nat]\n"
-    ++ "       repeat first | rw [add_to_nat] | rw [mul_to_nat] | rw [cast_one] | rw [cast_zero]))\n"
+    "scoped macro (name := transfer_rw) \"transfer_rw\" : tactic =>\n"
+    ++ "  `(tactic|\n"
+    ++ "    (repeat first | rw [← to_nat_inj] | rw [← lt_to_nat] | rw [← le_to_nat]\n"
+    ++ "     repeat first | rw [add_to_nat] | rw [mul_to_nat] | rw [cast_one] | rw [cast_zero]))\n"
   let inlineMultilineResult ←
     Formatter.formatSourceWithEnvDetailed env inlineMultilineSource
       "moved-inline-multiline-quotation.lean"
@@ -2393,23 +2392,30 @@ def assertProofIslandFitIncludesParentSuffix (env : Lean.Environment) : IO Unit 
 
 def assertQuotationIslandRetainsFittingSourceIndent (env : Lean.Environment)
     : IO Unit := do
+  let fittingHeader :=
+    "local macro \"short_map_simp\" : tactic =>\n" ++ "  `(tactic| simp)\n"
+  let fittingHeaderFormatted ←
+    Formatter.formatSourceWithEnv env fittingHeader "fitting-local-macro-header.lean"
+      { lineWidth := 100 }
+  assertEq "a fitting local macro header remains one flow"
+    fittingHeader fittingHeaderFormatted
+
   let source :=
     "local macro \"map_simp\" : tactic =>\n"
     ++ "  `(tactic| simp only [map_ofNat, map_neg, map_add, map_sub, map_mul, map_pow, map_div₀,\n"
     ++ "    Polynomial.map_ofNat, map_C, map_X, Polynomial.map_neg, Polynomial.map_add, Polynomial.map_sub,\n"
     ++ "    Polynomial.map_mul, Polynomial.map_pow])\n"
   let expected :=
-    "local macro \"map_simp\"\n"
-    ++ "  : tactic =>\n"
-    ++ "    `(tactic| simp only [map_ofNat, map_neg, map_add, map_sub, map_mul, map_pow, map_div₀,\n"
-    ++ "      Polynomial.map_ofNat, map_C, map_X, Polynomial.map_neg, Polynomial.map_add, Polynomial.map_sub,\n"
-    ++ "      Polynomial.map_mul, Polynomial.map_pow])\n"
+    "local macro \"map_simp\" : tactic =>\n"
+    ++ "  `(tactic| simp only [map_ofNat, map_neg, map_add, map_sub, map_mul, map_pow, map_div₀,\n"
+    ++ "    Polynomial.map_ofNat, map_C, map_X, Polynomial.map_neg, Polynomial.map_add, Polynomial.map_sub,\n"
+    ++ "    Polynomial.map_mul, Polynomial.map_pow])\n"
   let formatted ←
     Formatter.formatSourceWithEnv env source "fitting-quotation-island-indent.lean"
       { lineWidth := 100 }
   assertEq "quotation island keeps its structural indent" expected formatted
-  assertTrue "quotation island accepts source overflow at its structural indent"
-    (!Formatter.linesFit formatted 100)
+  assertTrue "quotation island fits after retaining its compact header"
+    (Formatter.linesFit formatted 100)
   let sourceModule ←
     SyntaxTree.parseModuleStringWithEnv env source
       "fitting-quotation-overflow-source.lean"
@@ -4505,6 +4511,87 @@ def assertTermTakingTacticsAttachOperandHead (baseEnv : Lean.Environment) : IO U
     (← codePreservedIgnoringWhitespace env interleavedProofArgumentsSource
         interleavedProofArgumentsResult.formatted)
 
+  let groupedArgumentTailSource :=
+    "theorem applicationTailAfterGroupedArgument : True := by\n"
+    ++ "  exact veryLongApplicationNameForContinuationOwnership resolvers variableValues\n"
+    ++ "    (selectionSetDeepProbeFuel schema parentType (left ++ right) + 1)\n"
+    ++ "    source hsource\n"
+    ++ "      hobject hleftNormal hrightNormal hleftFree hrightFree hleftMem\n"
+    ++ "    (by exact finalProof)\n"
+  let groupedArgumentTailExpected :=
+    "theorem applicationTailAfterGroupedArgument : True := by\n"
+    ++ "  exact veryLongApplicationNameForContinuationOwnership resolvers variableValues\n"
+    ++ "    (selectionSetDeepProbeFuel schema parentType (left ++ right) + 1)\n"
+    ++ "    source hsource\n"
+    ++ "    hobject hleftNormal hrightNormal hleftFree hrightFree hleftMem\n"
+    ++ "    (by exact finalProof)\n"
+  let groupedArgumentTailResult ←
+    Formatter.formatSourceWithEnvDetailed env groupedArgumentTailSource
+      "application-tail-after-grouped-argument.lean" { lineWidth := 100 }
+  assertTrue "a grouped argument tail does not fall back"
+    (!groupedArgumentTailResult.fellBack)
+  assertEq "a grouped argument does not raise later peer arguments"
+    groupedArgumentTailExpected groupedArgumentTailResult.formatted
+
+  let regroupedArgumentTailSource :=
+    "theorem applicationTailAfterMovedGroupedArgument : True := by\n"
+    ++ "  exact SemanticSeparation.not_selectionSetsDataEquivalent_of_left_responseName_diff_of_field_ok\n"
+    ++ "    resolvers variableValues\n"
+    ++ "    (selectionSetDeepProbeFuel schema parentType (left ++ right) + 1) source hsource\n"
+    ++ "    hobject hleftNormal hrightNormal hleftFree hrightFree hleftMem hrightNoResponseName\n"
+    ++ "    (by\n"
+    ++ "      intro value\n"
+    ++ "      exact firstProof)\n"
+    ++ "    (by exact secondProof)\n"
+  let regroupedArgumentTailExpected :=
+    "theorem applicationTailAfterMovedGroupedArgument : True := by\n"
+    ++ "  exact SemanticSeparation.not_selectionSetsDataEquivalent_of_left_responseName_diff_of_field_ok\n"
+    ++ "    resolvers variableValues\n"
+    ++ "    (selectionSetDeepProbeFuel schema parentType (left ++ right) + 1)\n"
+    ++ "    source hsource\n"
+    ++ "    hobject hleftNormal hrightNormal hleftFree hrightFree hleftMem hrightNoResponseName\n"
+    ++ "    (by\n"
+    ++ "      intro value\n"
+    ++ "      exact firstProof)\n"
+    ++ "    (by exact secondProof)\n"
+  let regroupedArgumentTailResult ←
+    Formatter.formatSourceWithEnvDetailed env regroupedArgumentTailSource
+      "application-tail-after-moved-grouped-argument.lean" { lineWidth := 100 }
+  assertTrue "a moved grouped argument tail does not fall back"
+    (!regroupedArgumentTailResult.fellBack)
+  assertEq "a moved grouped argument does not raise later peer arguments"
+    regroupedArgumentTailExpected regroupedArgumentTailResult.formatted
+
+  let namedArgumentTailSource :=
+    "theorem applicationTailAfterNamedArgument : True := by\n"
+    ++ "  exact veryLongApplicationNameForNamedContinuationOwnership\n"
+    ++ "    (support :=\n"
+    ++ "      fun childSelectionSet =>\n"
+    ++ "        childSelectionSet\n"
+    ++ "        ∈ focusedSplitTargetChildSelectionSets fieldName leftArguments\n"
+    ++ "            rightArguments leftPrefix rightPrefix leftSuffix rightSuffix)\n"
+    ++ "    hschema hleftValid hrightValid hlookup hreturnType hleftFree hrightFree\n"
+    ++ "      hleftNormal hrightNormal hparentObject\n"
+    ++ "    (by exact finalProof)\n"
+  let namedArgumentTailExpected :=
+    "theorem applicationTailAfterNamedArgument : True := by\n"
+    ++ "  exact veryLongApplicationNameForNamedContinuationOwnership\n"
+    ++ "    (support :=\n"
+    ++ "      fun childSelectionSet =>\n"
+    ++ "        childSelectionSet\n"
+    ++ "        ∈ focusedSplitTargetChildSelectionSets fieldName leftArguments\n"
+    ++ "            rightArguments leftPrefix rightPrefix leftSuffix rightSuffix)\n"
+    ++ "    hschema hleftValid hrightValid hlookup hreturnType hleftFree hrightFree\n"
+    ++ "    hleftNormal hrightNormal hparentObject\n"
+    ++ "    (by exact finalProof)\n"
+  let namedArgumentTailResult ←
+    Formatter.formatSourceWithEnvDetailed env namedArgumentTailSource
+      "application-tail-after-named-argument.lean" { lineWidth := 100 }
+  assertTrue "a named argument tail does not fall back"
+    (!namedArgumentTailResult.fellBack)
+  assertEq "a named argument does not raise later peer arguments"
+    namedArgumentTailExpected namedArgumentTailResult.formatted
+
   let leadingArgumentsBeforeProofsSource :=
     "theorem tacticWithLeadingArgumentsBeforeProofs : True := by\n"
     ++ "  simpa [enqueueExpectedScheduleItems] using\n"
@@ -5971,6 +6058,12 @@ def assertTopLevelAnnotationsBreakConsistently (env : Lean.Environment) : IO Uni
       formattedBrokenBeforeCommand ("@[simp]\n" ++ commandPrefix)
 
 def assertNotationValueBreaksAfterArrow (env : Lean.Environment) : IO Unit := do
+  let scopedSource := "scoped notation \"short_result\" => shortValue\n"
+  let scopedFormatted ←
+    Formatter.formatSourceWithEnv env scopedSource "scoped-notation-modifier.lean"
+  assertEq "a scoped modifier remains with its fitting notation header"
+    scopedSource scopedFormatted
+
   let source :=
     "local notation \"result\" => firstVeryLongFunctionName secondVeryLongArgumentName thirdVeryLongArgumentName\n"
   let expected :=
@@ -8423,6 +8516,22 @@ def assertLetExpressionKeepsBodyBreak (env : Lean.Environment) : IO Unit := do
   let source := "def letBodyBreak : Result :=\n" ++ "  let value := f a\n" ++ "  value\n"
   let formatted ← Formatter.formatSourceWithEnv env source "let-body-break.lean"
   assertEq "let expression body break" source formatted
+
+  let anonymousTypedSource :=
+    "def anonymousTypedLet :=\n"
+    ++ "  let : VeryLongTypeConstructor firstArgument secondArgument thirdArgument fourthArgument fifthArgument := value\n"
+    ++ "  result\n"
+  let anonymousTypedExpected :=
+    "def anonymousTypedLet :=\n"
+    ++ "  let : VeryLongTypeConstructor firstArgument secondArgument thirdArgument fourthArgument\n"
+    ++ "          fifthArgument :=\n"
+    ++ "    value\n"
+    ++ "  result\n"
+  let anonymousTypedFormatted ←
+    Formatter.formatSourceWithEnv env anonymousTypedSource
+      "anonymous-typed-let-header.lean" { lineWidth := 100 }
+  assertEq "an anonymous typed let keeps its colon with the keyword"
+    anonymousTypedExpected anonymousTypedFormatted
 
 def assertLetIExpressionKeepsBodyBreak (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -16072,9 +16181,56 @@ def assertSyntaxDeclarationsHaveRules (env : Lean.Environment) : IO Unit := do
     ++ "  \"(\" x:ident \" => \" term:term \") \" init:term:max : term =>\n"
     ++ "  term.replaceM fun current =>\n"
     ++ "    return if current == x then some init else none\n"
+  let macroExpected :=
+    "macro (name := expandFold) \"expand_fold% \" \"(\" x:ident \" => \" term:term \") \" init:term:max\n"
+    ++ "  : term =>\n"
+    ++ "  term.replaceM\n"
+    ++ "    fun current =>\n"
+    ++ "      return if current == x then some init else none\n"
   let macroFormatted ←
     Formatter.formatSourceWithEnv env macroSource "macro-command-source-layout.lean"
-  assertEq "macro declarations keep their source layout" macroSource macroFormatted
+  assertEq "macro declarations separate an overflowing header from their body"
+    macroExpected macroFormatted
+  let longPatternSource :=
+    "macro (name := expandFoldl) \"expand_foldl% \"\n"
+    ++ "  \"(\" x:ident ppSpace y:ident \" => \" term:term \") \" init:term:max \" [\" args:term,* \"]\" : term =>\n"
+    ++ "  args.getElems.foldlM (init := init) fun res arg ↦ do\n"
+    ++ "    term.replaceM fun e ↦\n"
+    ++ "      return if e == x then some res else if e == y then some arg else none\n"
+    ++ "macro (name := expandFoldr) \"expand_foldr% \"\n"
+    ++ "  \"(\" x:ident ppSpace y:ident \" => \" term:term \") \" init:term:max \" [\" args:term,* \"]\" : term =>\n"
+    ++ "  args.getElems.foldrM (init := init) fun arg res ↦ do\n"
+    ++ "    term.replaceM fun e ↦\n"
+    ++ "      return if e == x then some arg else if e == y then some res else none\n"
+  let longPatternExpected :=
+    "macro (name := expandFoldl) \"expand_foldl% \"\n"
+    ++ "  \"(\" x:ident ppSpace y:ident \" => \" term:term \") \" init:term:max \" [\" args:term,* \"]\"\n"
+    ++ "  : term =>\n"
+    ++ "  args.getElems.foldlM (init := init)\n"
+    ++ "    fun res arg ↦ do\n"
+    ++ "      term.replaceM\n"
+    ++ "        fun e ↦\n"
+    ++ "          return if e == x then some res else if e == y then some arg else none\n"
+    ++ "macro (name := expandFoldr) \"expand_foldr% \"\n"
+    ++ "  \"(\" x:ident ppSpace y:ident \" => \" term:term \") \" init:term:max \" [\" args:term,* \"]\"\n"
+    ++ "  : term =>\n"
+    ++ "  args.getElems.foldrM (init := init)\n"
+    ++ "    fun arg res ↦ do\n"
+    ++ "      term.replaceM\n"
+    ++ "        fun e ↦\n"
+    ++ "          return if e == x then some arg else if e == y then some res else none\n"
+  let longPatternFormatted ←
+    Formatter.formatSourceWithEnv env longPatternSource "macro-pattern-flow.lean"
+      { lineWidth := 100 }
+  assertEq "long macro patterns flow between parser-owned arguments"
+    longPatternExpected longPatternFormatted
+  assertTrue "long macro pattern formatting preserves syntax"
+    (← codePreservedIgnoringWhitespace env longPatternSource longPatternFormatted)
+  let longPatternFormattedAgain ←
+    Formatter.formatSourceWithEnv env longPatternFormatted
+      "macro-pattern-flow-idempotent.lean" { lineWidth := 100 }
+  assertEq "long macro pattern formatting is idempotent"
+    longPatternFormatted longPatternFormattedAgain
 
 def assertElaborationSyntaxHasRules (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -17023,7 +17179,7 @@ def assertStructuralHeadersOwnAttachedBodies (env : Lean.Environment) : IO Unit 
 
   check "macro-do-suffix"
     ("macro \"sample\" : term =>\n" ++ "  do\n" ++ "    `(0)\n")
-    ("macro \"sample\"\n" ++ "  : term => do\n" ++ "    `(0)\n")
+    ("macro \"sample\" : term => do\n" ++ "  `(0)\n")
 
   check "named-argument-by-suffix"
     ("def namedArgument :=\n"

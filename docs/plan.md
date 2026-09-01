@@ -1,44 +1,84 @@
 # Version 0.4 plan
 
-This is the forward-looking work list for the next release. External examples
-justify general structural rules; project paths, declaration names, and isolated
-token sequences must never become formatter conditions.
+Rules must describe general syntax ownership. External paths and declaration
+names are evidence for tests, never formatter conditions. Missing-rule coverage
+is release-blocking only for Lean's standard library and Mathlib.
 
-Missing-rule coverage is release-blocking only for Lean's standard library and
-Mathlib, leanfmt's first-class syntax-support targets. Missing rules in other
-external projects are useful inventory, but block validation only when they
-coincide with preservation, formatting, convergence, overflow, or build issues.
+## Open Issues
 
-## Open issues
+### Application continuation ownership
 
-### Application continuation tails
+Later arguments can inherit an incidental function-name column after a tactic
+suffix or a multiline peer:
 
-Later arguments can inherit the tail of a preceding multiline argument instead
-of returning to the application base. The same ownership gap can leave the
-closing `]` of a broken `simp` or `rw` lemma list on its own line. Continuations
-and collection closers should return to their structural owners.
+```lean
+simpa
+  using! longFunctionName
+          firstArgument secondArgument
+```
 
-### Command header flow
+Continuation runs should return to the application's structural base.
 
-Declaration binders, short local macro headers, and scoped notation modifiers
-can break at incidental parser-wrapper boundaries. A fitting command header such
-as `local macro "name" : tactic =>` should remain one flow, and a modifier should
-not become an orphan line above its command.
+### Suffix and separator attachment
+
+Fitting suffixes can detach from the header they complete, including `then`,
+`:= do`, tactic `says`, and low-priority pipes:
+
+```lean
+discharger : TacticM Unit :=
+  do
+```
+
+Existing suffix ownership should keep these tokens with their natural header
+without adding token-specific renderer behavior.
+
+### Delimiter ownership
+
+Parenthesized tactic bodies and generated quotations can leave an opening or
+closing parenthesis on a line by itself:
+
+```lean
+induction value with
+  (
+    ...
+  )
+```
+
+Delimited trees should retain their delimiters while their contents use the
+surrounding structural base.
+
+### Command boundary spacing
+
+When a compact macro becomes multiline, the following declaration can lose the
+blank line that separates commands. Command spacing should depend on command
+boundaries, not on whether a command happened to fit before formatting.
+
+### Large-project validation latency
+
+Hex's slowest formatter batch is about 298 seconds. The output is correct, but
+the batch is close to the historical timeout and remains a performance target.
 
 ## Progress
 
-### Continuation and header consistency
+### Checkpoint 1: structural headers and peer continuations
 
-Stabilize application tails and tactic-list closers through existing application
-and collection ownership. Validate the focused GraphQL and Mathlib examples
-without changing compact application behavior.
+Complete macro pattern regrouping, anonymous declaration-header consistency,
+and peer application continuation ownership. The exact Mathlib `v4.33.0` gate
+completed with all formatter diagnostics at zero and both post-format builds
+passing.
 
-### Header consistency and release gate
+### Checkpoint 2: application and suffix consistency
 
-Align declaration binders, macro headers, and command modifiers through existing
-annotated-declaration and signature flows. After focused validation, run the full
-GraphQL, quantum, Hex, and Mathlib release gate and review the complete formatting
-diff before release.
+Add focused tests for the reviewed application, local declaration, conditional,
+tactic suffix, and low-priority-pipe examples. Fix shared ownership causes using
+existing application and suffix mechanisms, then run the local gate and light
+GraphQL, quantum, Hex, and Mathlib validation.
+
+### Checkpoint 3: delimiters, command boundaries, and release gate
+
+Add focused tests for detached parentheses and command spacing. Fix the shared
+delimiter and command-sequence ownership, review complete external diffs, then
+run the full GraphQL, quantum, Hex, and exact Mathlib `v4.33.0` release gate.
 
 ## Validation standard
 
@@ -59,16 +99,11 @@ git diff --check
 
 Generated fixture and self-format changes require visual review. External runs
 use automatic worker counts; do not pass `--jobs`. GraphQL and quantum run their
-complete validation because they are comparatively small. Hex and Mathlib run at
-width 100 through `--checkpoint`, which reuses the exact revision, toolchain,
-selected-source, ownership, and runtime baseline from their latest successful
-complete validation. The checkpoint gate still formats every selected source with
-exception and idempotency checks, but deliberately skips target-project builds.
-Missing rules are hard failures only for Lean's standard library and Mathlib.
+complete validation because they are comparatively small. Hex and Mathlib use
+width 100 and checkpoint mode during iteration, with complete builds reserved
+for the release gate.
 
-Mathlib validation uses a shallow clone of exact `v4.33.0` commit
-`db584cd6d46c92f209a44c0f1c829460d327499d`, formats only `Mathlib` at width
-100, and downloads the Lake cache. Checkpoints reuse its validated clone with
-`--checkpoint`; Checkpoint 24 recreates the clone and runs the complete pre-format,
-changed-module, and aggregate post-format builds. Hex follows the same split between
-light checkpoints and the final complete release validation.
+Mathlib validation uses exact `v4.33.0` commit
+`db584cd6d46c92f209a44c0f1c829460d327499d`, formats only `Mathlib`, and uses
+the Lake cache. The final gate recreates or resets the validation clone and runs
+the clean, changed-module, and aggregate post-format builds.

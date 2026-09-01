@@ -88,6 +88,7 @@ inductive NodeKind where
   | annotatedDeclaration
   | declarationHeader
   | signatureParameters
+  | macroPattern
   | structureHeader
   | structureConstructor
   | structureDeriving
@@ -136,6 +137,7 @@ def nodeKindName : NodeKind → String
   | .annotatedDeclaration => "LeanFmt.SyntaxTree.NodeKind.annotatedDeclaration"
   | .declarationHeader => "LeanFmt.SyntaxTree.NodeKind.declarationHeader"
   | .signatureParameters => "LeanFmt.SyntaxTree.NodeKind.signatureParameters"
+  | .macroPattern => "LeanFmt.SyntaxTree.NodeKind.macroPattern"
   | .structureHeader => "LeanFmt.SyntaxTree.NodeKind.structureHeader"
   | .structureConstructor => "LeanFmt.SyntaxTree.NodeKind.structureConstructor"
   | .structureDeriving => "LeanFmt.SyntaxTree.NodeKind.structureDeriving"
@@ -3693,6 +3695,33 @@ def regroupTacticAlternativeChildren (children : Array Tree) : Array Tree :=
         ++ childrenRange children 2 children.size
   regrouped?.getD children
 
+def regroupMacroChildren (children : Array Tree) : Array Tree :=
+  let children :=
+    match children.findIdx?
+            fun child => rawKind? child == some `Lean.Parser.Command.macroTail with
+    | some index =>
+        match children[index]? with
+        | some (.node (.raw `Lean.Parser.Command.macroTail) tailChildren) =>
+            childrenRange children 0 index
+            ++ tailChildren
+            ++ childrenRange children (index + 1) children.size
+        | _ => children
+    | none => children
+  (children.filter fun child => child.firstToken?.isSome).map
+    fun child =>
+      match child with
+      | .node (.raw `null) patternChildren =>
+          let patternChildren :=
+            patternChildren.filter fun patternChild => patternChild.firstToken?.isSome
+          if !patternChildren.isEmpty
+              && patternChildren.all
+                  fun patternChild =>
+                    rawKind? patternChild == some `Lean.Parser.Command.macroArg then
+            .node .macroPattern patternChildren
+          else
+            child
+      | _ => child
+
 def regroupRawNode
     (infixPrecedences : InfixPrecedenceMap)
     (spacedApplicationKinds : SpacedApplicationKindSet)
@@ -3712,6 +3741,8 @@ def regroupRawNode
     .node (.raw kind) ((regroupInductionChildren children).getD children)
   else if kind == `Lean.Parser.Tactic.inductionAlt then
     .node (.raw kind) (regroupTacticAlternativeChildren children)
+  else if kind == `Lean.Parser.Command.macro then
+    .node (.raw kind) (regroupMacroChildren children)
   else if kind == `termDepIfThenElse then
     let children := (regroupDependentIfNamedDiscriminant? children).getD children
     regroupIfThenElseChain kind children

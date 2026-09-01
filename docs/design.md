@@ -211,11 +211,16 @@ a delimited argument when necessary; the delimiter does not become part of the
 function head.
 
 The introducer keyword is also part of a binding header. leanfmt never emits a
-line containing only `let`; it keeps `let` with the pattern or identifier:
+line containing only `let`; it keeps `let` with the pattern, identifier, or
+anonymous type colon:
 
 ```lean
 let coreContext : Core.Context :=
   { fileName := inputContext.fileName, fileMap := inputContext.fileMap }
+
+let : VeryLongTypeConstructor firstArgument secondArgument
+        thirdArgument :=
+  value
 ```
 
 These separator rules are structural rather than renderer spelling checks. A
@@ -501,6 +506,20 @@ Keyword modifiers remain on the declaration header:
 ```lean
 private theorem helper : True := by
   trivial
+```
+
+Macro signatures form a header flow independently of their expansion body. A
+fitting header remains on one line even when the body is multiline; an
+overflowing header may flow between parser-owned pattern arguments before it
+breaks before its type, and the body then starts one level inside the command.
+A leading `do` or `by` stays with `=>` as the body's introducer suffix.
+
+```lean
+local macro "map_simp" : tactic =>
+  `(tactic| simp)
+
+macro "run_generated" : command => do
+  emitCommand
 ```
 
 Continuation indentation is measured from the beginning of the command line,
@@ -965,12 +984,14 @@ every parenthesized argument uses the same peer boundary. This keeps ordinary
 terms, named arguments, type ascriptions, proof arguments, and their closing
 delimiters on one application continuation base. An ordinary argument after a
 parenthesized peer starts a new run at that base; its remaining fitting
-arguments stay on the same line:
+arguments stay on the same line. When that run itself wraps, it remains a run of
+peer arguments rather than treating its first argument as a new function head:
 
 ```lean
 exact inductionPrinciple motives
   (by
     exact firstCase)
+  firstValue secondValue thirdValue
   (by
     exact secondCase)
 ```
