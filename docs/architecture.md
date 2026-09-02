@@ -35,6 +35,7 @@ The implementation is split by responsibility:
 
 | Module | Responsibility |
 | --- | --- |
+| `LeanFmt.ParserLayout` | Evaluate imported parser descriptions once per occurring syntax kind and compile formatter availability, printing annotations, precedence, application shape, and trailing-body ownership into conservative syntax-layout facts. |
 | `LeanFmt.SyntaxTree` | Parse Lean source, keep token/trivia spans, classify delimiter envelopes, build the raw tree, and regroup selected raw syntax into logical nodes. |
 | `LeanFmt.Formatter.SpaceRules` | Perform low-level token spacing and lossless trivia cleanup/reindentation. |
 | `LeanFmt.Formatter.SourceBoundary` | Represent source trivia between tokens and expose comment, forced-break, blank-group, and ownership facts. |
@@ -80,13 +81,13 @@ Formatting a file follows this pipeline:
    uses an environment that imports `Lean` with parser extensions enabled. While each
    command's parser scope is active, probe every layout-delimited `let` body with Lean's
    term parser at application-argument precedence and retain the result as a parser
-   fact. After parsing, read trailing-parser binding powers and registered command and
-   tactic parser descriptions for the syntax kinds that occurred in the module. These
-   facts let logical infix regrouping follow imported and locally declared operators,
-   and let parser-owned trailing keyword clauses expose term or tactic-sequence bodies.
-   The recorded policy also says whether the parser belongs to the tactic category, so
-   tactic suffixes own their bodies while command suffixes remain header clauses,
-   without putting parser metadata in line-break rules. The CLI first tries
+   fact. After parsing, `ParserLayout` evaluates each occurring syntax kind once. Its
+   profile records formatter availability, `ParserDescr` printing annotations such as
+   `ppSpace`, `ppLine`, grouping, indentation and dedentation, trailing-parser binding
+   powers, conservative spaced-application shape, and parser-owned trailing bodies.
+   These facts let logical regrouping follow imported and locally declared syntax
+   without putting environment access, parser combinators, or project syntax names in
+   line-break rules. The CLI first tries
    the default environment, then loads an import-specific
    environment when project syntax requires it. For multi-file package formatting,
    a bounded parallel classification pass reads each file once, determines whether it
@@ -261,7 +262,7 @@ Current logical regroupings are:
 | Logical node | Why it exists | Expected children |
 | --- | --- | --- |
 | `.letExpression kind bodyCanStartApplicationArgument` | Layout-delimited `let` needs a parser-derived answer to whether its body could be consumed as one more right-hand-side application argument. The active parser scope supplies this fact, so imported and locally declared syntax extensions behave according to their precedence without appearing in a formatter keyword list. | The original raw `let`, `letI`, or `letrec` children, unchanged. The raw kind is retained for ordinary rule dispatch and diagnostics. |
-| `.application` | Lean parser applications are nested per argument, but formatting wants one function-application segment. Generated term parsers can express the same shape as a head and arguments separated by empty `ppSpace` groups; recognizing that structural pattern prevents continuation indentation from staircasing through the generated wrapper. An extension parser with no registered formatter can prove the same ownership when its complete descriptor is one tight word-like leading symbol, optional clauses, and one final term operand. Punctuation-only heads remain unary or extension-owned syntax. Applications normally own their physical start column, including applications on ordinary infix, pipe-projection, and low-priority-infix operands. A parser-described spaced tactic instead owns the operand continuation base through transparent parser and low-priority-infix envelopes. Exactly one simple parenthesized proof argument is regrouped with its envelope so the complete application can probe a compact proof. When multiple structured proof arguments require mandatory peer layout, every parenthesized argument retains a peer boundary; an ordinary argument after any parenthesized peer starts a peer run at the same application base. A sliced run created by those structural boundaries has no function head, so its internal flow uses zero-level peer boundaries instead of adding another application continuation level. This keeps nested terms, named arguments, type ascriptions, proof arguments, and closing delimiters from inheriting incidental inner columns without forcing fitting ordinary arguments onto separate lines. Other arguments keep ordinary flow behavior. `<|` remains exceptional only in its breakpoint policy. A final attached `do` or `by` argument is split into a fitting application header and an owned body, so the body does not force an otherwise fitting header argument onto its own line. | Child `0` is the head, children `1...` are arguments in source order. Raw `null` argument containers are spliced. A generated spaced form requires at least two non-atomic argument trees and exactly one empty generated group between every content child. A parser-described form requires a non-atomic operand separated from its head in source. Direct tactic-sequence entries are excluded from parser-described application regrouping: the tactic retains contextual ownership while an application inside its final term remains an ordinary child owner. Ambiguous generated or extension-owned token sequences retain their missing-rule diagnostic. `return` wrappers move their prefix into a `.suffixGroup` with the application head, so ordinary and lambda arguments share the prefix's structural base instead of the function name's inline column. A terminal attached-body application becomes `.parserOwnedBody`; its header application ends in the introducer and its body is the unwrapped sequence. |
+| `.application` | Lean parser applications are nested per argument, but formatting wants one function-application segment. Generated term parsers can express the same shape as a head and arguments separated by empty `ppSpace` groups; recognizing that structural pattern prevents continuation indentation from staircasing through the generated wrapper. An extension parser can prove the same ownership when its complete descriptor is one tight word-like leading symbol, optional clauses, and one final term or identifier operand. `ParserLayout` removes only Lean's printing-only combinators while matching that shape, so an explicit `ppSpace` and implicit lexical separation behave alike even when the syntax also has a registered formatter. Punctuation-only heads remain unary or extension-owned syntax. Applications normally own their physical start column, including applications on ordinary infix, pipe-projection, and low-priority-infix operands. A parser-described spaced tactic instead owns the operand continuation base through transparent parser and low-priority-infix envelopes. Exactly one simple parenthesized proof argument is regrouped with its envelope so the complete application can probe a compact proof. When multiple structured proof arguments require mandatory peer layout, every parenthesized argument retains a peer boundary; an ordinary argument after any parenthesized peer starts a peer run at the same application base. A sliced run created by those structural boundaries has no function head, so its internal flow uses zero-level peer boundaries instead of adding another application continuation level. This keeps nested terms, named arguments, type ascriptions, proof arguments, and closing delimiters from inheriting incidental inner columns without forcing fitting ordinary arguments onto separate lines. Other arguments keep ordinary flow behavior. `<|` remains exceptional only in its breakpoint policy. A final attached `do` or `by` argument is split into a fitting application header and an owned body, so the body does not force an otherwise fitting header argument onto its own line. | Child `0` is the head, children `1...` are arguments in source order. Raw `null` argument containers are spliced. A generated spaced form requires at least two non-atomic argument trees and exactly one empty generated group between every content child. A parser-described form requires a non-atomic operand separated from its head in source. Direct tactic-sequence entries are excluded from parser-described application regrouping: the tactic retains contextual ownership while an application inside its final term remains an ordinary child owner. Ambiguous generated or extension-owned token sequences retain their missing-rule diagnostic. `return` wrappers move their prefix into a `.suffixGroup` with the application head, so ordinary and lambda arguments share the prefix's structural base instead of the function name's inline column. A terminal attached-body application becomes `.parserOwnedBody`; its header application ends in the introducer and its body is the unwrapped sequence. |
 | `.infixChain kind` | Infix peers with equal Lean parser binding powers should break as one balanced chain, and renderer indentation should not infer peer structure from nested raw nodes. Same-kind peers remain the compatibility fallback when parser metadata is unavailable. Dedicated nested pipe-projection nodes use the same representation even though their operator token is not exposed as an ordinary binary-infix atom. | Odd-length array alternating operand, operator, operand. Operands are even indexes; operators are odd indexes. The outer parser kind is retained for rule dispatch. A pipe member with arguments is first grouped as one application operand. |
 | `.lowPriorityInfixRhs` and `.lowPriorityOperand canFlow hasAttachedBody` | A low-priority operator and its right operand need one local layout owner so attachment and operand alignment do not depend on token inspection or renderer ancestry. Regrouping classifies whether the operand can flow beside the operator and whether it owns an attached body; line-break rules consume only that structural policy. The enclosing infix chain owns the leading boundary before each complete operator-operand group. The nested owner offers a post-operator boundary only for a flowing suffix; a non-flowing operand instead keeps its first line with the operator and uses its own structural breaks. A suffix operand retains its established suffix and original-layout behavior. The nested owner also formats an original child's leading boundary, so the outer break cannot strand the operator and a protected island can reuse its existing structural fallback. | The RHS node contains a policy-bearing operator child followed by the right operand. Every operator-operand pair after the first chain operand has this shape. The operator remains separate from a layout-sensitive binding operand so `let` and `have` can establish the aligned start required by Lean's layout parser. |
 | `.calcBody` and `.calcStep` | Lean's raw calc trees hide the boundary after `calc`, wrap later rows separately from the first row, and put each relation, assignment, and proof in wrappers with no shared layout owner. Logical nodes let the term or tactic owner control the body boundary, the body own peer-row alignment, and each step own the proof-body boundary and the tail floor for its relation header. | A term-level calc or annotated calc tactic contains its `calc` token followed by one `.calcBody`. A proofless first term is attached to the keyword through a `.suffixGroup`, followed by the remaining body. The body contains direct `.calcStep` children. Each proof-bearing step contains a `.suffixGroup` header followed by its proof body. The header retains the parser's complete relation tree and `:=`; for `by`, `do`, and nested `calc`, it also contains the suffix introducer while the introducer's body becomes the step body. When that body starts with a parser-defined delimited tactic sequence, its opener joins the attached introducer and the remaining sequence becomes the step body. The step breaks its body one level inward and lifts the multiline header tail two levels inward. The retained relation tree therefore uses ordinary infix, application, and notation rules: its RHS has the usual zero-level infix continuation relative to the raised tail, while the proof body remains one level inside the calc row. The infix rule omits the first operator breakpoint for a bare placeholder relation, keeping forms such as `_ =` and `_ ≤` together while allowing the RHS and proof body to break normally. |
@@ -345,14 +346,31 @@ command; rendering consumes the stored Boolean and never reparses the body. If t
 incremental command parser falls back to Lean's full frontend or a source span is
 unavailable, the missing fact defaults conservatively to required alignment.
 
-The same parser-context pass records three reusable layout facts for every concrete
-syntax kind in the module: trailing-parser binding powers for infix regrouping, the exact
-single-operand descriptor shape used by command-like spaced applications, and trailing
-keyword/body suffixes with final term or tactic-sequence bodies reachable from registered
-command or tactic parsers. Descriptor
-evaluation is cached per kind for the module. Regrouping verifies that a recorded suffix
-is present in the concrete tree before creating `.parserOwnedBody`. Line-break rules and
-the renderer never query the environment or parser metadata.
+The same parser-context pass records one `ParserLayout.KindFacts` value for every
+concrete syntax kind in the module. A profile contains formatter availability, printing
+annotations, trailing-parser binding powers, the exact single-operand descriptor shape
+used by command-like spaced applications, and trailing keyword/body suffixes with final
+term or tactic-sequence bodies. Descriptor evaluation is cached per kind for the module.
+Regrouping verifies that a recorded suffix is present in the concrete tree before
+creating `.parserOwnedBody`. Line-break rules and the renderer never query the
+environment or parser metadata.
+
+Dedicated Core, Std, and Mathlib regroupings and rules remain leanfmt's explicit style
+contract. For a syntax kind without one, parser-owned printing annotations are the first
+generic structural signal. Immediate token-tree shape can then select an existing
+application, prefix, postfix, indexed, delimited, or recursive-sequence owner. If neither
+source proves a shape, the raw node keeps `defaultRule` and a missing-rule diagnostic.
+This ordering provides intelligent extension handling without adding one rule per
+downstream syntax name.
+
+An arbitrary registered `@[formatter]` is not itself a safe layout plan. Lean exposes it
+as executable `CoreM` code that produces a `Std.Format`; that document can normalize
+token spelling, insert syntax, and has no source-token-indexed boundaries. `ParserLayout`
+records the registration and still uses an available `ParserDescr`, but it does not
+delegate output to the registered formatter. A future adapter may consume `Std.Format`
+only when every emitted token aligns one-to-one with the original source and every
+break/indent can be translated losslessly; otherwise it must fail closed to the current
+profile and structural heuristics.
 
 ### Recognized raw nodes
 
@@ -390,9 +408,9 @@ rule owns the same break between complete identifiers in either shape.
 
 The full dispatch table lives in `LineBreakRules.ruleFor`. If a raw node is not
 recognized, `ruleFor` returns `none`, the renderer uses `defaultRule`, and
-`--check-exception` reports the missing rule. For raw parser kinds, the report also audits
-Lean's formatter metadata without using it to change output: it distinguishes an explicit
-formatter registration, a generated `ParserDescr` fallback, and a kind with neither.
+`--check-exception` reports the missing rule. For raw parser kinds, the report also
+classifies the same `ParserLayout` metadata source used during regrouping: an explicit
+formatter registration, a generated `ParserDescr` fallback, or neither.
 The missing-rule report intentionally filters unstable implementation-detail kinds such as
 tokens, generated private names, custom term-notation names, and `stx` helper nodes.
 
@@ -1221,9 +1239,10 @@ The check does not rely solely on Lean's token-trivia attachment, because commen
 delimiters may exist only in those source gaps. The check also reports remaining line
 overflow and missing rules with their source location and tree slice. Each missing raw
 syntax kind is also classified by whether Lean provides a registered formatter, only a
-parser-description fallback, or no formatter metadata. This is a read-only coverage audit:
-the renderer continues to use leanfmt's `defaultRule`, and non-ignorable missing leanfmt
-rules remain exceptions regardless of the Lean formatter classification. Preservation
+parser-description fallback, or no formatter metadata. The classification comes from the
+same parser-layout adapter used by regrouping; it does not delegate rendering to Lean's
+pretty printer. Non-ignorable missing leanfmt rules remain exceptions regardless of the
+classification. Preservation
 normalization gives every code token and comment boundary one canonical space, so ordinary
 formatting whitespace is ignored without conflating tokenizations such as `ab c` and
 `a bc`. `ruleFor` returning `none` still renders with `defaultRule`, so unknown nodes remain

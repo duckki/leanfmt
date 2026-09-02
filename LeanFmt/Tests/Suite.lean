@@ -505,6 +505,25 @@ def assertBlockCommentInternalWhitespacePreservedByFormatting (env : Lean.Enviro
     Formatter.formatSourceWithEnv env nestedSource "nested-block-comment-spacing.lean"
   assertEq "nested block comment whitespace is preserved" nestedSource nestedFormatted
 
+def assertInlineMultilineBlockCommentPreservesContinuationShape (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "def commentAfterDo := do\n"
+    ++ "  let act <- saveCtxM do\n"
+    ++ "    /- Since this task may have been on the queue for a while,\n"
+    ++ "    the first thing we do is check if it has been cancelled already. -/\n"
+    ++ "    checkInterrupted\n"
+    ++ "  pure act\n"
+  let inline :=
+    "def commentAfterDo := do\n"
+    ++ "  let act <-\n"
+    ++ "    saveCtxM do /- Since this task may have been on the queue for a while,\n"
+    ++ "      the first thing we do is check if it has been cancelled already. -/\n"
+    ++ "      checkInterrupted\n"
+    ++ "  pure act\n"
+  assertTrue "moving a multiline block comment beside its owner preserves its shape"
+    (← codePreservedIgnoringWhitespace env source inline)
+
 def assertSyntaxCommentContinuationIndentPreserved (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -1812,9 +1831,9 @@ def assertLowPriorityInfixOwnsStructuralOperatorBoundaries (env : Lean.Environme
     (suffixRule.breakPoints {} suffixSegment == [{ index := 1, indentLevels := 1 }])
 
 def assertGroupedEqualPrecedenceInfixChain (env : Lean.Environment) : IO Unit := do
-  let plusPrecedence := SyntaxTree.parserPrecedence env {} `«term_+_»
-  let minusPrecedence := SyntaxTree.parserPrecedence env {} `«term_-_»
-  let multiplyPrecedence := SyntaxTree.parserPrecedence env {} `«term_*_»
+  let plusPrecedence := (ParserLayout.kindFacts env {} `«term_+_»).infixPrecedence?
+  let minusPrecedence := (ParserLayout.kindFacts env {} `«term_-_»).infixPrecedence?
+  let multiplyPrecedence := (ParserLayout.kindFacts env {} `«term_*_»).infixPrecedence?
   assertTrue "Lean parser assigns equal binding powers to addition and subtraction"
     (plusPrecedence.isSome && plusPrecedence == minusPrecedence)
   assertTrue "Lean parser distinguishes multiplication binding powers"
@@ -2540,6 +2559,26 @@ def assertQuotationBodyUsesStructuralIndentFloor (env : Lean.Environment) : IO U
     Formatter.formatSourceWithEnv env result.formatted
       "quotation-structural-indent-floor-formatted.lean" { lineWidth := 100 }
   assertEq "quotation structural indentation is idempotent"
+    result.formatted formattedAgain
+
+def assertInlineTermQuotationRetainsLayoutAnchor (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def quotedRecord := do\n"
+    ++ "  let equivBody ← `(term| { toFun := $toFun,\n"
+    ++ "                              invFun := $invFun,\n"
+    ++ "                              right_inv := by intro x; cases x <;> rfl\n"
+    ++ "                              left_inv := by intro x; exact x })\n"
+    ++ "  pure equivBody\n"
+  let result <- Formatter.formatSourceWithEnvDetailed env source
+                  "inline-term-quotation-record.lean" { lineWidth := 40 }
+  assertTrue "an inline term quotation retains its layout-sensitive field anchor"
+    (!result.fellBack)
+  assertTrue "an inline term quotation preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain <- Formatter.formatSourceWithEnv env result.formatted
+                          "inline-term-quotation-record-formatted.lean"
+                          { lineWidth := 40 }
+  assertEq "inline term quotation formatting is idempotent"
     result.formatted formattedAgain
 
 def assertQqApplicationArgumentUsesStructuralBoundary (env : Lean.Environment)
@@ -16453,6 +16492,17 @@ def assertMissingRuleCheckUsesDispatch (env projectSyntaxEnv : Lean.Environment)
     (Formatter.Diagnostics.leanFormatterAvailability projectSyntaxEnv
         (some `projectSyntax)
       == .parserDescription)
+  let annotatedLayout :=
+    ParserLayout.kindFacts projectSyntaxEnv {} `projectAnnotatedLayout
+  assertTrue "parser layout records syntax printing annotations"
+    (annotatedLayout.metadataSource == .parserDescription
+      && annotatedLayout.annotations.softBreak
+      && annotatedLayout.annotations.hardBreak
+      && annotatedLayout.annotations.indent
+      && annotatedLayout.annotations.fill)
+  assertTrue "ppSpace application annotations select application ownership"
+    (ParserLayout.kindFacts projectSyntaxEnv {} `projectAnnotatedApplication
+      |>.spacedApplication)
 
 def assertSyntaxDeclarationsHaveRules (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -16995,12 +17045,15 @@ def assertParserDescribedSpacedTermsBecomeApplications (env : Lean.Environment)
     : IO Unit := do
   let source :=
     "syntax (name := customSpacedTerm) \"custom_spaced\" term:max : term\n"
+    ++ "syntax (name := customAnnotatedSpacedTerm) \"custom_annotated\" ppSpace term:max : term\n"
     ++ "syntax (name := customOptionalSpacedTerm) \"custom_optional\" "
     ++ "(\"(\" \"width\" \":=\" term \")\")? term : term\n"
     ++ "syntax (name := customPunctuationPrefix) \"~~~\" term:max : term\n"
     ++ "syntax (name := customOpaqueTerm) \"custom_opaque\" term \"=>\" term : term\n"
     ++ "\n"
     ++ "def customSpaced := custom_spaced (veryLongFunctionName firstArgument secondArgument)\n"
+    ++ "\n"
+    ++ "def customAnnotated := custom_annotated (veryLongFunctionName firstArgument secondArgument)\n"
     ++ "\n"
     ++ "def customOptional := custom_optional veryLongOptionalOperandIdentifier\n"
     ++ "\n"
@@ -17013,6 +17066,8 @@ def assertParserDescribedSpacedTermsBecomeApplications (env : Lean.Environment)
     ((findTreeNodeStartingWith? .application "custom_spaced" moduleTree.tree).isSome
       && (findTreeNodeStartingWith? .application "custom_optional"
             moduleTree.tree).isSome)
+  assertTrue "explicit ppSpace terms own application trees"
+    ((findTreeNodeStartingWith? .application "custom_annotated" moduleTree.tree).isSome)
   assertTrue "punctuation prefixes do not become applications"
     ((findTreeNodeStartingWith? .application "~~~" moduleTree.tree).isNone)
   let missing := Formatter.Diagnostics.missingRuleOccurrencesForModule moduleTree
@@ -17030,6 +17085,11 @@ def assertParserDescribedSpacedTermsBecomeApplications (env : Lean.Environment)
     formatted
     ("def customSpaced :=\n"
       ++ "  custom_spaced\n"
+      ++ "    (veryLongFunctionName firstArgument secondArgument)\n")
+  assertTextContains "explicit ppSpace annotations use application flow"
+    formatted
+    ("def customAnnotated :=\n"
+      ++ "  custom_annotated\n"
       ++ "    (veryLongFunctionName firstArgument secondArgument)\n")
   assertTextContains "optional parser pieces do not hide application ownership"
     formatted
@@ -18633,6 +18693,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertOptionalAccessSuffixPropagatesApplicationFit env
   assertPostfixSuperscriptSpacingPreservesParse env
   assertBlockCommentInternalWhitespacePreservedByFormatting env
+  assertInlineMultilineBlockCommentPreservesContinuationShape env
   assertSyntaxCommentContinuationIndentPreserved env
   assertIndentedCommentTriviaDoesNotPadBlankLines
   assertOnlyIntrinsicCommentLinesForceBreaks env
@@ -18675,6 +18736,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertProofIslandFitIncludesParentSuffix env
   assertQuotationIslandRetainsFittingSourceIndent env
   assertQuotationBodyUsesStructuralIndentFloor env
+  assertInlineTermQuotationRetainsLayoutAnchor env
   assertParenthesizedProofIgnoresStaleSourceColumn env
   assertMovedInlineProofBodiesUseStructuralBase env
   assertProtectedBodiesUseStructuralIndentation env

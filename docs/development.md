@@ -166,8 +166,8 @@ lake exe fmt --check --check-exception --check-idempotent --recursive Some/Direc
   comment text exactly and requiring the parsed syntax shape, with source positions
   erased, to remain unchanged;
 - report actionable formatted lines that still exceed the configured width;
-- report syntax nodes that have no registered line-break rule, together with a read-only
-  audit of Lean's formatter metadata.
+- report syntax nodes that have no registered line-break rule, together with the
+  parser-layout metadata source used by generic regrouping.
 
 Overflow inside comments is ignored. A line is also exempt when every column beyond the
 configured width belongs to one indivisible syntax unit, since the renderer has no legal
@@ -208,8 +208,9 @@ rule is being used. Add an explicit rule when the syntax has layout requirements
 generic rule cannot know, such as projection tightness or mandatory command boundaries.
 The `Lean formatter` line classifies the kind as `registered formatter`, `parser
 description`, or `no formatter metadata`. The final exception summary counts all three
-groups separately. This classification is evidence for rule development only; it neither
-delegates rendering to Lean's pretty printer nor makes a missing leanfmt rule pass.
+groups separately. Parser descriptions may already contribute conservative application,
+precedence, or body-ownership facts. The classification does not delegate rendering to
+Lean's pretty printer or make a missing leanfmt rule pass.
 
 For release review, unresolved missing rules are blockers only in Lean's standard
 library and Mathlib, which are first-class syntax-support targets. In other external

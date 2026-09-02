@@ -23,6 +23,9 @@ syntax (name := projectConfiguredPrefixedDeclaration)
   "project_have_config' " ("[" ident "] ")? letDecl : doElem
 syntax (name := projectTermCommand) "#project_term " ident term : command
 syntax (name := projectWrappedTerm) "project_wrapped " term : term
+syntax (name := projectAnnotatedApplication) "project_apply" ppSpace term : term
+syntax (name := projectAnnotatedLayout)
+  ppGroup("project_layout" ppSpace term) ppLine ppIndent(term) : term
 syntax (name := projectOptionalTermCommand) "#project_optional " ident (term)? : command
 syntax (name := projectWhereTermCommand) "#project_where " ident " where " term : command
 syntax (name := projectLemma) (priority := default + 1) declModifiers

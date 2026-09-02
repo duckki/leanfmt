@@ -24,16 +24,11 @@ structure MissingRuleOccurrence where
   treeText : String
 deriving BEq, Repr
 
-inductive LeanFormatterAvailability where
-  | registered
-  | parserDescription
-  | unavailable
-deriving BEq, Inhabited, Repr
+abbrev LeanFormatterAvailability := ParserLayout.MetadataSource
 
-def LeanFormatterAvailability.description : LeanFormatterAvailability → String
-  | .registered => "registered formatter"
-  | .parserDescription => "parser description"
-  | .unavailable => "no formatter metadata"
+def LeanFormatterAvailability.description (availability : LeanFormatterAvailability)
+    : String :=
+  ParserLayout.MetadataSource.description availability
 
 def syntaxNodeKind? : SyntaxTree.NodeKind → Option SyntaxNodeKind
   | .raw kind => some kind
@@ -42,28 +37,11 @@ def syntaxNodeKind? : SyntaxTree.NodeKind → Option SyntaxNodeKind
   | .letExpression kind _ => some kind
   | _ => none
 
-unsafe def leanFormatterAvailabilityUnsafe
-    (env : Environment) (kind? : Option SyntaxNodeKind)
+def leanFormatterAvailability (env : Environment) (kind? : Option SyntaxNodeKind)
     : LeanFormatterAvailability :=
   match kind? with
   | none => .unavailable
-  | some kind =>
-      if !(KeyedDeclsAttribute.getValues
-            PrettyPrinter.formatterAttribute env kind).isEmpty then
-        .registered
-      else
-        match env.find? kind with
-        | some info =>
-            if info.type.isConstOf ``ParserDescr
-                || info.type.isConstOf ``TrailingParserDescr then
-              .parserDescription
-            else
-              .unavailable
-        | none => .unavailable
-
-@[implemented_by leanFormatterAvailabilityUnsafe]
-opaque leanFormatterAvailability
-    (env : Environment) (kind? : Option SyntaxNodeKind) : LeanFormatterAvailability
+  | some kind => ParserLayout.metadataSourceForKind env kind
 
 structure OverflowOccurrence where
   line : Nat
@@ -270,10 +248,17 @@ partial def takeBlockCommentAux (depth : Nat) (reversed : List Char)
         takeBlockCommentAux (depth - 1) reversed rest
   | char :: rest => takeBlockCommentAux depth (char :: reversed) rest
 
-def normalizeBlockCommentIndent (openingColumn : Nat) (comment : String) : String :=
+def normalizeBlockCommentIndent
+    (openingColumn : Nat) (startsInline : Bool) (comment : String)
+    : String :=
   match (SpaceRules.normalizeLineEndings comment).splitOn "\n" with
   | [] | [_] => comment
   | first :: rest =>
+      let continuationBase :=
+        if startsInline then
+          OriginalTree.sourceContinuationIndent? comment |>.getD openingColumn
+        else
+          openingColumn
       let normalizedRest :=
         rest.map
           fun line =>
@@ -282,7 +267,7 @@ def normalizeBlockCommentIndent (openingColumn : Nat) (comment : String) : Strin
             else
               let stripped := SpaceRules.stripLeadingHorizontalWhitespace line
               let indentation := line.length - stripped.length
-              let relativeIndent := Int.ofNat indentation - Int.ofNat openingColumn
+              let relativeIndent := Int.ofNat indentation - Int.ofNat continuationBase
               s!"{relativeIndent}:{stripped}"
       String.intercalate "\n" (first :: normalizedRest)
 
@@ -303,9 +288,10 @@ def normalizeSyntaxCommentIndent (comment : String) : String :=
               s!"{relativeIndent}:{stripped}"
       String.intercalate "\n" (first :: normalizedRest)
 
-def preservationComment (openingColumn : Nat) (comment : String) : PreservationFragment :=
+def preservationComment (openingColumn : Nat) (startsInline : Bool) (comment : String)
+    : PreservationFragment :=
   if comment.startsWith "/-" then
-    .comment comment (normalizeBlockCommentIndent openingColumn comment)
+    .comment comment (normalizeBlockCommentIndent openingColumn startsInline comment)
   else
     .comment comment comment
 
@@ -318,7 +304,8 @@ def columnAfterText (column : Nat) (text : String) : Nat :=
       if char == '\n' || char == '\r' then 0 else column + 1)
     column
 
-partial def commentFragmentsAux (column : Nat) (reversed : List PreservationFragment)
+partial def commentFragmentsAux
+    (column : Nat) (lineHasContent : Bool) (reversed : List PreservationFragment)
     : List Char → List PreservationFragment
   | [] => reversed.reverse
   | '-' :: '-' :: rest =>
@@ -326,20 +313,27 @@ partial def commentFragmentsAux (column : Nat) (reversed : List PreservationFrag
       let comment := String.ofList comment
       commentFragmentsAux
         (columnAfterText column comment)
-        (preservationComment column comment :: reversed) rest
+        true
+        (preservationComment column lineHasContent comment :: reversed) rest
   | '/' :: '-' :: rest =>
       let (comment, rest) := takeBlockCommentAux 1 ['-', '/'] rest
       let comment := String.ofList comment
       commentFragmentsAux
         (columnAfterText column comment)
-        (preservationComment column comment :: reversed) rest
+        true
+        (preservationComment column lineHasContent comment :: reversed) rest
   | char :: rest =>
       let column := if char == '\n' || char == '\r' then 0 else column + 1
-      commentFragmentsAux column reversed rest
+      let lineHasContent :=
+        if char == '\n' || char == '\r' then
+          false
+        else
+          lineHasContent || (char != ' ' && char != '\t')
+      commentFragmentsAux column lineHasContent reversed rest
 
 def commentFragments (trivia : String) (startColumn : Nat := 0)
     : List PreservationFragment :=
-  commentFragmentsAux startColumn [] trivia.toList
+  commentFragmentsAux startColumn (startColumn > 0) [] trivia.toList
 
 def commentSpanForToken? (spans : List SyntaxTree.Span) (token : SyntaxTree.Token)
     : Option SyntaxTree.Span :=

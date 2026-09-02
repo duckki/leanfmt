@@ -126,13 +126,9 @@ def hasIgnoredRegions (source : String) : Bool :=
 def buildModule
     (source : String) (rawSyntax : Syntax)
     (letBodyParserFacts : Array SyntaxTree.LetBodyParserFact := #[])
-    (infixPrecedences : SyntaxTree.InfixPrecedenceMap := {})
-    (spacedApplicationKinds : SyntaxTree.SpacedApplicationKindSet := {})
-    (parserOwnedBodies : SyntaxTree.ParserOwnedBodyMap := {})
+    (parserLayout : ParserLayout.Facts := {})
     : SyntaxTree.Module :=
-  let tree :=
-    SyntaxTree.extractTree source rawSyntax letBodyParserFacts infixPrecedences
-      spacedApplicationKinds parserOwnedBodies
+  let tree := SyntaxTree.extractTree source rawSyntax letBodyParserFacts parserLayout
   { source, rawSyntax, tree, tokens := tree.tokens }
 
 def parseModuleWithEnv (env : Environment) (source fileName : String)
@@ -141,8 +137,7 @@ def parseModuleWithEnv (env : Environment) (source fileName : String)
     SyntaxTree.parseModuleSyntaxWithEnvCoreDetailed env source fileName
       (updateParserState := true)
   pure
-  <| buildModule source parsed.rawSyntax parsed.letBodyParserFacts parsed.infixPrecedences
-      parsed.spacedApplicationKinds parsed.parserOwnedBodies
+  <| buildModule source parsed.rawSyntax parsed.letBodyParserFacts parsed.parserLayout
 
 def formatPassWithEnv
     (env : Environment) (source fileName : String) (options : Options := {})
@@ -286,8 +281,7 @@ def formatSourceProfiledWithEnv
     timeIO do
       let moduleTree :=
         Internal.buildModule normalizedSource parsedSyntax.rawSyntax
-          parsedSyntax.letBodyParserFacts parsedSyntax.infixPrecedences
-          parsedSyntax.spacedApplicationKinds parsedSyntax.parserOwnedBodies
+          parsedSyntax.letBodyParserFacts parsedSyntax.parserLayout
       let tokenCount := moduleTree.tokens.size
       IO.eprintln s!"leanfmt profile: {fileName}: tokens: {tokenCount}"
       pure moduleTree

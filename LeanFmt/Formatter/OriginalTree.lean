@@ -939,7 +939,7 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
               request.layoutAnchor.shiftColumn sourceIndent
           let targetIndent :=
             if retainsRelativeLayout && formattedLeadingDetachesIsland then
-              structuralIndent
+              if quotation then max movedIndent structuralIndent else structuralIndent
             else if proofLayout
                     && !originalLeadingHasLineStructure
                     && !proofLayoutRebasesFromFirstToken tree then
@@ -966,20 +966,12 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
           some (sourceIndent, targetIndent)
         else if quotationStartsOnLine then
           some (sourceIndent, targetIndent)
-        else if proofLayout || calcLayout || quotation then
+        else if quotation then
+          some (sourceIndent, targetIndent)
+        else if proofLayout || calcLayout then
           let fittedTarget :=
             fittingTargetColumn request.source request.sourceMap tree sourceText
               sourceIndent targetIndent request.lineWidth request.lineFitSuffixWidth
-          let fittedTarget :=
-            if quotation then
-              let structuralTarget :=
-                if quotationStartsOnLine then
-                  (leadingColumn / indentationSpaces + 1) * indentationSpaces
-                else
-                  request.currentIndent + indentationSpaces
-              max structuralTarget fittedTarget
-            else
-              fittedTarget
           some (sourceIndent, fittedTarget)
         else
           some (sourceIndent, targetIndent)

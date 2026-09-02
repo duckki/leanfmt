@@ -1,4 +1,5 @@
 import LeanFmt.LeanEnvironment
+import LeanFmt.ParserLayout
 
 namespace LeanFmt
 namespace SyntaxTree
@@ -717,13 +718,13 @@ private def splitAlignedTacticSequenceContinuation? (tree : Tree)
       else
         none
 
-private partial def annotateTacticSequenceEntry (spacedApplicationKinds : NameSet)
+private partial def annotateTacticSequenceEntry (parserLayout : ParserLayout.Facts)
     : Tree → Tree
   | .node (.raw `null) children =>
       let children :=
         children.foldl
           (fun result child =>
-            let child := annotateTacticSequenceEntry spacedApplicationKinds child
+            let child := annotateTacticSequenceEntry parserLayout child
             match splitAlignedTacticSequenceContinuation? child with
             | some (head, continuation) => result.push head |>.push continuation
             | none => result.push child)
@@ -734,22 +735,21 @@ private partial def annotateTacticSequenceEntry (spacedApplicationKinds : NameSe
       <| children.mapIdx
           fun index child =>
             if index % 2 == 0 then
-              annotateTacticSequenceEntry spacedApplicationKinds child
+              annotateTacticSequenceEntry parserLayout child
             else
               child
   | .node (.raw kind) children =>
-      annotateTacticNode kind children (spacedApplicationKinds.contains kind)
+      annotateTacticNode kind children (parserLayout.isSpacedApplication kind)
   | tree => tree
 
-def annotateTacticTree (tree : Tree) (spacedApplicationKinds : NameSet := {}) : Tree :=
+def annotateTacticTree (tree : Tree) (parserLayout : ParserLayout.Facts := {}) : Tree :=
   match tree with
   | tree@(.node (.raw kind) children) =>
       let kindName := nodeKindName (.raw kind)
       if isTacticSequenceKind kind then
-        annotateTacticNode kind
-          (children.map (annotateTacticSequenceEntry spacedApplicationKinds))
+        annotateTacticNode kind (children.map (annotateTacticSequenceEntry parserLayout))
       else if isCoreTacticKindName kindName then
-        annotateTacticNode kind children (spacedApplicationKinds.contains kind)
+        annotateTacticNode kind children (parserLayout.isSpacedApplication kind)
       else
         tree
   | tree => tree
@@ -1069,316 +1069,6 @@ partial def isPatternLambdaArgument : Tree → Bool
       children.back?.any isPatternLambdaArgument
   | _ => false
 
-abbrev InfixPrecedenceMap := NameMap (Nat × Nat)
-
-partial def parserDescrPrecedence? (kind : SyntaxNodeKind)
-    : ParserDescr → Option (Nat × Nat)
-  | .trailingNode nodeKind precedence leftPrecedence parser =>
-      if nodeKind == kind then
-        some (precedence, leftPrecedence)
-      else
-        parserDescrPrecedence? kind parser
-  | .node _ _ parser
-  | .unary _ parser =>
-      parserDescrPrecedence? kind parser
-  | .binary _ left right =>
-      parserDescrPrecedence? kind left <|> parserDescrPrecedence? kind right
-  | _ => none
-
-unsafe def parserPrecedenceUnsafe
-    (env : Environment) (options : Options) (kind : SyntaxNodeKind)
-    : Option (Nat × Nat) :=
-  match env.find? kind with
-  | some info =>
-      if info.type.isConstOf ``TrailingParserDescr then
-        match env.evalConst ParserDescr options kind with
-        | .ok parser => parserDescrPrecedence? kind parser
-        | .error _ => none
-      else
-        none
-  | none => none
-
-@[implemented_by parserPrecedenceUnsafe]
-opaque parserPrecedence
-    (env : Environment) (options : Options) (kind : SyntaxNodeKind) : Option (Nat × Nat)
-
-abbrev SpacedApplicationKindSet := NameSet
-
-structure ParserOwnedBodyPolicy where
-  suffixes : List String := []
-  suffixOwnsBody : Bool := false
-deriving Repr
-
-abbrev ParserOwnedBodyMap := NameMap ParserOwnedBodyPolicy
-
-partial def parserDescrSequence : ParserDescr -> List ParserDescr
-  | .binary combinator left right =>
-      if combinator == `andthen then
-        parserDescrSequence left ++ parserDescrSequence right
-      else
-        [.binary combinator left right]
-  | parser => [parser]
-
-def parserDescrSymbolIsTight (symbol : String) : Bool :=
-  symbol.toList.all
-    fun char => char != ' ' && char != '\t' && char != '\n' && char != '\r'
-
-def parserDescrSymbolIsApplicationHead (symbol : String) : Bool :=
-  let symbol := symbol.trimAscii.toString
-  parserDescrSymbolIsTight symbol && symbol.toList.any (·.isAlphanum)
-
-def parserDescrIsApplicationHead : ParserDescr -> Bool
-  | .symbol symbol
-  | .nonReservedSymbol symbol _ => parserDescrSymbolIsApplicationHead symbol
-  | .unicodeSymbol ascii unicode _ =>
-      let ascii := ascii.trimAscii.toString
-      let unicode := unicode.trimAscii.toString
-      parserDescrSymbolIsTight ascii
-      && parserDescrSymbolIsTight unicode
-      && (ascii.toList.any (·.isAlphanum) || unicode.toList.any (·.isAlphanum))
-  | _ => false
-
-def parserDescrIsOptional : ParserDescr -> Bool
-  | .unary combinator _ => combinator == `optional
-  | _ => false
-
-def parserDescrIsSpacedOperand : ParserDescr -> Bool
-  | .cat category _ => category == `term || category == `ident
-  | .const category => category == `ident
-  | _ => false
-
-partial def parserDescrIsSpacedApplication (kind : SyntaxNodeKind) : ParserDescr -> Bool
-  | .node nodeKind _ parser
-  | .nodeWithAntiquot _ nodeKind parser =>
-      if nodeKind == kind then
-        match parserDescrSequence parser with
-        | [] | [_] => false
-        | head :: rest =>
-            parserDescrIsApplicationHead head
-            && rest.getLast?.any parserDescrIsSpacedOperand
-            && (rest.dropLast.all parserDescrIsOptional)
-      else
-        parserDescrIsSpacedApplication kind parser
-  | .unary _ parser => parserDescrIsSpacedApplication kind parser
-  | .binary _ left right =>
-      parserDescrIsSpacedApplication kind left
-      || parserDescrIsSpacedApplication kind right
-  | _ => false
-
-unsafe def parserDescribesSpacedApplicationUnsafe
-    (env : Environment) (options : Options) (kind : SyntaxNodeKind)
-    : Bool :=
-  if !(KeyedDeclsAttribute.getValues
-        PrettyPrinter.formatterAttribute env kind).isEmpty then
-    false
-  else
-    match env.find? kind with
-    | some info =>
-        if info.type.isConstOf ``ParserDescr then
-          match env.evalConst ParserDescr options kind with
-          | .ok parser => parserDescrIsSpacedApplication kind parser
-          | .error _ => false
-        else
-          false
-    | none => false
-
-@[implemented_by parserDescribesSpacedApplicationUnsafe]
-opaque parserDescribesSpacedApplication
-    (env : Environment) (options : Options) (kind : SyntaxNodeKind) : Bool
-
-def parserDescrIsBodyLayoutConstraint : ParserDescr → Bool
-  | .const parser => [`colGt, `colGe].contains parser
-  | .unary _ parser => parserDescrIsBodyLayoutConstraint parser
-  | .binary combinator left right =>
-      combinator == `andthen
-      && parserDescrIsBodyLayoutConstraint left
-      && parserDescrIsBodyLayoutConstraint right
-  | _ => false
-
-partial def parserDescrIsOwnedTacticBody : ParserDescr → Bool
-  | .const parser =>
-      parser == `tacticSeq
-      || parser == `tacticSeqIndentGt
-      || parser == `Lean.Parser.Tactic.tacticSeq
-      || parser == `Lean.Parser.Tactic.tacticSeqIndentGt
-  | .unary _ parser => parserDescrIsOwnedTacticBody parser
-  | .binary combinator constraint body =>
-      combinator == `andthen
-      && parserDescrIsBodyLayoutConstraint constraint
-      && parserDescrIsOwnedTacticBody body
-  | _ => false
-
-partial def parserDescrIsOwnedBody : ParserDescr → Bool
-  | .cat category _ => category == `term
-  | .const parser =>
-      parser == `tacticSeq
-      || parser == `tacticSeqIndentGt
-      || parser == `Lean.Parser.Tactic.tacticSeq
-      || parser == `Lean.Parser.Tactic.tacticSeqIndentGt
-  | .unary combinator parser =>
-      combinator != `optional && parserDescrIsOwnedBody parser
-  | _ => false
-
-def parserDescrKeywordSuffixes : ParserDescr → List String
-  | .symbol symbol
-  | .nonReservedSymbol symbol _ =>
-      let symbol := symbol.trimAscii.toString
-      if symbol.toList.any (·.isAlphanum) then [symbol] else []
-  | .unicodeSymbol ascii unicode _ =>
-      [ascii, unicode].filterMap
-        fun symbol =>
-          let symbol := symbol.trimAscii.toString
-          if symbol.toList.any (·.isAlphanum) then some symbol else none
-  | _ => []
-
-def parserDescrSuffixOwnedBodyClauseSuffixes (parser : ParserDescr) : List String :=
-  match parserDescrSequence parser with
-  | [suffix, body] =>
-      if parserDescrIsOwnedBody body then parserDescrKeywordSuffixes suffix else []
-  | _ => []
-
-def parserDescrTrailingTacticBodySuffixes (parser : ParserDescr) : List String :=
-  match parserDescrSequence parser |>.reverse with
-  | body :: suffix :: _ =>
-      if parserDescrIsOwnedTacticBody body then
-        parserDescrKeywordSuffixes suffix
-      else
-        []
-  | _ => []
-
-def parserDescrTrailingBodySuffixes (parser : ParserDescr) : List String :=
-  match parserDescrSequence parser with
-  | [] | [_] => []
-  | sequence =>
-      match sequence.reverse with
-      | body :: suffix :: preceding =>
-          if !preceding.isEmpty && parserDescrIsOwnedBody body then
-            parserDescrKeywordSuffixes suffix
-          else
-            match body with
-            | .unary combinator clause =>
-                if combinator == `optional && !sequence.dropLast.isEmpty then
-                  parserDescrSuffixOwnedBodyClauseSuffixes clause
-                else
-                  []
-            | _ => []
-      | _ => []
-
-def ParserOwnedBodyMap.insertSuffixes
-    (owned : ParserOwnedBodyMap) (kind : SyntaxNodeKind) (suffixes : List String)
-    (suffixOwnsBody : Bool)
-    : ParserOwnedBodyMap :=
-  let existing := (owned.find? kind).getD {}
-  let suffixes :=
-    suffixes.foldl
-      (fun accumulated suffix =>
-        if accumulated.contains suffix then accumulated else suffix :: accumulated)
-      existing.suffixes
-  if suffixes.isEmpty then
-    owned
-  else
-    owned.insert kind
-      { suffixes, suffixOwnsBody := existing.suffixOwnsBody || suffixOwnsBody }
-
-partial def parserDescrOwnedTrailingBodySuffixes (parser : ParserDescr) : List String :=
-  match parser with
-  | .node _ _ parser
-  | .nodeWithAntiquot _ _ parser =>
-      parserDescrTrailingBodySuffixes parser
-      ++ parserDescrOwnedTrailingBodySuffixes parser
-  | .trailingNode _ _ _ parser =>
-      parserDescrTrailingTacticBodySuffixes parser
-  | .unary _ parser => parserDescrOwnedTrailingBodySuffixes parser
-  | .binary _ left right =>
-      parserDescrOwnedTrailingBodySuffixes left
-      ++ parserDescrOwnedTrailingBodySuffixes right
-  | _ => []
-
-def parserKindOwnsCategory (env : Environment) (category kind : SyntaxNodeKind) : Bool :=
-  (Parser.getParserCategory? env category).any
-    fun parserCategory => parserCategory.kinds.contains kind
-
-def parserKindOwnsCommandOrTacticLayout (env : Environment) (kind : SyntaxNodeKind)
-    : Bool :=
-  [`command, `tactic].any fun category => parserKindOwnsCategory env category kind
-
-unsafe def parserOwnedTrailingBodiesUnsafe
-    (env : Environment) (options : Options) (kind : SyntaxNodeKind)
-    : ParserOwnedBodyMap :=
-  if !parserKindOwnsCommandOrTacticLayout env kind then
-    {}
-  else
-    match env.find? kind with
-    | some info =>
-        let isTrailing := info.type.isConstOf ``TrailingParserDescr
-        let hasRegisteredFormatter :=
-          !(KeyedDeclsAttribute.getValues
-              PrettyPrinter.formatterAttribute env kind).isEmpty
-        if (info.type.isConstOf ``ParserDescr || isTrailing)
-            && !(isTrailing && hasRegisteredFormatter) then
-          match env.evalConst ParserDescr options kind with
-          | .ok parser =>
-              ({} : ParserOwnedBodyMap).insertSuffixes kind
-                (parserDescrOwnedTrailingBodySuffixes parser)
-                (parserKindOwnsCategory env `tactic kind)
-          | .error _ => {}
-        else
-          {}
-    | none => {}
-
-@[implemented_by parserOwnedTrailingBodiesUnsafe]
-opaque parserOwnedTrailingBodies
-    (env : Environment) (options : Options) (kind : SyntaxNodeKind)
-    : ParserOwnedBodyMap
-
-structure ParserLayoutFacts where
-  checkedKinds : NameSet := {}
-  infixPrecedences : InfixPrecedenceMap := {}
-  spacedApplicationKinds : SpacedApplicationKindSet := {}
-  parserOwnedBodies : ParserOwnedBodyMap := {}
-
-def ParserLayoutFacts.record
-    (facts : ParserLayoutFacts)
-    (env : Environment) (options : Options) (kind : SyntaxNodeKind)
-    : ParserLayoutFacts :=
-  if facts.checkedKinds.contains kind then
-    facts
-  else
-    let infixPrecedences :=
-      match parserPrecedence env options kind with
-      | some precedence => facts.infixPrecedences.insert kind precedence
-      | none => facts.infixPrecedences
-    let spacedApplicationKinds :=
-      if parserDescribesSpacedApplication env options kind then
-        facts.spacedApplicationKinds.insert kind
-      else
-        facts.spacedApplicationKinds
-    let parserOwnedBodies :=
-      (parserOwnedTrailingBodies env options kind).foldl
-        (fun owned kind policy =>
-          owned.insertSuffixes kind policy.suffixes policy.suffixOwnsBody)
-        facts.parserOwnedBodies
-    {
-      checkedKinds := facts.checkedKinds.insert kind
-      infixPrecedences
-      spacedApplicationKinds
-      parserOwnedBodies
-    }
-
-partial def collectParserLayoutFacts
-    (env : Environment) (options : Options)
-    (stx : Syntax) (facts : ParserLayoutFacts := {})
-    : ParserLayoutFacts :=
-  match stx with
-  | .missing
-  | .atom ..
-  | .ident .. => facts
-  | .node _ kind children =>
-      children.foldl
-        (fun facts child =>
-          collectParserLayoutFacts env options child facts)
-        (facts.record env options kind)
-
 /-! ## Logical regrouping -/
 
 private partial def directLeafAtomToken? : Tree → Option Token
@@ -1547,11 +1237,11 @@ private def regroupGeneratedSuffixApplication?
   some <| .node .application (#[.node .suffixGroup #[head, suffix]] ++ argumentChildren)
 
 private def regroupSpacedApplication?
-    (spacedApplicationKinds : SpacedApplicationKindSet)
+    (parserLayout : ParserLayout.Facts)
     (kind : SyntaxNodeKind) (children : Array Tree)
     : Option Tree := do
   let generated := isGeneratedTermKind kind
-  if !generated && !spacedApplicationKinds.contains kind then
+  if !generated && !parserLayout.isSpacedApplication kind then
     none
   let contentIndexes :=
     (List.range children.size).filter
@@ -1662,22 +1352,22 @@ def appendApplicationArgumentChildren (argumentContainer : Tree) : Array Tree :=
   | child => #[child]
 
 def infixKindsSharePrecedence
-    (infixPrecedences : InfixPrecedenceMap)
+    (parserLayout : ParserLayout.Facts)
     (left right : SyntaxNodeKind)
     : Bool :=
   left == right
-  || match infixPrecedences.find? left, infixPrecedences.find? right with
+  || match parserLayout.infixPrecedence? left, parserLayout.infixPrecedence? right with
       | some leftPrecedence, some rightPrecedence =>
           leftPrecedence == rightPrecedence
       | _, _ => false
 
 def appendInfixParts
-    (infixPrecedences : InfixPrecedenceMap)
+    (parserLayout : ParserLayout.Facts)
     (kind : SyntaxNodeKind) (parts : Array Tree) (tree : Tree)
     : Array Tree :=
   match tree with
   | .node (.infixChain childKind) children =>
-      if infixKindsSharePrecedence infixPrecedences kind childKind then
+      if infixKindsSharePrecedence parserLayout kind childKind then
         parts ++ children
       else
         parts.push tree
@@ -2180,7 +1870,8 @@ private partial def isParserOwnedTacticBody : Tree → Bool
   | tree => tree.isTacticSequenceTree
 
 private def regroupParserOwnedBody?
-    (kind : SyntaxNodeKind) (policy : ParserOwnedBodyPolicy) (children : Array Tree)
+    (kind : SyntaxNodeKind) (policy : ParserLayout.OwnedBodyPolicy)
+    (children : Array Tree)
     : Option Tree := do
   let (headerPrefix, suffix, body) ←
     splitParserOwnedBody? policy.suffixes (.node (.raw kind) children)
@@ -2338,13 +2029,13 @@ private def regroupTacticSequenceWrapperPrefix : Tree → Tree
               none
   | tree => tree
 
-private def tacticEndsWithDetachedBodySuffix (parserOwnedBodies : ParserOwnedBodyMap)
+private def tacticEndsWithDetachedBodySuffix (parserLayout : ParserLayout.Facts)
     : Tree → Bool
   | tree@(.node (.raw kind) _)
   | tree@(.node (.tactic kind _ _ _ _) _) =>
       tree.lastToken?.any
         fun token =>
-          ((parserOwnedBodies.find? kind).any
+          ((parserLayout.ownedBody? kind).any
             fun policy => policy.suffixes.contains token.lexeme)
           || (isCoreTacticKindName (toString kind) && token.lexeme == "=>")
   | _ => false
@@ -2363,13 +2054,13 @@ private partial def splitTrailingOwnedSuffix? (suffixes : List String)
   | .missing => none
 
 private def splitDetachedParserOwnedSuffix?
-    (parserOwnedBodies : ParserOwnedBodyMap) (tree : Tree)
+    (parserLayout : ParserLayout.Facts) (tree : Tree)
     : Option (Tree × Tree) := do
   let suffixes ←
     match tree with
     | .node (.raw kind) _
     | .node (.tactic kind _ _ _ _) _ =>
-        (parserOwnedBodies.find? kind).map (·.suffixes)
+        (parserLayout.ownedBody? kind).map (·.suffixes)
     | .node .parserOwnedHeader _ =>
         tree.lastToken?.map fun token => [token.lexeme]
     | _ => none
@@ -2383,7 +2074,7 @@ private def attachDetachedParserOwnedBody (header suffix body : Tree) : Tree :=
   .node .parserOwnedBody #[header, body]
 
 private def regroupDirectParserOwnedTacticBody?
-    (parserOwnedBodies : ParserOwnedBodyMap) (kind : NodeKind) (children : Array Tree)
+    (parserLayout : ParserLayout.Facts) (kind : NodeKind) (children : Array Tree)
     : Option Tree := do
   let .tactic _ _ _ _ _ := kind | none
   let bodyIndex ←
@@ -2393,33 +2084,32 @@ private def regroupDirectParserOwnedTacticBody?
   if !body.isTacticSequenceTree then
     none
   let header := .node kind (children.set! bodyIndex .missing)
-  if let some (header, suffix) :=
-      splitDetachedParserOwnedSuffix? parserOwnedBodies header then
+  if let some (header, suffix) := splitDetachedParserOwnedSuffix? parserLayout header then
     return attachDetachedParserOwnedBody header suffix body
-  if !tacticEndsWithDetachedBodySuffix parserOwnedBodies header then
+  if !tacticEndsWithDetachedBodySuffix parserLayout header then
     none
   let body := .node (.proofBody body.containsTacticLayoutOwner) #[body]
   some <| .node .parserOwnedBody #[header, body]
 
 private partial def regroupDetachedParserOwnedTacticBodiesCore
-    (parserOwnedBodies : ParserOwnedBodyMap)
+    (parserLayout : ParserLayout.Facts)
     : Tree → Tree × Bool
   | .node kind children =>
       let regroupedChildren :=
-        children.map (regroupDetachedParserOwnedTacticBodiesCore parserOwnedBodies)
+        children.map (regroupDetachedParserOwnedTacticBodiesCore parserLayout)
       let children := regroupedChildren.map fun (child, _) => child
       let containsDetached := regroupedChildren.any fun (_, contains) => contains
       let rec loop (grouped : Array Tree) (containsDetached : Bool)
           : List Tree → Array Tree × Bool
         | header :: body :: rest =>
             if body.isTacticSequenceTree then
-              match splitDetachedParserOwnedSuffix? parserOwnedBodies header with
+              match splitDetachedParserOwnedSuffix? parserLayout header with
               | some (header, suffix) =>
                   loop
                     (grouped.push <| attachDetachedParserOwnedBody header suffix body)
                     true rest
               | none =>
-                  if tacticEndsWithDetachedBodySuffix parserOwnedBodies header then
+                  if tacticEndsWithDetachedBodySuffix parserLayout header then
                     let body := .node (.proofBody body.containsTacticLayoutOwner) #[body]
                     loop (grouped.push <| .node .parserOwnedBody #[header, body]) true
                       rest
@@ -2461,15 +2151,15 @@ private partial def regroupDetachedParserOwnedTacticBodiesCore
       match kind, singleContentChild? children with
       | .parserOwnedBody, some child@(.node .parserOwnedBody _) => (child, true)
       | _, _ =>
-          match regroupDirectParserOwnedTacticBody? parserOwnedBodies kind children with
+          match regroupDirectParserOwnedTacticBody? parserLayout kind children with
           | some tree => (tree, true)
           | none => (.node kind children, containsDetached)
   | tree => (tree, false)
 
 private def regroupDetachedParserOwnedTacticBodies
-    (parserOwnedBodies : ParserOwnedBodyMap) (tree : Tree)
+    (parserLayout : ParserLayout.Facts) (tree : Tree)
     : Tree :=
-  (regroupDetachedParserOwnedTacticBodiesCore parserOwnedBodies tree).1
+  (regroupDetachedParserOwnedTacticBodiesCore parserLayout tree).1
 
 private def regroupMatchAltBodySuffix (children : Array Tree) : Array Tree :=
   regroupTerminalLeadingTokenChildren children (fun _ => true)
@@ -3874,9 +3564,7 @@ def regroupMacroChildren (children : Array Tree) : Array Tree :=
       | _ => child
 
 def regroupRawNode
-    (infixPrecedences : InfixPrecedenceMap)
-    (spacedApplicationKinds : SpacedApplicationKindSet)
-    (parserOwnedBodies : ParserOwnedBodyMap)
+    (parserLayout : ParserLayout.Facts)
     (regroupSpacedApplications : Bool)
     (kind : SyntaxNodeKind) (children : Array Tree)
     : Tree :=
@@ -3935,7 +3623,7 @@ def regroupRawNode
             head
           else
             .node .application (#[head] ++ appendApplicationArgumentContainers children 3)
-        let parts := appendInfixParts infixPrecedences kind #[] receiver
+        let parts := appendInfixParts parserLayout kind #[] receiver
         .node (.infixChain kind) <| parts.push operator |>.push right
     | _, _, _ => .node (.raw kind) children
   else if kind == `Lake.DSL.packageCommand
@@ -3958,7 +3646,7 @@ def regroupRawNode
   else if kind == `Lean.calcStep then
     (regroupCalcStep? children).getD <| .node (.raw kind) children
   else
-    if let some policy := parserOwnedBodies.find? kind then
+    if let some policy := parserLayout.ownedBody? kind then
       (regroupParserOwnedBody? kind policy children).getD <| .node (.raw kind) children
     else
       if let some declaration := regroupPrefixedDeclaration? children then
@@ -3966,7 +3654,7 @@ def regroupRawNode
       else
         let spacedApplication? :=
           if regroupSpacedApplications then
-            regroupSpacedApplication? spacedApplicationKinds kind children
+            regroupSpacedApplication? parserLayout kind children
           else
             none
         if let some application := spacedApplication? then
@@ -3980,9 +3668,9 @@ def regroupRawNode
             else if isBinaryInfixRawNode kind children then
               match children[0]?, children[1]?, children[2]? with
               | some left, some operator, some right =>
-                  let parts := appendInfixParts infixPrecedences kind #[] left
+                  let parts := appendInfixParts parserLayout kind #[] left
                   let parts := parts.push operator
-                  let parts := appendInfixParts infixPrecedences kind parts right
+                  let parts := appendInfixParts parserLayout kind parts right
                   let parts :=
                     if kind == `«term_<|_» then
                       regroupLowPriorityInfixRhs parts
@@ -4013,9 +3701,7 @@ def regroupRawNode
               | none => regroupOtherRawNode kind children
 
 private partial def regroupTreeWithPrecedencesInContext
-    (infixPrecedences : InfixPrecedenceMap)
-    (spacedApplicationKinds : SpacedApplicationKindSet)
-    (parserOwnedBodies : ParserOwnedBodyMap)
+    (parserLayout : ParserLayout.Facts)
     (isTacticSequenceEntry : Bool)
     : Tree → Tree
   | .missing => .missing
@@ -4029,7 +3715,7 @@ private partial def regroupTreeWithPrecedencesInContext
         children.mapIdx
           fun index child =>
             regroupTreeWithPrecedencesInContext
-              infixPrecedences spacedApplicationKinds parserOwnedBodies
+              parserLayout
               (if tacticOperandsAtEvenIndexes then
                   index % 2 == 0
                 else
@@ -4050,31 +3736,23 @@ private partial def regroupTreeWithPrecedencesInContext
           else
             .node (.raw kind) children
         else
-          regroupRawNode infixPrecedences spacedApplicationKinds
-            parserOwnedBodies (!isTacticSequenceEntry) kind (regroupChildren children)
+          regroupRawNode parserLayout (!isTacticSequenceEntry) kind
+            (regroupChildren children)
       regroupCalcOwnerTree
       <| regroupTacticSequenceWrapperPrefix
       <| regroupTacticTerminalDelimiter
-      <| Tree.annotateTacticTree tree spacedApplicationKinds
+      <| Tree.annotateTacticTree tree parserLayout
   | .node kind children =>
-      .node kind
-        (children.map
-          (regroupTreeWithPrecedencesInContext
-            infixPrecedences spacedApplicationKinds parserOwnedBodies false))
+      .node kind (children.map (regroupTreeWithPrecedencesInContext parserLayout false))
 
-def regroupTreeWithPrecedences
-    (infixPrecedences : InfixPrecedenceMap)
-    (spacedApplicationKinds : SpacedApplicationKindSet := {})
-    (parserOwnedBodies : ParserOwnedBodyMap := {})
-    : Tree → Tree :=
+def regroupTreeWithPrecedences (parserLayout : ParserLayout.Facts := {}) : Tree → Tree :=
   fun tree =>
     regroupSpacedTacticFirstOperands
-    <| regroupDetachedParserOwnedTacticBodies parserOwnedBodies
-    <| regroupTreeWithPrecedencesInContext
-        infixPrecedences spacedApplicationKinds parserOwnedBodies false tree
+    <| regroupDetachedParserOwnedTacticBodies parserLayout
+    <| regroupTreeWithPrecedencesInContext parserLayout false tree
 
 def regroupTree (tree : Tree) : Tree :=
-  regroupTreeWithPrecedences {} {} {} tree
+  regroupTreeWithPrecedences {} tree
 
 def regroupTopLevelCommandAnnotations (tree : Tree) : Tree :=
   match tree with
@@ -4218,14 +3896,12 @@ private def regroupSimpleApplicationProofArguments (tree : Tree) : Tree :=
 def extractTree
     (source : String) (stx : Syntax)
     (letBodyParserFacts : Array LetBodyParserFact := #[])
-    (infixPrecedences : InfixPrecedenceMap := {})
-    (spacedApplicationKinds : SpacedApplicationKindSet := {})
-    (parserOwnedBodies : ParserOwnedBodyMap := {})
+    (parserLayout : ParserLayout.Facts := {})
     : Tree :=
   regroupTopLevelAnnotations
   <| annotateLetExpressions letBodyParserFacts
   <| regroupSimpleApplicationProofArguments
-  <| regroupTreeWithPrecedences infixPrecedences spacedApplicationKinds parserOwnedBodies
+  <| regroupTreeWithPrecedences parserLayout
   <| removeOverlappingSourceTokens source
   <| extractRawTree source stx
 
@@ -4388,23 +4064,11 @@ partial def parseModuleCommandsQuiet
 structure ParsedModuleSyntax where
   rawSyntax : Syntax
   letBodyParserFacts : Array LetBodyParserFact
-  infixPrecedences : InfixPrecedenceMap
-  spacedApplicationKinds : SpacedApplicationKindSet
-  parserOwnedBodies : ParserOwnedBodyMap
+  parserLayout : ParserLayout.Facts
 
 instance : Repr ParsedModuleSyntax where
   reprPrec parsed precedence :=
-    let spacedApplicationKinds :=
-      parsed.spacedApplicationKinds.foldl (fun kinds kind => kinds.push kind) #[]
-    reprPrec
-      (
-        parsed.rawSyntax,
-        parsed.letBodyParserFacts,
-        parsed.infixPrecedences,
-        spacedApplicationKinds,
-        parsed.parserOwnedBodies
-      )
-      precedence
+    reprPrec (parsed.rawSyntax, parsed.letBodyParserFacts, parsed.parserLayout) precedence
 
 def parseModuleSyntaxWithEnvCoreDetailed
     (env : Environment) (source fileName : String) (updateParserState : Bool)
@@ -4429,15 +4093,13 @@ def parseModuleSyntaxWithEnvCoreDetailed
   let rawSyntax :=
     (mkNode `Lean.Parser.Module.module #[header, mkListNode commands]).raw.updateLeading
   let parserContext := parserModuleContext commandState
-  let parserLayoutFacts :=
-    collectParserLayoutFacts parserContext.env parserContext.options rawSyntax
+  let parserLayout :=
+    ParserLayout.collect parserContext.env parserContext.options rawSyntax
   pure
     {
       rawSyntax := rawSyntax
       letBodyParserFacts := letBodyParserFacts
-      infixPrecedences := parserLayoutFacts.infixPrecedences
-      spacedApplicationKinds := parserLayoutFacts.spacedApplicationKinds
-      parserOwnedBodies := parserLayoutFacts.parserOwnedBodies
+      parserLayout
     }
 
 def parseModuleSyntaxWithEnvCore
@@ -4463,9 +4125,14 @@ def parseModuleStringWithEnv (env : Environment) (source fileName : String := "<
   let parsed ←
     parseModuleSyntaxWithEnvCoreDetailed env source fileName (updateParserState := true)
   let tree :=
-    extractTree source parsed.rawSyntax parsed.letBodyParserFacts parsed.infixPrecedences
-      parsed.spacedApplicationKinds parsed.parserOwnedBodies
-  pure { source, rawSyntax := parsed.rawSyntax, tree, tokens := tree.tokens }
+    extractTree source parsed.rawSyntax parsed.letBodyParserFacts parsed.parserLayout
+  pure
+    {
+      source
+      rawSyntax := parsed.rawSyntax
+      tree
+      tokens := tree.tokens
+    }
 
 def parseModuleString (source fileName : String := "<input>") : IO Module := do
   parseModuleStringWithEnv (← importLeanEnvironment) source fileName

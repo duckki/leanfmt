@@ -6,7 +6,17 @@ is release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-No known release-blocking formatting or validation issues remain.
+### Opaque registered formatters
+
+`ParserDescr` printing annotations are inspectable and now feed generic ownership.
+Arbitrary `@[formatter]` programs only expose executable `Std.Format` output. Do not use
+that output until an exact, fail-closed source-token alignment experiment proves safe.
+
+### Rule inventory
+
+Core, Std, and Mathlib remain first-class syntax targets, but the dispatch table still
+contains historical compatibility entries. Remove an entry only when parser metadata or
+a general structural owner gives the same reviewed layout across the validation corpus.
 
 ## Progress
 
@@ -47,6 +57,34 @@ avoid allocating normalized copies of already-LF source trivia. The isolated Hex
 hot file dropped from about 101 to 32 seconds per formatting pass. The complete
 100-file batch that previously varied from 145 to 326 seconds passed every
 formatter diagnostic in 67 seconds with unchanged formatting behavior.
+
+### Checkpoint 5: parser-owned layout profiles
+
+Move parser and formatter metadata out of `SyntaxTree` and diagnostics into one
+`ParserLayout` adapter. Evaluate each occurring parser description once, retain its
+printing annotations, and pass one profile map through regrouping. Explicit `ppSpace`
+applications now reuse ordinary application ownership even when Lean also generated a
+registered formatter.
+
+## Next Checkpoints
+
+### Annotation coverage audit
+
+Measure which remaining fallback nodes in Core, Std, and Mathlib have usable parser
+annotations. Generalize only unambiguous delimiter, sequence, application, or body
+shapes, then delete equivalent syntax-name entries.
+
+### Registered-format experiment
+
+Prototype token alignment for `Std.Format` outside the production path. Keep it only as
+an audit unless token identity, ordering, comments, and relative indentation all map
+exactly and cheaply.
+
+### 0.4 release gate
+
+Run the complete local gate, GraphQL and quantum review, width-100 Hex, and a clean
+Mathlib build-and-format validation. Minor formatting changes are acceptable when they
+follow the simpler documented ownership model.
 
 ## Validation standard
 

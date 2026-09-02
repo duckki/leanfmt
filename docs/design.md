@@ -2057,15 +2057,28 @@ inside the `with` header. A short update remains flat, such as
 ## Unknown and custom syntax
 
 Every parser token remains present even when leanfmt has no explicit rule for a
-syntax node. The generic rule examines only the node's immediate child shape:
+syntax node. Core, Std, and Mathlib syntax are first-class support targets; other
+packages are not expected to require one new leanfmt rule for every extension.
+
+For imported and locally declared syntax, leanfmt first reads the active
+`ParserDescr`. Printing annotations such as `ppSpace`, `ppLine`, grouping, indentation,
+and dedentation become conservative syntax-layout facts. A descriptor that proves a
+word-like head followed by one term or identifier operand reuses ordinary application
+layout, including when `ppSpace` appears as a separate combinator. Parser-owned trailing
+term and tactic bodies similarly reuse existing suffix/body ownership.
+
+When metadata does not prove a layout, the generic rule examines only the node's
+immediate child shape:
 
 - a token between two child nodes is treated as an infix-like break point;
 - otherwise, boundaries between present children become flow break points;
 - token spelling is not used to guess the meaning of the syntax.
 
-This provides conservative wrapping for long custom syntax without pretending
-to understand it. Formatting developers can use `--check-exception` to identify
-syntax that deserves an explicit rule.
+This provides conservative wrapping for long custom syntax without pretending to
+understand it. A registered Lean formatter is recorded as useful coverage information,
+but its executable `Std.Format` output is not used unless it can be aligned losslessly
+to source tokens. Formatting developers can use `--check-exception` to identify syntax
+whose parser annotations and structural shape are still insufficient.
 
 A generated term node with exactly three present children whose first and last
 children are the same atom is treated as a symmetric delimited term. Its
