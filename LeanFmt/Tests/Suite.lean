@@ -15344,6 +15344,9 @@ def assertRecursiveCommandArgumentsShareBase : IO Unit := do
   let segment := Formatter.LineBreakRules.Segment.ofTree arguments
   let rule := Formatter.LineBreakRules.formattingRuleFor arguments
   let context : Formatter.LineBreakRules.RuleContext := {}
+  assertTrue "recursive command argument trees support generic structural dispatch"
+    ((Formatter.LineBreakRules.structuralRawRule? arguments).any
+      fun rule => rule.name == "recursiveSequence")
   assertEq "recursive command arguments use a sequence rule" "recursiveSequence" rule.name
   assertTrue "recursive command argument tails inherit one shared base"
     (rule.inheritBase context segment)
@@ -15362,6 +15365,21 @@ def assertRecursiveCommandArgumentsShareBase : IO Unit := do
     (!regrouped.containsNodeKind (.infixChain `Aesop.Frontend.Parser.addRules))
 
 def assertBracketedNotationRulesKeepDelimitersAttached : IO Unit := do
+  let structuralPrefixes :=
+    [
+      ("negation", `«term¬_», "¬"),
+      ("negative", `«term-_», "-"),
+      ("complement", `«term~~~_», "~~~")
+    ]
+  for (description, kind, prefixLexeme) in structuralPrefixes do
+    let tree :=
+      SyntaxTree.Tree.node (.raw kind)
+        #[.leaf (syntheticAtomToken prefixLexeme), .leaf (syntheticIdentToken "value")]
+    assertTrue s!"generated {description} prefixes use generic structural dispatch"
+      ((Formatter.LineBreakRules.structuralRawRule? tree).any
+        fun rule => rule.name == "unaryPrefix")
+    assertEq s!"generated {description} prefixes retain their selected rule"
+      "unaryPrefix" (Formatter.LineBreakRules.formattingRuleFor tree).name
   let indexedTerm :=
     SyntaxTree.Tree.node (.raw `Uniformity.«term𝓤[_]»)
       #[
@@ -16263,6 +16281,9 @@ def assertMathlibLowRiskSyntaxKindsHaveRules : IO Unit := do
         .leaf (syntheticAtomToken "b"),
         .leaf (syntheticAtomToken "]")
       ]
+  assertTrue "matrix vectors use generic delimiter dispatch"
+    ((Formatter.LineBreakRules.structuralRawRule? vectorTree).any
+      fun rule => rule.name == "array")
   match Formatter.LineBreakRules.ruleFor vectorTree with
   | some rule =>
       assertEq "matrix vector notation uses array rule" "array" rule.name
@@ -16275,29 +16296,32 @@ def assertMathlibLowRiskSyntaxKindsHaveRules : IO Unit := do
             { index := 4, indentLevels := 0 }
           ])
   | none => throw <| IO.userError "matrix vector notation has no rule"
-  let matrixTree :=
-    SyntaxTree.regroupTree
-    <| SyntaxTree.Tree.node (.raw `Matrix.matrixNotation)
-        #[
-          .leaf (syntheticAtomToken "!!["),
-          .node (.raw `null)
-            #[
-              .node (.raw `null)
-                #[
-                  .leaf (syntheticAtomToken "a"),
-                  .leaf (syntheticAtomToken ","),
-                  .leaf (syntheticAtomToken "b")
-                ],
-              .leaf (syntheticAtomToken ";"),
-              .node (.raw `null)
-                #[
-                  .leaf (syntheticAtomToken "c"),
-                  .leaf (syntheticAtomToken ","),
-                  .leaf (syntheticAtomToken "d")
-                ]
-            ],
-          .leaf (syntheticAtomToken "]")
-        ]
+  let rawMatrixTree :=
+    SyntaxTree.Tree.node (.raw `Matrix.matrixNotation)
+      #[
+        .leaf (syntheticAtomToken "!!["),
+        .node (.raw `null)
+          #[
+            .node (.raw `null)
+              #[
+                .leaf (syntheticAtomToken "a"),
+                .leaf (syntheticAtomToken ","),
+                .leaf (syntheticAtomToken "b")
+              ],
+            .leaf (syntheticAtomToken ";"),
+            .node (.raw `null)
+              #[
+                .leaf (syntheticAtomToken "c"),
+                .leaf (syntheticAtomToken ","),
+                .leaf (syntheticAtomToken "d")
+              ]
+          ],
+        .leaf (syntheticAtomToken "]")
+      ]
+  assertTrue "matrices use generic delimiter dispatch"
+    ((Formatter.LineBreakRules.structuralRawRule? rawMatrixTree).any
+      fun rule => rule.name == "matrixNotation")
+  let matrixTree := SyntaxTree.regroupTree rawMatrixTree
   match matrixTree, Formatter.LineBreakRules.ruleFor matrixTree with
   | .node _ children, some rule =>
       assertTrue "matrix notation rows and columns are flattened for layout"

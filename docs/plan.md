@@ -66,13 +66,21 @@ printing annotations, and pass one profile map through regrouping. Explicit `ppS
 applications now reuse ordinary application ownership even when Lean also generated a
 registered formatter.
 
+### Checkpoint 6: annotation coverage audit
+
+Consolidate raw structural fallback behind one auditable dispatch boundary. Parser-derived
+applications and owned bodies already reach logical rules; generated unary prefixes and
+ordinary matrix delimiters now use generic structural classification instead of project
+syntax names. Keep core parenthesized wrappers, generated collection spellings, and the
+Aesop rule-expression sequence explicit where one parser kind has multiple immediate child
+shapes or changing the entry would alter reviewed layout.
+
+The complete local gate passed. Full GraphQL and quantum validation established clean
+build baselines; exact-tree checkpoints then passed with no changed sources. Width-100 Hex
+passed all 873 owned files in 502 seconds, with its heaviest batch at 120 seconds. Width-100
+Mathlib passed all 8,311 files and its full 8,705-job build, also with no changed sources.
+
 ## Next Checkpoints
-
-### Annotation coverage audit
-
-Measure which remaining fallback nodes in Core, Std, and Mathlib have usable parser
-annotations. Generalize only unambiguous delimiter, sequence, application, or body
-shapes, then delete equivalent syntax-name entries.
 
 ### Registered-format experiment
 

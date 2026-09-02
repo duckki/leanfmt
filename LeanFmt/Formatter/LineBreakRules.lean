@@ -4360,7 +4360,8 @@ def delimitedRuleFor (tree : SyntaxTree.Tree) : SyntaxTree.DelimiterKind -> Line
   | .anonymousConstructor => anonymousCtorRule
   | .doubleAngle | .norm => transparentRule
 
-def rawNodeFallbackRule? (kind : Lean.SyntaxNodeKind) (children : Array SyntaxTree.Tree)
+private def specializedRawShapeRule?
+    (kind : Lean.SyntaxNodeKind) (children : Array SyntaxTree.Tree)
     : Option LineBreakRule :=
   if isTightIndexedTerm children || isGeneratedIndexedPrefixTerm kind children then
     some indexedTermRule
@@ -4381,6 +4382,17 @@ def rawNodeFallbackRule? (kind : Lean.SyntaxNodeKind) (children : Array SyntaxTr
     some defaultRule
   else
     none
+
+def structuralRawRule? (tree : SyntaxTree.Tree) : Option LineBreakRule := do
+  let .node (.raw kind) children := tree | none
+  if hasAtMostOneContentChild children then
+    some transparentRule
+  else if SyntaxTree.isGeneratedTermKind kind then
+    specializedRawShapeRule? kind children
+  else
+    match SyntaxTree.outerDelimiterKind? children with
+    | some delimiter => some (delimitedRuleFor tree delimiter)
+    | none => specializedRawShapeRule? kind children
 
 partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .missing => some defaultRule
@@ -4722,7 +4734,6 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Tactic.quot) _ => some defaultRule
   | .node (.raw `term!_) _ => some unaryPrefixRule
   | .node (.raw `Lean.Parser.Term.borrowed) _ => some unaryPrefixRule
-  | .node (.raw `«term¬_») _ => some unaryPrefixRule
   | .node (.raw `token.«← ») _ => some defaultRule
   | .node (.raw `Lean.Parser.Attr.simp) _ => some defaultRule
   | .node (.raw `Lean.Parser.Attr.grind) _ => some defaultRule
@@ -4775,8 +4786,6 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `«term∅») _ => some defaultRule
   | .node (.raw `«term⊤») _ => some defaultRule
   | .node (.raw `«term⊥») _ => some defaultRule
-  | .node (.raw `«term-_») _ => some unaryPrefixRule
-  | .node (.raw `«term~~~_») _ => some unaryPrefixRule
   | .node (.raw `«term_⁻¹») _ => some defaultRule
   | .node (.raw `«term_ˣ») _ => some defaultRule
   | .node (.raw `«term_ᵐᵒᵖ») _ => some defaultRule
@@ -4948,8 +4957,6 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `«term{_}») _ => some bracedTermRule
   | .node (.raw `«term[_]») _ => some arrayRule
   | .node (.raw `«term#[_,]») _ => some arrayRule
-  | .node (.raw `Matrix.vecNotation) _ => some arrayRule
-  | .node (.raw `Matrix.matrixNotation) _ => some matrixNotationRule
   | .node (.raw `PiLp.vecNotation) _ => some transparentRule
   | .node (.raw `«term__[_]_?») _ => some transparentRule
   -- Syntax with specialized formatting rules.
@@ -5067,15 +5074,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `group) _ => some groupRule
   | .node (.raw `Lean.Parser.Term.matchAltsWhereDecls) _ => some matchAltsWhereDeclsRule
   | .node (.raw `Lean.Parser.Term.matchAlts) _ => some matchAltsRule
-  | tree@(.node (.raw kind) children) =>
-      if hasAtMostOneContentChild children then
-        some transparentRule
-      else if SyntaxTree.isGeneratedTermKind kind then
-        rawNodeFallbackRule? kind children
-      else
-        match SyntaxTree.outerDelimiterKind? children with
-        | some delimiter => some (delimitedRuleFor tree delimiter)
-        | none => rawNodeFallbackRule? kind children
+  | tree@(.node (.raw _) _) => structuralRawRule? tree
 
 def formattingRuleFor (tree : SyntaxTree.Tree) : LineBreakRule :=
   match ruleFor tree with

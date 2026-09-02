@@ -414,6 +414,15 @@ formatter registration, a generated `ParserDescr` fallback, or neither.
 The missing-rule report intentionally filters unstable implementation-detail kinds such as
 tokens, generated private names, custom term-notation names, and `stx` helper nodes.
 
+Named dispatch falls through one `structuralRawRule?` boundary. That boundary preserves
+the established precedence between transparent single-child wrappers, generated indexed,
+set-builder, prefix, postfix, and recursive shapes, ordinary outer delimiters, and the
+remaining recursive or binder heuristics. This makes structurally supported syntax
+auditable without duplicating project kind names in the dispatch table. Generated
+collection spellings remain explicit where the same bracket shape is shared by literals,
+tactic arguments, and configuration syntax; delimiters alone do not prove collection
+ownership there.
+
 ## Space rules
 
 `SpaceRules` is the low-level token/trivia transformer. It answers what horizontal
@@ -544,6 +553,11 @@ the ordinary source-preserving boundary behavior.
 `ruleFor : SyntaxTree.Tree -> Option LineBreakRule` is the dispatch table. It has no
 ordered candidate list. A known node maps to exactly one rule. Unknown raw nodes return
 `none`; `formattingRuleFor` maps that to `defaultRule` for rendering.
+
+The final raw-node arm delegates to `structuralRawRule?`. This helper is an ordered
+structural classification, not another syntax-rule registry: parser-derived application
+and body owners have already become logical nodes, while immediate delimiter, generated
+prefix/index, recursive sequence, and binder shapes select their existing general rules.
 
 The rule module is organized by broad syntax families. Each family keeps its breakpoint
 computations and `LineBreakRule` values together; generic wrapper rules and the complete
