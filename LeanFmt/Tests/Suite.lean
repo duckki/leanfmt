@@ -6,6 +6,7 @@ import LeanFmt.Tests.ExportedModuleSyntax
 import LeanFmt.Tests.LayoutArchitecture
 import LeanFmt.Tests.MetaImportRoot
 import LeanFmt.Tests.ProjectSyntax
+import LeanFmt.Tests.RegisteredFormatAudit
 
 open System
 
@@ -19097,6 +19098,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertLakeDslFormatting
   assertMathlibLowRiskSyntaxKindsHaveRules
   assertMissingRuleCheckUsesDispatch env projectSyntaxEnv
+  RegisteredFormatAudit.run env
   assertCheckCommandHasRule env
   assertGuardMsgsCommandUsesCommandInLayout env
   assertBinderTacticProofBodyHasNoMissingRules env

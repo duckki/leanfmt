@@ -36,6 +36,7 @@ The implementation is split by responsibility:
 | Module | Responsibility |
 | --- | --- |
 | `LeanFmt.ParserLayout` | Evaluate imported parser descriptions once per occurring syntax kind and compile formatter availability, printing annotations, precedence, application shape, and trailing-body ownership into conservative syntax-layout facts. |
+| `LeanFmt.RegisteredFormatAudit` | Experimentally execute one registered Lean formatter and fail closed unless its rendered tokens and relative indentation align exactly with source-backed syntax. This module is not imported by the production formatter. |
 | `LeanFmt.SyntaxTree` | Parse Lean source, keep token/trivia spans, classify delimiter envelopes, build the raw tree, and regroup selected raw syntax into logical nodes. |
 | `LeanFmt.Formatter.SpaceRules` | Perform low-level token spacing and lossless trivia cleanup/reindentation. |
 | `LeanFmt.Formatter.SourceBoundary` | Represent source trivia between tokens and expose comment, forced-break, blank-group, and ownership facts. |
@@ -371,6 +372,14 @@ delegate output to the registered formatter. A future adapter may consume `Std.F
 only when every emitted token aligns one-to-one with the original source and every
 break/indent can be translated losslessly; otherwise it must fail closed to the current
 profile and structural heuristics.
+
+`RegisteredFormatAudit` is that isolated experiment. For one source-backed node, it runs
+the registered formatter at a chosen width and accepts only an exact, ordered match of
+original token lexemes. It rejects source comments between tokens, rewritten or inserted
+tokens, multiline tokens, tabs, blank lines, trailing output, and indentation that is not
+an integral number of leanfmt indentation levels. An accepted result is only a list of
+token indexes and relative indentation observations. Production parsing, regrouping,
+rules, and rendering neither import nor consult this result.
 
 ### Recognized raw nodes
 

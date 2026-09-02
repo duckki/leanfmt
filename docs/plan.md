@@ -80,13 +80,22 @@ build baselines; exact-tree checkpoints then passed with no changed sources. Wid
 passed all 873 owned files in 502 seconds, with its heaviest batch at 120 seconds. Width-100
 Mathlib passed all 8,311 files and its full 8,705-job build, also with no changed sources.
 
+### Checkpoint 7: registered-format experiment
+
+Add an isolated, fail-closed adapter that executes one registered Lean formatter and
+accepts its layout only when the rendered lexemes align exactly with source tokens and
+its indentation maps to whole leanfmt levels. Rewritten or inserted tokens, comments,
+multiline tokens, blank lines, unsupported whitespace, and incomplete source coverage
+are rejected. This makes registered output useful as an audit oracle, but not yet as a
+production layout source: comments require lossless reinsertion, and executing a
+formatter per syntax node would add uncontrolled work to the hot path.
+
+The production formatter does not import the experiment, and external formatting did
+not change. The complete local gate, GraphQL, quantum, width-100 Hex, and width-100
+Mathlib validation passed. Mathlib formatted all 8,311 files with every diagnostic at
+zero and completed its 8,705-job aggregate build.
+
 ## Next Checkpoints
-
-### Registered-format experiment
-
-Prototype token alignment for `Std.Format` outside the production path. Keep it only as
-an audit unless token identity, ordering, comments, and relative indentation all map
-exactly and cheaply.
 
 ### 0.4 release gate
 
