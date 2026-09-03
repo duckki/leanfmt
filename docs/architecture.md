@@ -36,7 +36,7 @@ The implementation is split by responsibility:
 | Module | Responsibility |
 | --- | --- |
 | `LeanFmt.ParserLayout` | Evaluate imported parser descriptions once per occurring syntax kind and compile formatter availability, printing annotations, precedence, application shape, and trailing-body ownership into conservative syntax-layout facts. |
-| `LeanFmt.RegisteredFormatAudit` | Experimentally execute one registered Lean formatter and fail closed unless its rendered tokens and relative indentation align exactly with source-backed syntax. This module is not imported by the production formatter. |
+| `LeanFmt.RegisteredFormatAudit` | Inspect one registered Lean formatter's symbolic document, align it exactly with source-backed syntax, and propose a stable structural rule candidate. This module is not imported by the production formatter. |
 | `LeanFmt.SyntaxTree` | Parse Lean source, keep token/trivia spans, classify delimiter envelopes, build the raw tree, and regroup selected raw syntax into logical nodes. |
 | `LeanFmt.Formatter.SpaceRules` | Perform low-level token spacing and lossless trivia cleanup/reindentation. |
 | `LeanFmt.Formatter.SourceBoundary` | Represent source trivia between tokens and expose comment, forced-break, blank-group, and ownership facts. |
@@ -368,18 +368,22 @@ An arbitrary registered `@[formatter]` is not itself a safe layout plan. Lean ex
 as executable `CoreM` code that produces a `Std.Format`; that document can normalize
 token spelling, insert syntax, and has no source-token-indexed boundaries. `ParserLayout`
 records the registration and still uses an available `ParserDescr`, but it does not
-delegate output to the registered formatter. A future adapter may consume `Std.Format`
-only when every emitted token aligns one-to-one with the original source and every
-break/indent can be translated losslessly; otherwise it must fail closed to the current
-profile and structural heuristics.
+delegate output to the registered formatter.
 
-`RegisteredFormatAudit` is that isolated experiment. For one source-backed node, it runs
-the registered formatter at a chosen width and accepts only an exact, ordered match of
-original token lexemes. It rejects source comments between tokens, rewritten or inserted
-tokens, multiline tokens, tabs, blank lines, trailing output, and indentation that is not
-an integral number of leanfmt indentation levels. An accepted result is only a list of
-token indexes and relative indentation observations. Production parsing, regrouping,
-rules, and rendering neither import nor consult this result.
+`RegisteredFormatAudit` executes that code only as a development-time oracle. It walks
+the symbolic `Std.Format` before width-dependent rendering, aligns every text fragment
+with the original token stream, and records `.line`, `.nest`, `.group`, and source-tag
+structure at token boundaries. It rejects comments, rewritten or inserted tokens,
+multiline tokens, unsupported whitespace or indentation, incomplete spans, and
+column-sensitive `.align` nodes.
+
+The audit then normalizes transparent `null` wrappers and recursive same-kind parser
+spines into logical children. Breaks that coincide with those child boundaries become a
+candidate application, prefix, postfix, infix, delimiter, suffix-body, sequence, or
+generic structural rule. A candidate is stable only when multiple samples produce the
+same structural key, family, child breaks, indentation, and grouping policy. These are
+reviewable deductions, not generated production dispatch: production parsing,
+regrouping, rules, and rendering neither import nor consult them.
 
 ### Recognized raw nodes
 

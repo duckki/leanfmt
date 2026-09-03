@@ -6,11 +6,12 @@ is release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Opaque registered formatters
+### Registered rule deductions
 
-`ParserDescr` printing annotations are inspectable and now feed generic ownership.
-Arbitrary `@[formatter]` programs only expose executable `Std.Format` output. Do not use
-that output until an exact, fail-closed source-token alignment experiment proves safe.
+The symbolic registered-format audit can now propose stable structural rule candidates
+without entering the production path. Before promoting any deduction, sample its parser
+shape across Core, Std, and Mathlib and reject conflicts, comments, token rewriting,
+column-relative alignment, and layouts outside the existing rule vocabulary.
 
 ### Rule inventory
 
@@ -94,6 +95,23 @@ The production formatter does not import the experiment, and external formatting
 not change. The complete local gate, GraphQL, quantum, width-100 Hex, and width-100
 Mathlib validation passed. Mathlib formatted all 8,311 files with every diagnostic at
 zero and completed its 8,705-job aggregate build.
+
+### Checkpoint 8: symbolic registered-rule deduction
+
+Replace width-specific rendered-output observation with a symbolic `Std.Format` audit.
+The audit now aligns text exactly to source tokens, retains soft and hard breaks, nesting,
+group coupling, and source tags, and rejects column-relative alignment. It normalizes
+transparent parser wrappers and recursive same-kind spines into logical children before
+proposing an existing rule family with child-boundary breaks and indentation.
+
+At least two samples must produce the same generalized operand/atom shape, rule family,
+boundaries, indentation, and group paths before a candidate is called stable. Registered
+formatters remain a development-time oracle; no production formatter module imports or
+executes this deduction path.
+
+The complete local gate passed with no fixture or self-formatting changes. External
+baselines were not repeated because the formatter, parser, regrouping, rules, renderer,
+diagnostics, and CLI dependency graph is unchanged.
 
 ## Next Checkpoints
 
