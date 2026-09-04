@@ -332,7 +332,7 @@ private partial def flattenLogicalChild (parentKind : SyntaxNodeKind) (stx : Syn
         #[stx]
   | _ => #[stx]
 
-private def logicalChildren (stx : Syntax) : Array Syntax :=
+def normalizedChildren (stx : Syntax) : Array Syntax :=
   stx.getArgs.foldl
     (fun flattened child => flattened ++ flattenLogicalChild stx.getKind child) #[]
 
@@ -340,6 +340,12 @@ private def childRole : Syntax -> ChildRole
   | .missing => .missing
   | .atom .. => .atom
   | .ident .. | .node .. => .operand
+
+def structuralKey (stx : Syntax) : StructuralKey :=
+  {
+    kind := stx.getKind
+    children := (normalizedChildren stx).map childRole
+  }
 
 private def ChildRole.isAtom : ChildRole -> Bool
   | .atom => true
@@ -402,7 +408,7 @@ private def inferCandidate
     (facts : ParserLayout.KindFacts) (tokens : Array SyntaxTree.Token)
     (stx : Syntax) (layout : SymbolicLayout)
     : RuleCandidate :=
-  let children := logicalChildren stx
+  let children := normalizedChildren stx
   let ranges := childRanges tokens children
   let childBreaks :=
     layout.breaks.filterMap

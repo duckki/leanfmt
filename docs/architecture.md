@@ -385,6 +385,13 @@ same structural key, family, child breaks, indentation, and grouping policy. The
 reviewable deductions, not generated production dispatch: production parsing,
 regrouping, rules, and rendering neither import nor consult them.
 
+The development-only `tools/rule-audit` package samples source files and compares stable
+candidates with current rules. It collects production boundaries from regrouped nodes
+inside the audited source span, then keeps only boundaries at normalized immediate-child
+starts. Leading boundaries and nested breaks inside one child are outside that
+comparison. Differences remain review evidence because registered formatters do not
+define leanfmt's style.
+
 ### Recognized raw nodes
 
 Most syntax remains `.raw kind`. Rules can still recognize raw kinds when the raw parser

@@ -1,0 +1,12 @@
+name = "leanfmt-rule-audit"
+version = "0.1.0"
+defaultTargets = ["ruleAudit"]
+
+[[require]]
+name = "leanfmt"
+path = "../.."
+
+[[lean_exe]]
+name = "ruleAudit"
+root = "Main"
+supportInterpreter = true

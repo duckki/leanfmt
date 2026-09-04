@@ -218,6 +218,24 @@ repositories, record missing-rule diagnostics as syntax inventory, but do not tr
 them as failures unless review also finds a concrete preservation, layout,
 convergence, overflow, or post-format build problem.
 
+### Registered formatter ruleset audit
+
+`tools/rule-audit` is a separate development-only Lake package. It symbolically inspects
+registered Lean formatters, requires repeated candidates for a normalized syntax shape,
+and compares direct child boundaries with leanfmt's current regrouped rules. Build it
+without adding the audit to the released executable graph:
+
+```sh
+cd tools/rule-audit
+lake build
+```
+
+Run the executable under the target project's `lake env` when project syntax is needed.
+The tool prints a Markdown report and never changes source files. Registered output is
+an audit oracle, not a style specification; review every difference against
+`docs/design.md` and focused formatter tests. The current Core, Std, and Mathlib review
+is summarized in `docs/ruleset-audit.md`.
+
 ## Tests
 
 Run the unit-style test suite:

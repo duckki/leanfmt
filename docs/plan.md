@@ -6,12 +6,12 @@ is release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Registered rule deductions
+### Parser-described peer sequences
 
-The symbolic registered-format audit can now propose stable structural rule candidates
-without entering the production path. Before promoting any deduction, sample its parser
-shape across Core, Std, and Mathlib and reject conflicts, comments, token rewriting,
-column-relative alignment, and layouts outside the existing rule vocabulary.
+The registered-format audit found two first-class syntax gaps. Application-shaped
+`match_expr` constructor patterns and level `max` operands should reach ordinary peer
+application ownership. Long `universe` identifier tails should reach a peer-sequence
+owner. Generalize parser-shape classification; do not add syntax-kind rules.
 
 ### Rule inventory
 
@@ -113,7 +113,28 @@ The complete local gate passed with no fixture or self-formatting changes. Exter
 baselines were not repeated because the formatter, parser, regrouping, rules, renderer,
 diagnostics, and CLI dependency graph is unchanged.
 
+### Checkpoint 9: registered ruleset audit
+
+Add a development-only corpus tool that samples registered syntax, deduces stable
+symbolic candidates, and compares their normalized direct-child boundaries with the
+current production tree. Production breaks may be owned by regrouped descendants, but
+nested breaks inside one logical child and leading boundaries are excluded.
+
+The representative audit parsed 20 files each from Lean Core, Std, and Mathlib without
+failure. It inspected 58,116 registered-syntax occurrences in 499 normalized groups; 115
+groups produced stable candidates. Manual review classified broad application,
+prefix-indentation, infix-side, balanced-delimiter, import, attribute, and source-island
+differences as intentional. It found two actionable general gaps: parser-described peer
+applications outside ordinary terms and command peer sequences. See
+`docs/ruleset-audit.md`.
+
 ## Next Checkpoints
+
+### Parser-described peer ownership
+
+Cover application-shaped `match_expr` patterns and level operands through the existing
+application classifier, then cover long `universe` tails through a general command peer
+sequence. Add focused overflow and idempotency tests before external validation.
 
 ### 0.4 release gate
 
