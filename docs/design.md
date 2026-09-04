@@ -477,6 +477,19 @@ assert_not_exists
   FourthForbiddenDeclaration
 ```
 
+Registered word-headed lists use the same flowing continuation base when Lean stores
+their simple operands in one anonymous parser container. This applies to universe-level
+lists, `include` and `omit`, level `max` operands, and constructor arguments in
+`match_expr` patterns:
+
+```lean
+universe u v w veryLongUniverseName
+  anotherLongUniverseName
+
+include u v w veryLongUniverseName
+  anotherLongUniverseName
+```
+
 Lake package commands keep `where` on the header and indent configuration fields one
 level. A multiline Git dependency breaks after `git`, and its revision separator keeps
 ordinary source spacing:

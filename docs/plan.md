@@ -6,13 +6,6 @@ is release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Parser-described peer sequences
-
-The registered-format audit found two first-class syntax gaps. Application-shaped
-`match_expr` constructor patterns and level `max` operands should reach ordinary peer
-application ownership. Long `universe` identifier tails should reach a peer-sequence
-owner. Generalize parser-shape classification; do not add syntax-kind rules.
-
 ### Rule inventory
 
 Core, Std, and Mathlib remain first-class syntax targets, but the dispatch table still
@@ -124,17 +117,21 @@ The representative audit parsed 20 files each from Lean Core, Std, and Mathlib w
 failure. It inspected 58,116 registered-syntax occurrences in 499 normalized groups; 115
 groups produced stable candidates. Manual review classified broad application,
 prefix-indentation, infix-side, balanced-delimiter, import, attribute, and source-island
-differences as intentional. It found two actionable general gaps: parser-described peer
+differences as intentional. It found two actionable general gaps: registered peer
 applications outside ordinary terms and command peer sequences. See
 `docs/ruleset-audit.md`.
 
+### Checkpoint 10: registered atomic peer ownership
+
+Flatten a conservative registered parser shape after dedicated regrouping: one
+word-like head followed by a final anonymous container of two or more simple,
+source-separated peers. The original raw owner and rule remain intact. This gives
+`match_expr` patterns, level `max`, `universe`, `include`, and `omit` complete flowing
+boundaries while leaving generated applications, structured binders, and nested command
+owners unchanged. Focused tests cover exact layout, code preservation, overflow,
+idempotency, tree shape, and every exposed boundary.
+
 ## Next Checkpoints
-
-### Parser-described peer ownership
-
-Cover application-shaped `match_expr` patterns and level operands through the existing
-application classifier, then cover long `universe` tails through a general command peer
-sequence. Add focused overflow and idempotency tests before external validation.
 
 ### 0.4 release gate
 

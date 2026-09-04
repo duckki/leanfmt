@@ -337,6 +337,15 @@ only when Lean's evaluated trailing parser descriptions report identical result 
 left binding powers; the formatter does not classify operator text or reproduce a
 precedence table.
 
+Some registered Core parsers store a word-like head and two or more simple,
+source-separated operands in one final anonymous container. After dedicated term,
+tactic, declaration, generated-syntax, and delimiter regrouping has had priority,
+`SyntaxTree` splices that atomic peer tail into the original raw node. Its existing rule
+then exposes every peer boundary at one continuation base. This covers headed lists such
+as universe levels, `include` and `omit` names, level `max` operands, and `match_expr`
+constructor arguments without adding syntax-kind dispatch or changing the renderer.
+Structured binder lists and nested owners such as `openSimple` do not satisfy the shape.
+
 The `letExpression` annotation is a syntactic parser fact rather than semantic
 interpretation. For each concrete body, `SyntaxTree` runs `termParser argPrec` against
 the body's source text in the command's current parser context. A successful prefix parse

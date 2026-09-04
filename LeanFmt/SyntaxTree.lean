@@ -3563,6 +3563,45 @@ def regroupMacroChildren (children : Array Tree) : Array Tree :=
             child
       | _ => child
 
+private def tokenIsWordLikePeer (token : Token) : Bool :=
+  token.role == .ident || token.lexeme == "_" || token.lexeme.toList.any (·.isAlphanum)
+
+private def sourceSeparatesTrees : List Tree -> Bool
+  | left :: right :: rest =>
+      match left.lastToken?, right.firstToken? with
+      | some leftToken, some rightToken =>
+          !sourceTokensAreAdjacent leftToken rightToken
+          && sourceSeparatesTrees (right :: rest)
+      | _, _ => false
+  | _ => true
+
+private def flattenRegisteredAtomicPeerTail?
+    (parserLayout : ParserLayout.Facts)
+    (kind : SyntaxNodeKind) (children : Array Tree)
+    : Option (Array Tree) := do
+  if isGeneratedTermKind kind
+      || isGeneratedCommandKind kind
+      || !(parserLayout.find? kind).any
+            fun facts => facts.metadataSource == .registered then
+    none
+  let contentIndexes :=
+    (List.range children.size).filter
+      fun index => children[index]?.bind Tree.firstToken? |>.isSome
+  let [headIndex, tailIndex] := contentIndexes | none
+  if tailIndex + 1 != children.size then
+    none
+  let head ← children[headIndex]?
+  let headToken ← head.singleToken?
+  if !tokenIsWordLikePeer headToken then
+    none
+  let .node (.raw `null) peerChildren ← children[tailIndex]? | none
+  let peers := peerChildren.filter fun child => child.firstToken?.isSome
+  let peersAreWordLike := peers.all fun peer => peer.singleToken?.any tokenIsWordLikePeer
+  let sourceSeparated := sourceSeparatesTrees (head :: peers.toList)
+  if peers.size < 2 || !peersAreWordLike || !sourceSeparated then
+    none
+  some <| children.extract 0 tailIndex ++ peerChildren
+
 def regroupRawNode
     (parserLayout : ParserLayout.Facts)
     (regroupSpacedApplications : Bool)
@@ -3646,6 +3685,8 @@ def regroupRawNode
   else if kind == `Lean.calcStep then
     (regroupCalcStep? children).getD <| .node (.raw kind) children
   else
+    let children :=
+      (flattenRegisteredAtomicPeerTail? parserLayout kind children).getD children
     if let some policy := parserLayout.ownedBody? kind then
       (regroupParserOwnedBody? kind policy children).getD <| .node (.raw kind) children
     else

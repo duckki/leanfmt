@@ -38,9 +38,9 @@ Atomic-looking differences such as double-quoted names, `?_`, `?name`, `:60`,
 explicit compatibility entries may be inventory cleanup candidates, but they are not
 formatting defects.
 
-## Open findings
+## Resolved findings
 
-### Parser-described peer applications
+### Registered atomic peer applications
 
 `Lean.Parser.Term.matchExprPat` is application-shaped, but its current default rule can
 break before the first argument and leave the remaining argument tail overflowing:
@@ -52,9 +52,11 @@ match_expr e with
   pure e
 ```
 
-`Lean.Parser.Level.max` has the same peer-operand shape. The clean fix is to extend the
-existing parser-described application classification to these nonordinary term shapes,
-not to add syntax-kind rules.
+`Lean.Parser.Level.max` has the same peer-operand shape. Regrouping now recognizes the
+shared registered shape: a word-like head followed by a final anonymous container of
+simple, source-separated peers. It splices those peers into the existing raw owner after
+dedicated syntax regrouping, so the default flow exposes every continuation boundary
+without a syntax-kind rule.
 
 ### Command peer sequences
 
@@ -66,9 +68,9 @@ universe
   u v w veryLongUniverseName anotherLongUniverseName
 ```
 
-Its identifier tail should use the existing peer-sequence vocabulary. The change should
-be based on the parser shape and should be checked against `variable`, `include`, `omit`,
-and other command lists before promotion.
+The same registered atomic-peer shape now exposes every identifier boundary for
+`universe`, `include`, and `omit`. Structured `variable` binders keep their existing
+binder owner, and `open` keeps the nested `openSimple` owner.
 
 The missing exact owner for `doForDecl` was reviewed as expected regrouping: the
 declaration is represented by surrounding `do` ownership, so it does not justify a new

@@ -1778,7 +1778,15 @@ def exportItemBreaks (context : RuleContext) (segment : Segment) : List BreakPoi
 
 def assertNotExistsBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
-  [breakAfterLexeme? segment "assert_not_exists" 1].filterMap id
+  match contentIndexAfterLexeme? segment "assert_not_exists" with
+  | some firstIdentifierIndex =>
+      segment.indexes.filterMap
+        fun index =>
+          if firstIdentifierIndex <= index then
+            boundaryBreak? segment index 1
+          else
+            none
+  | none => []
 
 def moduleImportBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   if parentIsRawKind context `Lean.Parser.Module.header then

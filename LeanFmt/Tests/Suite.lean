@@ -45,6 +45,18 @@ partial def findTreeNodeStartingWith? (target : SyntaxTree.NodeKind) (lexeme : S
           none
   | _ => none
 
+partial def findTreeWithRawKind? (target : Lean.SyntaxNodeKind)
+    : SyntaxTree.Tree -> Option SyntaxTree.Tree
+  | tree@(.node _ children) =>
+      if SyntaxTree.rawKind? tree == some target then
+        some tree
+      else
+        children.foldl
+          (fun found child =>
+            found.orElse fun _ => findTreeWithRawKind? target child)
+          none
+  | _ => none
+
 partial def containsNestedProofBody : SyntaxTree.Tree → Bool
   | .node (.proofBody _) children =>
       children.any
@@ -9338,9 +9350,8 @@ def assertCommandBinderSequencesFlow (env : Lean.Environment) : IO Unit := do
     ++ "  [Add C] [Sub C] [Mul C] [Div C] [Pow C Nat] [LT C] [LE C] [BEq C] [Hashable C]\n"
     ++ "    [Inhabited C] [EmptyCollection C] in\n"
     ++ "theorem value : True := by trivial\n"
-    ++ "include\n"
-    ++ "  firstVeryLongVariableName secondVeryLongVariableName thirdVeryLongVariableName\n"
-    ++ "    fourthVeryLongVariableName fifthVeryLongVariableName in\n"
+    ++ "include firstVeryLongVariableName secondVeryLongVariableName thirdVeryLongVariableName\n"
+    ++ "  fourthVeryLongVariableName fifthVeryLongVariableName in\n"
     ++ "theorem includedValue : True := by trivial\n"
   let formatted ← Formatter.formatSourceWithEnv env source "command-binder-flow.lean"
   assertEq "command binder sequences flow between binders" expected formatted
@@ -15365,6 +15376,85 @@ def assertRecursiveCommandArgumentsShareBase : IO Unit := do
   assertTrue "empty optional command prefixes do not masquerade as infix operands"
     (!regrouped.containsNodeKind (.infixChain `Aesop.Frontend.Parser.addRules))
 
+def assertRegisteredAtomicPeerTailsFlow (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "import Lean.Meta\n"
+    ++ "\n"
+    ++ "open Lean Meta\n"
+    ++ "\n"
+    ++ "universe u v w veryLongUniverseName anotherLongUniverseName\n"
+    ++ "\n"
+    ++ "def probe (e : Expr) : MetaM Expr := do\n"
+    ++ "  match_expr e with\n"
+    ++ "  | HAdd.hAdd _ _ first second third fourth fifth sixth =>\n"
+    ++ "    pure e\n"
+    ++ "  | _ => pure e\n"
+    ++ "\n"
+    ++ "include u v w veryLongUniverseName anotherLongUniverseName\n"
+    ++ "omit u v w veryLongUniverseName anotherLongUniverseName\n"
+  let expected :=
+    "import Lean.Meta\n"
+    ++ "\n"
+    ++ "open Lean Meta\n"
+    ++ "\n"
+    ++ "universe u v w veryLongUniverseName\n"
+    ++ "  anotherLongUniverseName\n"
+    ++ "\n"
+    ++ "def probe (e : Expr) : MetaM Expr := do\n"
+    ++ "  match_expr e with\n"
+    ++ "  | HAdd.hAdd _ _ first second third\n"
+    ++ "      fourth fifth sixth =>\n"
+    ++ "      pure e\n"
+    ++ "  | _ => pure e\n"
+    ++ "\n"
+    ++ "include u v w veryLongUniverseName\n"
+    ++ "  anotherLongUniverseName\n"
+    ++ "omit u v w veryLongUniverseName\n"
+    ++ "  anotherLongUniverseName\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "registered-atomic-peer-tails.lean"
+      { lineWidth := 40 }
+  assertTrue "registered atomic peer tails do not fall back" (!result.fellBack)
+  assertEq "registered atomic peer tails flow at one shared base"
+    expected result.formatted
+  assertTrue "registered atomic peer tails preserve code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedModule ←
+    SyntaxTree.parseModuleStringWithEnv env result.formatted
+      "registered-atomic-peer-tails-formatted.lean"
+  assertTrue "registered atomic peer tails avoid actionable overflow"
+    (Formatter.Diagnostics.overflowOccurrences formattedModule
+      { lineWidth := 40 }).isEmpty
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "registered-atomic-peer-tails-idempotent.lean" { lineWidth := 40 }
+  assertEq "registered atomic peer tail formatting is idempotent"
+    result.formatted formattedAgain
+
+  let levelSource :=
+    source
+    ++ "\n"
+    ++ "#check Sort (max u v w veryLongUniverseName anotherLongUniverseName)\n"
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env levelSource "registered-atomic-peer-tree.lean"
+  for (kind, expectedBreaks)
+      in [
+        (`Lean.Parser.Term.matchExprPat, 8),
+        (`Lean.Parser.Command.universe, 5),
+        (`Lean.Parser.Command.include, 5),
+        (`Lean.Parser.Command.omit, 5),
+        (`Lean.Parser.Level.max, 5)
+      ] do
+    let some tree := findTreeWithRawKind? kind moduleTree.tree
+    | throw <| IO.userError s!"expected registered peer tree {kind}"
+    let segment := Formatter.LineBreakRules.Segment.ofTree tree
+    let breakPoints :=
+      (Formatter.LineBreakRules.formattingRuleFor tree).breakPoints {} segment
+    assertTrue s!"registered peer tree exposes every continuation boundary: {kind}"
+      (breakPoints.length == expectedBreaks)
+    assertTrue s!"registered peer tree uses one continuation indentation: {kind}"
+      (breakPoints.all fun breakPoint => breakPoint.indentLevels == 1)
+
 def assertBracketedNotationRulesKeepDelimitersAttached : IO Unit := do
   let structuralPrefixes :=
     [
@@ -19088,6 +19178,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertFormatterArchitecture
   assertDeclarationRuleTransparent
   assertRecursiveCommandArgumentsShareBase
+  assertRegisteredAtomicPeerTailsFlow env
   assertBracketedNotationRulesKeepDelimitersAttached
   assertIndexedTermsRenderWithAttachedClosingDelimiter env
   assertIndexedInfixRendersWithLeadingOperator env
