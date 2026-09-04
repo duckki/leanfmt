@@ -5352,6 +5352,52 @@ def assertMovedInlineProofBodiesRemainParseable (env : Lean.Environment) : IO Un
       "inline-multiline-declaration-proof-formatted.lean"
   assertEq "inline multiline declaration proof is idempotent"
     declarationResult.formatted declarationAgain
+  let detachedSiblingSource :=
+    "theorem proofPreludeBreaksAtClassicalWithALongEnoughNameForProofBody (h : True) : True := by classical\n"
+    ++ "  change True\n"
+    ++ "  exact h\n"
+  let detachedSiblingExpected :=
+    "theorem proofPreludeBreaksAtClassicalWithALongEnoughNameForProofBody (h : True) : True := by\n"
+    ++ "  classical\n"
+    ++ "  change True\n"
+    ++ "  exact h\n"
+  let detachedSiblingResult ←
+    Formatter.formatSourceWithEnvDetailed env detachedSiblingSource
+      "detached-proof-prelude-siblings.lean" { lineWidth := 100 }
+  assertTrue "detached proof prelude siblings do not fall back"
+    (!detachedSiblingResult.fellBack)
+  assertEq "detached proof prelude keeps source sibling depth"
+    detachedSiblingExpected detachedSiblingResult.formatted
+  assertTrue "detached proof prelude siblings preserve code"
+    (← codePreservedIgnoringWhitespace env detachedSiblingSource
+        detachedSiblingResult.formatted)
+  let detachedSiblingAgain ←
+    Formatter.formatSourceWithEnv env detachedSiblingResult.formatted
+      "detached-proof-prelude-siblings-formatted.lean" { lineWidth := 100 }
+  assertEq "detached proof prelude siblings are idempotent"
+    detachedSiblingResult.formatted detachedSiblingAgain
+  let detachedNestedSource :=
+    "theorem proofPreludeRetainsNestedContinuationWithLongEnoughName (h : True) : True := by classical\n"
+    ++ "    exact h\n"
+  let detachedNestedExpected :=
+    "theorem proofPreludeRetainsNestedContinuationWithLongEnoughName (h : True) : True := by\n"
+    ++ "  classical\n"
+    ++ "    exact h\n"
+  let detachedNestedResult ←
+    Formatter.formatSourceWithEnvDetailed env detachedNestedSource
+      "detached-proof-prelude-nested.lean" { lineWidth := 90 }
+  assertTrue "detached nested proof prelude does not fall back"
+    (!detachedNestedResult.fellBack)
+  assertEq "detached proof prelude keeps deeper source continuation depth"
+    detachedNestedExpected detachedNestedResult.formatted
+  assertTrue "detached nested proof prelude preserves code"
+    (← codePreservedIgnoringWhitespace env detachedNestedSource
+        detachedNestedResult.formatted)
+  let detachedNestedAgain ←
+    Formatter.formatSourceWithEnv env detachedNestedResult.formatted
+      "detached-proof-prelude-nested-formatted.lean" { lineWidth := 90 }
+  assertEq "detached nested proof prelude is idempotent"
+    detachedNestedResult.formatted detachedNestedAgain
 
 def assertMultilineProtectedApplicationArgumentsBreakFromParent (env : Lean.Environment)
     : IO Unit := do
@@ -7301,8 +7347,8 @@ def assertLowPriorityPipeBoundaryPolicy (env : Lean.Environment) : IO Unit := do
     ++ "    by simp [hf]\n"
   let tacticExpected :=
     "theorem tacticPipeProofFitsWidth : True := by\n"
-    ++ "  obtain ⟨e₂, he₂⟩ := (MulEquiv.prodComm.toMonoidHom.comp f).exists_mrange_eq_mgraph\n"
-    ++ "    (by simpa) <| by simp [hf]\n"
+    ++ "  obtain ⟨e₂, he₂⟩ :=\n"
+    ++ "    (MulEquiv.prodComm.toMonoidHom.comp f).exists_mrange_eq_mgraph (by simpa) <| by simp [hf]\n"
   let tacticResult ←
     Formatter.formatSourceWithEnvDetailed env tacticSource
       "low-priority-tactic-pipe-width.lean" { lineWidth := 100 }
@@ -17738,6 +17784,26 @@ def assertStructuralHeadersOwnAttachedBodies (env : Lean.Environment) : IO Unit 
       ++ "    exact proof\n"
       ++ "  this\n")
     80
+
+  check "core-arrow-tactic-body"
+    ("theorem coreArrowBody : True := by\n"
+      ++ "  as_aux_lemma => exact veryLongProofTerm firstArgument\n")
+    ("theorem coreArrowBody : True := by\n"
+      ++ "  as_aux_lemma =>\n"
+      ++ "    exact veryLongProofTerm firstArgument\n")
+    45
+
+  check "parser-owned-header-assignment"
+    ("theorem obtainMultilineHeaderTerminator : True := by\n"
+      ++ "  obtain ⟨radius, radiusPositive, bound⟩ : ∃ radius > 0, ∀ value ∈ neighborhoodWithEnoughCharacters center radius, predicateWithEnoughCharacters firstArgument secondArgument value := eventuallyProofWithEnoughCharacters firstArgument secondArgument <| by exact proof\n"
+      ++ "  exact True.intro\n")
+    ("theorem obtainMultilineHeaderTerminator : True := by\n"
+      ++ "  obtain ⟨radius, radiusPositive, bound⟩\n"
+      ++ "    : ∃ radius > 0,\n"
+      ++ "        ∀ value ∈ neighborhoodWithEnoughCharacters center radius,\n"
+      ++ "          predicateWithEnoughCharacters firstArgument secondArgument value :=\n"
+      ++ "    eventuallyProofWithEnoughCharacters firstArgument secondArgument <| by exact proof\n"
+      ++ "  exact True.intro\n")
 
 def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
   let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]

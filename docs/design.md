@@ -734,6 +734,16 @@ have hpreserve' :
   simpa [a, b] using hpreserve
 ```
 
+Parser-owned tactic headers use the same hierarchy. Their assignment value
+breaks first; if the remaining typed header is still too long, it may then
+break before `:` without detaching the pattern from the tactic head:
+
+```lean
+obtain ⟨radius, radiusPositive, bound⟩
+  : ∃ radius > 0, predicate radius :=
+  eventualWitness
+```
+
 Termination clauses follow the same ownership rule. `termination_by` and
 `decreasing_by` return to the base column of the declaration they modify. A
 fitting `termination_by` parameter lambda and measure stay on one line:
@@ -1457,9 +1467,10 @@ the proof body exposes the existing elimination layout. Nested alternative
 bodies therefore receive the same two-level indentation as a direct
 elimination tactic.
 A single-token tactic prefix such as `classical` shares that structural base
-with the following elimination tactic, even when Lean inserts transparent
-tactic-sequence wrappers between them. Its `with` remains attached to the
-elimination header and alternatives align with the complete prefixed tactic.
+with a following tactic authored at the same proof indentation, even when Lean
+inserts transparent tactic-sequence wrappers between them. A deeper source
+continuation remains nested. An elimination tactic's `with` remains attached
+to its header and alternatives align with the complete prefixed tactic.
 
 A term-taking tactic retains its tactic prefix while the final term keeps its
 own structural layout. For an ordinary application, this keeps the tactic and

@@ -3162,10 +3162,7 @@ def parserOwnedBodyBreaks (_context : RuleContext) (segment : Segment)
 
 def parserOwnedHeaderBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
-  if segment.parent.containsNodeKind .lowPriorityInfixRhs then
-    []
-  else
-    defaultChildBreaks _context segment
+  defaultChildBreaks _context segment
 
 def matchHeaderBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   if segment.size <= 1 then

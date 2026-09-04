@@ -26,6 +26,34 @@ private def charsAfterLastNewline (text : String) : String :=
 private def leadingWhitespace (line : String) : String :=
   (line.takeWhile SpaceRules.isHorizontalWhitespace).toString
 
+private def sourceLineIndentationAt
+    (sourceMap : SyntaxTree.SourcePositionMap) (position : String.Pos.Raw)
+    : Nat :=
+  let lineNumber := sourceMap.lineNumberAt position
+  let lineStart := sourceMap.fileMap.lineStart lineNumber
+  let linePrefix := SyntaxTree.sourceText sourceMap.source lineStart position
+  (leadingWhitespace linePrefix).length
+
+private partial def hasTacticSequenceContinuationAt
+    (sourceMap : SyntaxTree.SourcePositionMap) (firstPosition : String.Pos.Raw)
+    (sourceIndent : Nat)
+    : SyntaxTree.Tree → Bool
+  | tree@(.node (.tactic _ containsSequence _ _ _) children) =>
+      let startsAtProofBase :=
+        tree.isTacticSequenceTree
+        && tree.firstToken?.any
+            fun token =>
+              firstPosition < token.span.start
+              && sourceMap.columnAt token.span.start == sourceIndent
+      startsAtProofBase
+      || (containsSequence
+          && children.any
+              (hasTacticSequenceContinuationAt sourceMap firstPosition sourceIndent))
+  | .node (.proofBody _) children
+  | .node (.raw `null) children =>
+      children.any (hasTacticSequenceContinuationAt sourceMap firstPosition sourceIndent)
+  | _ => false
+
 private def shiftLineIndent (sourceColumn targetColumn : Nat) (line : String) : String :=
   if line.isEmpty then
     line
@@ -1095,7 +1123,21 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
       sourceContinuationIndent? sourceText
       |>.map
           fun sourceIndent =>
-            (sourceIndent, (leadingColumn / indentationSpaces + 1) * indentationSpaces)
+            let sourceProofBase :=
+              request.lastToken?.map
+                (fun token =>
+                  sourceLineIndentationAt request.sourceMap token.span.start
+                  + indentationSpaces)
+              |>.getD sourceColumn
+            let normalizedContinuation :=
+              (leadingColumn / indentationSpaces + 1) * indentationSpaces
+            let targetIndent :=
+              if hasTacticSequenceContinuationAt
+                  request.sourceMap firstToken.span.start sourceProofBase tree then
+                leadingColumn
+              else
+                normalizedContinuation
+            (sourceIndent, targetIndent)
     else
       none
   let sourceTextRebase? :=

@@ -194,6 +194,115 @@ def Token.isClosingDelimiter (token : Token) : Bool :=
   token.role == .atom
   && [")", "]", "}", "⟩", "⟫", "‖"].any fun delimiter => token.lexeme == delimiter
 
+private partial def hasContentToken : Tree → Bool
+  | .missing => false
+  | .leaf token => !token.lexeme.isEmpty
+  | .node _ children => children.any hasContentToken
+
+private inductive TokenCardinality where
+  | empty
+  | single (token : Token)
+  | multiple
+deriving Inhabited
+
+private def TokenCardinality.combine (left right : TokenCardinality) : TokenCardinality :=
+  match left, right with
+  | .multiple, _
+  | _, .multiple
+  | .single _, .single _ => .multiple
+  | .single token, .empty
+  | .empty, .single token => .single token
+  | .empty, .empty => .empty
+
+private partial def tokenCardinality : Tree → TokenCardinality
+  | .missing => .empty
+  | .leaf token => .single token
+  | .node _ children =>
+      children.foldl
+        (fun cardinality child =>
+          match cardinality with
+          | .multiple => .multiple
+          | _ => cardinality.combine (tokenCardinality child))
+        .empty
+
+private partial def firstContentToken? : Tree → Option Token
+  | .missing => none
+  | .leaf token => if token.lexeme.isEmpty then none else some token
+  | .node _ children => children.findSome? firstContentToken?
+
+private partial def splitLeadingToken? (accepts : Token → Bool)
+    : Tree → Option (Tree × Tree)
+  | tree@(.leaf token) =>
+      if accepts token then
+        some (tree, .missing)
+      else
+        none
+  | .node kind children => do
+      let index ←
+        (List.range children.size).find? fun index => children[index]?.any hasContentToken
+      let child ← children[index]?
+      let (token, child) ← splitLeadingToken? accepts child
+      some (token, .node kind (children.set! index child))
+  | .missing => none
+
+private def regroupParserOwnedHeaderAssignmentChildren (children : Array Tree)
+    : Array Tree :=
+  match ((List.range children.size).filter
+          fun index => children[index]?.any hasContentToken).reverse with
+  | valueIndex :: headerIndex :: _ =>
+      match children[headerIndex]?, children[valueIndex]? with
+      | some header, some value =>
+          match splitLeadingToken?
+                  (fun token => token.lexeme == ":=" || token.lexeme == "←") value with
+          | some (assignment, value) =>
+              if hasContentToken value then
+                children.set! headerIndex (.node .suffixGroup #[header, assignment])
+                |>.set! valueIndex value
+              else
+                children
+          | none => children
+      | _, _ => children
+  | _ => children
+
+private def attachParserOwnedHeaderHead (children : Array Tree) : Array Tree :=
+  let contentIndexes :=
+    (List.range children.size).filter fun index => children[index]?.any hasContentToken
+  match contentIndexes with
+  | firstIndex :: modifierIndex :: argumentIndex :: _ =>
+      match children[firstIndex]?, children[modifierIndex]?, children[argumentIndex]? with
+      | some first, some modifier, some argument =>
+          if (match tokenCardinality modifier with
+              | .single _ => true
+              | _ => false)
+              && (firstContentToken? argument).any
+                  (fun token => lexemeEndsWithOpeningDelimiter token.lexeme) then
+            children.set! firstIndex .missing
+            |>.set! modifierIndex .missing
+            |>.set! argumentIndex (.node .suffixGroup #[first, modifier, argument])
+          else
+            let attached :=
+              match modifier with
+              | .node .suffixGroup modifierChildren =>
+                  .node .suffixGroup <| #[first] ++ modifierChildren
+              | _ => .node .suffixGroup #[first, modifier]
+            children.set! firstIndex .missing |>.set! modifierIndex attached
+      | _, _, _ => children
+  | firstIndex :: argumentIndex :: _ =>
+      match children[firstIndex]?, children[argumentIndex]? with
+      | some first, some argument =>
+          let attached :=
+            match argument with
+            | .node .suffixGroup argumentChildren =>
+                .node .suffixGroup <| #[first] ++ argumentChildren
+            | _ => .node .suffixGroup #[first, argument]
+          children.set! firstIndex .missing |>.set! argumentIndex attached
+      | _, _ => children
+  | _ => children
+
+private def parserOwnedHeaderTree (children : Array Tree) : Tree :=
+  .node .parserOwnedHeader
+    (regroupParserOwnedHeaderAssignmentChildren (attachParserOwnedHeaderHead children))
+
 namespace Tree
 
 private partial def appendTokens (tokens : Array Token) : Tree → Array Token
@@ -653,7 +762,7 @@ private def annotateTacticNode
                 .node (.tactic kind summary.containsSequence false false true)
                   shellChildren
               else if shellChildren.any containsLowPriorityInfixRhs then
-                .node .parserOwnedHeader shellChildren
+                parserOwnedHeaderTree shellChildren
               else
                 .node (.tactic kind summary.containsSequence false false false)
                   shellChildren
@@ -753,32 +862,6 @@ def annotateTacticTree (tree : Tree) (parserLayout : ParserLayout.Facts := {}) :
       else
         tree
   | tree => tree
-
-private inductive TokenCardinality where
-  | empty
-  | single (token : Token)
-  | multiple
-deriving Inhabited
-
-private def TokenCardinality.combine (left right : TokenCardinality) : TokenCardinality :=
-  match left, right with
-  | .multiple, _
-  | _, .multiple
-  | .single _, .single _ => .multiple
-  | .single token, .empty
-  | .empty, .single token => .single token
-  | .empty, .empty => .empty
-
-private partial def tokenCardinality : Tree → TokenCardinality
-  | Tree.missing => .empty
-  | Tree.leaf token => .single token
-  | Tree.node _ children =>
-      children.foldl
-        (fun cardinality child =>
-          match cardinality with
-          | .multiple => .multiple
-          | _ => cardinality.combine (tokenCardinality child))
-        .empty
 
 def singleToken? (tree : Tree) : Option Token :=
   match tokenCardinality tree with
@@ -1693,22 +1776,6 @@ private def regroupOptionalPrivateValue (children : Array Tree) : Array Tree :=
 private def startsWithOpeningDelimiter (tree : Tree) : Bool :=
   tree.firstToken?.any fun token => lexemeEndsWithOpeningDelimiter token.lexeme
 
-private partial def splitLeadingToken? (accepts : Token → Bool)
-    : Tree → Option (Tree × Tree)
-  | tree@(.leaf token) =>
-      if accepts token then
-        some (tree, .missing)
-      else
-        none
-  | .node kind children => do
-      let index ←
-        (List.range children.size).find?
-          fun index => children[index]?.bind Tree.firstToken? |>.isSome
-      let child ← children[index]?
-      let (token, child) ← splitLeadingToken? accepts child
-      some (token, .node kind (children.set! index child))
-  | .missing => none
-
 private def regroupTerminalLeadingTokenChildren
     (children : Array Tree) (ownsRight : Tree → Bool) (accepts : Token → Bool)
     (normalizeRemainder : Tree → Tree := id)
@@ -1831,38 +1898,6 @@ private partial def splitParserOwnedBody? (suffixes : List String)
           some (.node kind (children.set! bodyIndex nestedPrefix), suffix, body)
   | _ => none
 
-private def attachParserOwnedHeaderHead (children : Array Tree) : Array Tree :=
-  let contentIndexes :=
-    (List.range children.size).filter
-      fun index => children[index]?.any fun child => !child.tokens.isEmpty
-  match contentIndexes with
-  | firstIndex :: modifierIndex :: argumentIndex :: _ =>
-      match children[firstIndex]?, children[modifierIndex]?, children[argumentIndex]? with
-      | some first, some modifier, some argument =>
-          if modifier.singleToken?.isSome && startsWithOpeningDelimiter argument then
-            children.set! firstIndex .missing
-            |>.set! modifierIndex .missing
-            |>.set! argumentIndex (.node .suffixGroup #[first, modifier, argument])
-          else
-            let attached :=
-              match modifier with
-              | .node .suffixGroup modifierChildren =>
-                  .node .suffixGroup <| #[first] ++ modifierChildren
-              | _ => .node .suffixGroup #[first, modifier]
-            children.set! firstIndex .missing |>.set! modifierIndex attached
-      | _, _, _ => children
-  | firstIndex :: argumentIndex :: _ =>
-      match children[firstIndex]?, children[argumentIndex]? with
-      | some first, some argument =>
-          let attached :=
-            match argument with
-            | .node .suffixGroup argumentChildren =>
-                .node .suffixGroup <| #[first] ++ argumentChildren
-            | _ => .node .suffixGroup #[first, argument]
-          children.set! firstIndex .missing |>.set! argumentIndex attached
-      | _, _ => children
-  | _ => children
-
 private partial def isParserOwnedTacticBody : Tree → Bool
   | tree@(.node (.raw `null) children) =>
       tree.isTacticSequenceTree
@@ -1908,25 +1943,23 @@ private def regroupParserOwnedBody?
               ++ childrenRange children (index + 1) children.size
             match children[index]? with
             | some (.node (.raw _) lastChildren) =>
-                .node .parserOwnedHeader
-                  (attachParserOwnedHeaderHead <| flattenLastChildren lastChildren)
+                parserOwnedHeaderTree (flattenLastChildren lastChildren)
             | some (.node (.tactic _ _ false false _) lastChildren) =>
-                .node .parserOwnedHeader
-                  (attachParserOwnedHeaderHead <| flattenLastChildren lastChildren)
+                parserOwnedHeaderTree (flattenLastChildren lastChildren)
             | some last =>
                 let children :=
                   if suffixStaysWithBody then
                     children
                   else
                     children.set! index (.node .suffixGroup #[last, suffix])
-                .node .parserOwnedHeader (attachParserOwnedHeaderHead children)
+                parserOwnedHeaderTree children
             | none => if suffixStaysWithBody then headerPrefix else suffix
         | none => if suffixStaysWithBody then headerPrefix else suffix
     | tree =>
         if suffixStaysWithBody then
-          .node .parserOwnedHeader #[tree]
+          parserOwnedHeaderTree #[tree]
         else
-          .node .parserOwnedHeader #[.node .suffixGroup #[tree, suffix]]
+          parserOwnedHeaderTree #[.node .suffixGroup #[tree, suffix]]
   let body :=
     if suffixOwnsTacticBody then
       .node .parserOwnedTacticBody
@@ -2086,6 +2119,21 @@ private def attachDetachedParserOwnedBody (header suffix body : Tree) : Tree :=
     .node .parserOwnedTacticBody
       #[.node (.proofBody body.containsTacticLayoutOwner) #[body]]
   .node .parserOwnedBody #[header, body]
+
+private def regroupOpaqueTacticArrowBody? (kind : SyntaxNodeKind) (children : Array Tree)
+    : Option Tree := do
+  let kindName := toString kind
+  if !isCoreTacticKindName kindName && !isExtensionTacticKindName kindName then
+    none
+  if children.size != 3 then
+    none
+  let header ← children[0]?
+  let suffix ← children[1]?
+  let body ← children[2]?
+  if !suffix.singleToken?.any (fun token => token.lexeme == "=>")
+      || !body.isTacticSequenceTree then
+    none
+  some <| attachDetachedParserOwnedBody header suffix body
 
 private def regroupDirectParserOwnedTacticBody?
     (parserLayout : ParserLayout.Facts) (kind : NodeKind) (children : Array Tree)
@@ -3716,8 +3764,11 @@ def regroupRawNode
         if let some application := spacedApplication? then
           application
         else
-          if let some application := regroupGeneratedSuffixApplication? kind children then
-            application
+          let grouped? :=
+            (regroupGeneratedSuffixApplication? kind children).orElse
+              fun _ => regroupOpaqueTacticArrowBody? kind children
+          if let some grouped := grouped? then
+            grouped
           else
             if isIndexedInfixRawNode kind children then
               .node (.indexedInfix kind) children
