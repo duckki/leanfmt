@@ -1942,6 +1942,20 @@ private def regroupDoIfElseBodySuffix : Tree → Tree
       .node (.raw `null) <| regroupRightmostSuffixChildren children attachedDoTree?
   | tree => tree
 
+private partial def regroupDoElseIfHeaderSuffix : Tree → Tree
+  | .node kind@(.raw `null) children =>
+      .node kind (children.map regroupDoElseIfHeaderSuffix)
+  | .node kind@(.raw `group) children =>
+      if children.size == 4
+          && children[0]!.firstToken?.any (·.lexeme == "else")
+          && children[2]!.singleToken?.any (·.lexeme == "then") then
+        .node kind
+          (children.set! 1 (.node .suffixGroup #[children[1]!, children[2]!])
+            |>.set! 2 .missing)
+      else
+        .node kind children
+  | tree => tree
+
 private def regroupTacticTerminalDelimiter : Tree → Tree
   | .node kind@(.tactic rawKind containsSequence isOwner _ isSpacedApplication)
       children =>
@@ -3265,7 +3279,8 @@ def regroupOtherRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Tree :
   else if kind == `Lean.Parser.Term.doIf then
     let children := regroupAttachedDoRhs children
     (regroupDoIfThenElseChain? children).getD
-    <| .node (.raw kind) (children.map regroupDoIfElseBodySuffix)
+    <| .node (.raw kind)
+    <| (children.map regroupDoIfElseBodySuffix).map regroupDoElseIfHeaderSuffix
   else if kind == `Lean.Parser.Term.structInstField then
     match children[0]?, children[1]? >>= structInstFieldParts? with
     | some lvalue, some fieldParts =>

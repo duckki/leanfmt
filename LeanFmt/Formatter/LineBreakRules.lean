@@ -3967,7 +3967,10 @@ def tacticIdentifierClauseRule : LineBreakRule :=
   }
 
 def expressionHeadStartAlignment (context : RuleContext) : StartAlignment :=
-  if parentIsNodeKind context .lowPriorityInfixRhs then .none else .preferred
+  if parentIsInfixChain context || parentIsNodeKind context .lowPriorityInfixRhs then
+    .none
+  else
+    .preferred
 
 def ifThenElseRule : LineBreakRule :=
   {
