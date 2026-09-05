@@ -43,6 +43,7 @@ def PrintingAnnotations.merge (left right : PrintingAnnotations) : PrintingAnnot
 
 structure OwnedBodyPolicy where
   suffixes : List String := []
+  headerClauseKeywords : List String := []
   suffixOwnsBody : Bool := false
 deriving BEq, Inhabited, Repr
 
@@ -311,6 +312,38 @@ private def parserDescrTrailingBodySuffixes (parser : ParserDescr) : List String
             | _ => []
       | _ => []
 
+private def parserDescrIsRepeatedSpacedOperands : ParserDescr -> Bool
+  | .unary combinator parser =>
+      (combinator == `many || combinator == `many1)
+      && match (parserDescrApplicationSequence parser).reverse with
+          | operand :: constraints =>
+              parserDescrIsSpacedOperand operand
+              && constraints.all parserDescrIsBodyLayoutConstraint
+          | _ => false
+  | _ => false
+
+private partial def parserDescrHeaderClauseKeywords : ParserDescr -> List String
+  | .unary combinator parser =>
+      let current :=
+        if combinator == `optional then
+          match parserDescrSequence parser with
+          | [keyword, arguments] =>
+              if parserDescrIsRepeatedSpacedOperands arguments then
+                parserDescrKeywordSuffixes keyword
+              else
+                []
+          | _ => []
+        else
+          []
+      current ++ parserDescrHeaderClauseKeywords parser
+  | .node _ _ parser
+  | .trailingNode _ _ _ parser
+  | .nodeWithAntiquot _ _ parser =>
+      parserDescrHeaderClauseKeywords parser
+  | .binary _ left right =>
+      parserDescrHeaderClauseKeywords left ++ parserDescrHeaderClauseKeywords right
+  | _ => []
+
 private partial def parserDescrOwnedTrailingBodySuffixes (parser : ParserDescr)
     : List String :=
   match parser with
@@ -350,6 +383,7 @@ private def ownedBodyPolicy? (env : Environment) (kind : SyntaxNodeKind)
       some
         {
           suffixes
+          headerClauseKeywords := parserDescrHeaderClauseKeywords parser
           suffixOwnsBody := parserKindOwnsCategory env `tactic kind
         }
 

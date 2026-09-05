@@ -477,16 +477,26 @@ assert_not_exists
   FourthForbiddenDeclaration
 ```
 
-Registered word-headed lists use the same flowing continuation base when Lean stores
-their simple operands in one anonymous parser container. This applies to universe-level
-lists, `include` and `omit`, level `max` operands, and constructor arguments in
-`match_expr` patterns:
+Command binder lists expose their binders as direct peers of the command keyword.
+Whether the binders are identifiers or structured instance binders, continuation
+lines therefore return to one command-relative base instead of staircasing through
+the parser's nested list wrapper:
+
+```lean
+include u v w veryLongUniverseName
+  anotherLongUniverseName
+
+omit [FirstClass α] [SecondClass α]
+  [ThirdClass α] [FourthClass α]
+```
+
+Other registered word-headed lists use the same flowing continuation base when Lean
+stores their simple operands in one anonymous parser container. This applies to
+universe-level lists, level `max` operands, and constructor arguments in `match_expr`
+patterns:
 
 ```lean
 universe u v w veryLongUniverseName
-  anotherLongUniverseName
-
-include u v w veryLongUniverseName
   anotherLongUniverseName
 ```
 
@@ -1543,6 +1553,12 @@ inline body remains compact:
 project_simp? proposition says
   exact True.intro
 ```
+
+The same body layout applies when a complete tactic-sequence entry ends in
+`=>` followed by a custom parser sequence. The tactic context establishes the
+ownership, so conversion sequences and similar extensions do not need
+syntax-specific line-break rules. Existing structural alternatives keep their
+dedicated body indentation.
 
 ## Conditionals
 

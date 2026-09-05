@@ -132,15 +132,6 @@ def RuleContext.parentIsSingletonArrayItemWrapper (context : RuleContext) : Bool
       && grandparent.childIndex == 1
   | _ => false
 
-def RuleContext.parentIsCommandBinderList (context : RuleContext) : Bool :=
-  match context.ancestors with
-  | parent :: _ =>
-      (parent.rawKind? == some `Lean.Parser.Command.variable
-        || parent.rawKind? == some `Lean.Parser.Command.omit
-        || parent.rawKind? == some `Lean.Parser.Command.include)
-      && parent.childIndex == 1
-  | _ => false
-
 def RuleContext.parentIsStructureFieldDefaultValue (context : RuleContext) : Bool :=
   match context.ancestors with
   | parent :: _ =>
@@ -167,7 +158,6 @@ def defaultInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   context.parentIsDeclarationPrefixOwner
   || context.parentIsSingletonArrayItemWrapper
   || segment.rawKind? == some `Lean.Parser.Term.letDecl
-  || (segment.rawKind? == some `null && context.parentIsCommandBinderList)
   || (segment.rawKind? == some `null && context.parentIsStructureFieldDefaultValue)
   || (segment.rawKind? == some `Lean.Parser.Term.binderDefault
       && context.parentWrapsStructureFieldDefaultValue)
@@ -856,9 +846,6 @@ def quantifierIdentifierSequence (context : RuleContext) : Bool :=
 
 def binderIdentifierSequence (context : RuleContext) : Bool :=
   groupedBinderIdentifierSequence context || quantifierIdentifierSequence context
-
-def commandBinderSequence (context : RuleContext) : Bool :=
-  context.parentIsCommandBinderList
 
 def exportIdentifierList (context : RuleContext) : Bool :=
   match context.ancestors with
@@ -1672,15 +1659,6 @@ def extendedBinderCollectionBreaks (context : RuleContext) (segment : Segment)
 def binderIdentifierBreaks (context : RuleContext) (segment : Segment)
     : List BreakPoint :=
   if binderIdentifierSequence context then
-    match nonemptyChildIndexes segment with
-    | [] => []
-    | [_] => []
-    | _ :: rest => rest.filterMap fun index => boundaryBreak? segment index 1
-  else
-    []
-
-def commandBinderBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
-  if commandBinderSequence context then
     match nonemptyChildIndexes segment with
     | [] => []
     | [_] => []
@@ -3451,7 +3429,6 @@ def nullBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   ++ quantifierBinderBreaks context segment
   ++ extendedBinderCollectionBreaks context segment
   ++ binderIdentifierBreaks context segment
-  ++ commandBinderBreaks context segment
   ++ openIdentifierBreaks context segment
   ++ commandAttributeIdentifierBreaks context segment
   ++ allowUnusedTacticIdentifierBreaks context segment
@@ -3502,7 +3479,6 @@ def nullRule : LineBreakRule :=
         || !(quantifierBinderBreaks context segment).isEmpty
         || !(extendedBinderCollectionBreaks context segment).isEmpty
         || !(binderIdentifierBreaks context segment).isEmpty
-        || !(commandBinderBreaks context segment).isEmpty
         || !(openIdentifierBreaks context segment).isEmpty
         || !(commandAttributeIdentifierBreaks context segment).isEmpty
         || !(allowUnusedTacticIdentifierBreaks context segment).isEmpty
@@ -3536,7 +3512,7 @@ def commandAttributeRule : LineBreakRule :=
   { name := "commandAttribute" }
 
 def variableCommandRule : LineBreakRule :=
-  { name := "variableCommand" }
+  { defaultRule with name := "variableCommand" }
 
 def instanceRule : LineBreakRule :=
   {

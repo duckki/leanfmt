@@ -430,6 +430,13 @@ def isTacticLayoutOwner (tree : Tree) : Bool :=
 def containsTacticLayoutOwner (tree : Tree) : Bool :=
   (tacticLayoutSummary tree).containsOwner
 
+private def attachDetachedParserOwnedBody (header suffix body : Tree) : Tree :=
+  let header := .node .suffixGroup #[header, suffix]
+  let body :=
+    .node .parserOwnedTacticBody
+      #[.node (.proofBody body.containsTacticLayoutOwner) #[body]]
+  .node .parserOwnedBody #[header, body]
+
 partial def containsIntrinsicTacticLayoutOwner : Tree → Bool
   | tree@(.node (.tactic _ _ isOwner _ _) children) =>
       isOwner || isCalcTree tree || children.any containsIntrinsicTacticLayoutOwner
@@ -827,6 +834,24 @@ private def splitAlignedTacticSequenceContinuation? (tree : Tree)
       else
         none
 
+private def regroupTacticArrowInfixBody? (kind : SyntaxNodeKind) (children : Array Tree)
+    : Option Tree := do
+  if children.size < 3 || children.size % 2 == 0 then
+    none
+  let suffixIndex := children.size - 2
+  let bodyIndex := children.size - 1
+  let suffix@(.leaf suffixToken) ← children[suffixIndex]? | none
+  if suffixToken.lexeme != "=>" then
+    none
+  let body ← children[bodyIndex]?
+  let headerChildren := children.extract 0 suffixIndex
+  let header ←
+    if let #[header] := headerChildren then
+      some header
+    else
+      some <| .node (.infixChain kind) headerChildren
+  some <| attachDetachedParserOwnedBody header suffix body
+
 private partial def annotateTacticSequenceEntry (parserLayout : ParserLayout.Facts)
     : Tree → Tree
   | .node (.raw `null) children =>
@@ -840,13 +865,17 @@ private partial def annotateTacticSequenceEntry (parserLayout : ParserLayout.Fac
           #[]
       .node (.raw `null) children
   | .node kind@(.infixChain _) children =>
-      .node kind
-      <| children.mapIdx
+      let children :=
+        children.mapIdx
           fun index child =>
             if index % 2 == 0 then
               annotateTacticSequenceEntry parserLayout child
             else
               child
+      match kind with
+      | .infixChain rawKind =>
+          (regroupTacticArrowInfixBody? rawKind children).getD <| .node kind children
+      | _ => .node kind children
   | .node (.raw kind) children =>
       annotateTacticNode kind children (parserLayout.isSpacedApplication kind)
   | tree => tree
@@ -1898,6 +1927,27 @@ private partial def splitParserOwnedBody? (suffixes : List String)
           some (.node kind (children.set! bodyIndex nestedPrefix), suffix, body)
   | _ => none
 
+private def regroupParserOwnedHeaderClause?
+    (keywords : List String) (children : Array Tree)
+    : Option Tree := do
+  let contentIndexes :=
+    (List.range children.size).filter
+      fun index => children[index]?.bind Tree.firstToken? |>.isSome
+  let [keywordIndex, argumentsIndex] := contentIndexes | none
+  let keyword ← children[keywordIndex]?
+  let keywordToken ← directLeafAtomToken? keyword
+  if !keywords.contains keywordToken.lexeme then
+    none
+  let .node (.raw `null) argumentChildren ← children[argumentsIndex]? | none
+  let argumentIndexes :=
+    (List.range argumentChildren.size).filter
+      fun index => argumentChildren[index]?.bind Tree.firstToken? |>.isSome
+  let firstIndex ← argumentIndexes.head?
+  let first ← argumentChildren[firstIndex]?
+  let first := .node .suffixGroup #[keyword, first]
+  let arguments := argumentChildren.set! firstIndex first
+  some <| .node .parserOwnedHeader arguments
+
 private partial def isParserOwnedTacticBody : Tree → Bool
   | tree@(.node (.raw `null) children) =>
       tree.isTacticSequenceTree
@@ -1938,6 +1988,11 @@ private def regroupParserOwnedBody?
                             (.node .suffixGroup #[lastContent, suffix])
                       | none => lastChildren
                   | none => lastChildren.push suffix
+              let lastChildren :=
+                match regroupParserOwnedHeaderClause? policy.headerClauseKeywords
+                        lastChildren with
+                | some clause => #[clause]
+                | none => lastChildren
               childrenRange children 0 index
               ++ lastChildren
               ++ childrenRange children (index + 1) children.size
@@ -2113,28 +2168,6 @@ private def splitDetachedParserOwnedSuffix?
     | _ => none
   splitTrailingOwnedSuffix? suffixes tree
 
-private def attachDetachedParserOwnedBody (header suffix body : Tree) : Tree :=
-  let header := .node .suffixGroup #[header, suffix]
-  let body :=
-    .node .parserOwnedTacticBody
-      #[.node (.proofBody body.containsTacticLayoutOwner) #[body]]
-  .node .parserOwnedBody #[header, body]
-
-private def regroupOpaqueTacticArrowBody? (kind : SyntaxNodeKind) (children : Array Tree)
-    : Option Tree := do
-  let kindName := toString kind
-  if !isCoreTacticKindName kindName && !isExtensionTacticKindName kindName then
-    none
-  if children.size != 3 then
-    none
-  let header ← children[0]?
-  let suffix ← children[1]?
-  let body ← children[2]?
-  if !suffix.singleToken?.any (fun token => token.lexeme == "=>")
-      || !body.isTacticSequenceTree then
-    none
-  some <| attachDetachedParserOwnedBody header suffix body
-
 private def regroupDirectParserOwnedTacticBody?
     (parserLayout : ParserLayout.Facts) (kind : NodeKind) (children : Array Tree)
     : Option Tree := do
@@ -2147,7 +2180,7 @@ private def regroupDirectParserOwnedTacticBody?
     none
   let header := .node kind (children.set! bodyIndex .missing)
   if let some (header, suffix) := splitDetachedParserOwnedSuffix? parserLayout header then
-    return attachDetachedParserOwnedBody header suffix body
+    return Tree.attachDetachedParserOwnedBody header suffix body
   if !tacticEndsWithDetachedBodySuffix parserLayout header then
     none
   let body := .node (.proofBody body.containsTacticLayoutOwner) #[body]
@@ -2168,7 +2201,8 @@ private partial def regroupDetachedParserOwnedTacticBodiesCore
               match splitDetachedParserOwnedSuffix? parserLayout header with
               | some (header, suffix) =>
                   loop
-                    (grouped.push <| attachDetachedParserOwnedBody header suffix body)
+                    (grouped.push
+                      <| Tree.attachDetachedParserOwnedBody header suffix body)
                     true rest
               | none =>
                   if tacticEndsWithDetachedBodySuffix parserLayout header then
@@ -3665,6 +3699,12 @@ private def flattenRegisteredAtomicPeerTail?
     none
   some <| children.extract 0 tailIndex ++ peerChildren
 
+private def flattenCommandBinderChildren (children : Array Tree) : Array Tree :=
+  match children[1]? with
+  | some (Tree.node (NodeKind.raw `null) binders) =>
+      children.extract 0 1 ++ binders ++ children.extract 2 children.size
+  | _ => children
+
 def regroupRawNode
     (parserLayout : ParserLayout.Facts)
     (regroupSpacedApplications : Bool)
@@ -3672,6 +3712,10 @@ def regroupRawNode
     : Tree :=
   if kind == `null then
     (regroupDerivingClause? children).getD <| .node (.raw kind) children
+  else if kind == `Lean.Parser.Command.variable
+          || kind == `Lean.Parser.Command.include
+          || kind == `Lean.Parser.Command.omit then
+    .node (.raw kind) (flattenCommandBinderChildren children)
   else if kind == `Lean.Parser.Command.initialize then
     (regroupInitialize? children).getD <| .node (.raw kind) children
   else if kind == `Lean.Parser.Tactic.elimTarget then
@@ -3764,9 +3808,7 @@ def regroupRawNode
         if let some application := spacedApplication? then
           application
         else
-          let grouped? :=
-            (regroupGeneratedSuffixApplication? kind children).orElse
-              fun _ => regroupOpaqueTacticArrowBody? kind children
+          let grouped? := regroupGeneratedSuffixApplication? kind children
           if let some grouped := grouped? then
             grouped
           else

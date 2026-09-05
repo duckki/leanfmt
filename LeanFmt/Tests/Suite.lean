@@ -9385,22 +9385,39 @@ def assertVariableInstanceBinderAvoidsBracketOnlyLines (env : Lean.Environment)
 
 def assertCommandBinderSequencesFlow (env : Lean.Environment) : IO Unit := do
   let source :=
-    "variable {C : Type} [Add C] [Sub C] [Mul C] [Div C] [Pow C Nat]\n"
+    "variable {C : Type} [Add C] [Sub C] [Mul C] [Div C] [Pow C Nat] [LT C] [LE C] [BEq C] [Hashable C] [Inhabited C] [EmptyCollection C]\n"
     ++ "omit [Add C] [Sub C] [Mul C] [Div C] [Pow C Nat] [LT C] [LE C] [BEq C] [Hashable C] [Inhabited C] [EmptyCollection C] in\n"
     ++ "theorem value : True := by trivial\n"
     ++ "include firstVeryLongVariableName secondVeryLongVariableName thirdVeryLongVariableName fourthVeryLongVariableName fifthVeryLongVariableName in\n"
     ++ "theorem includedValue : True := by trivial\n"
   let expected :=
-    "variable {C : Type} [Add C] [Sub C] [Mul C] [Div C] [Pow C Nat]\n"
-    ++ "omit\n"
-    ++ "  [Add C] [Sub C] [Mul C] [Div C] [Pow C Nat] [LT C] [LE C] [BEq C] [Hashable C]\n"
-    ++ "    [Inhabited C] [EmptyCollection C] in\n"
+    "variable {C : Type} [Add C] [Sub C] [Mul C] [Div C] [Pow C Nat] [LT C] [LE C] [BEq C]\n"
+    ++ "  [Hashable C] [Inhabited C] [EmptyCollection C]\n"
+    ++ "omit [Add C] [Sub C] [Mul C] [Div C] [Pow C Nat] [LT C] [LE C] [BEq C] [Hashable C]\n"
+    ++ "  [Inhabited C] [EmptyCollection C] in\n"
     ++ "theorem value : True := by trivial\n"
     ++ "include firstVeryLongVariableName secondVeryLongVariableName thirdVeryLongVariableName\n"
     ++ "  fourthVeryLongVariableName fifthVeryLongVariableName in\n"
     ++ "theorem includedValue : True := by trivial\n"
   let formatted ← Formatter.formatSourceWithEnv env source "command-binder-flow.lean"
   assertEq "command binder sequences flow between binders" expected formatted
+  assertTrue "command binder sequence formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source formatted)
+  let moduleTree ←
+    SyntaxTree.parseModuleStringWithEnv env formatted "command-binder-flow-formatted.lean"
+  for kind in [`Lean.Parser.Command.variable, `Lean.Parser.Command.omit] do
+    let some tree@(.node _ children) := findTreeWithRawKind? kind moduleTree.tree
+    | throw <| IO.userError s!"expected command binder tree {kind}"
+    assertTrue s!"command binders are direct peers: {kind}"
+      (!children.any fun child => SyntaxTree.rawKind? child == some `null)
+    let segment := Formatter.LineBreakRules.Segment.ofTree tree
+    let breakPoints :=
+      (Formatter.LineBreakRules.formattingRuleFor tree).breakPoints {} segment
+    assertTrue s!"command binders share one continuation base: {kind}"
+      (breakPoints.all fun breakPoint => breakPoint.indentLevels == 1)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env formatted "command-binder-flow-formatted-again.lean"
+  assertEq "command binder sequence formatting is idempotent" formatted formattedAgain
 
 def assertMutualEquationArmIndent (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -17793,6 +17810,22 @@ def assertStructuralHeadersOwnAttachedBodies (env : Lean.Environment) : IO Unit 
       ++ "    exact veryLongProofTerm firstArgument\n")
     45
 
+  let opaqueArrowSource :=
+    "theorem opaqueArrowBody : True := by\n"
+    ++ "  project_conv_lhs => project_step veryLongProofStepName\n"
+  let opaqueArrowExpected :=
+    "theorem opaqueArrowBody : True := by\n"
+    ++ "  project_conv_lhs =>\n"
+    ++ "    project_step veryLongProofStepName\n"
+  check "opaque-arrow-tactic-body" opaqueArrowSource opaqueArrowExpected 38
+  let opaqueArrowTree ←
+    SyntaxTree.parseModuleStringWithEnv env opaqueArrowExpected
+      "opaque-arrow-tactic-body-formatted.lean"
+  assertTrue "an opaque parser-owned tactic body has complete rule coverage"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule opaqueArrowTree).isEmpty
+  assertTrue "an opaque parser-owned tactic body is structurally exposed"
+    ((findTreeNode? .parserOwnedBody opaqueArrowTree.tree).isSome)
+
   check "parser-owned-header-assignment"
     ("theorem obtainMultilineHeaderTerminator : True := by\n"
       ++ "  obtain ⟨radius, radiusPositive, bound⟩ : ∃ radius > 0, ∀ value ∈ neighborhoodWithEnoughCharacters center radius, predicateWithEnoughCharacters firstArgument secondArgument value := eventuallyProofWithEnoughCharacters firstArgument secondArgument <| by exact proof\n"
@@ -17803,6 +17836,16 @@ def assertStructuralHeadersOwnAttachedBodies (env : Lean.Environment) : IO Unit 
       ++ "        ∀ value ∈ neighborhoodWithEnoughCharacters center radius,\n"
       ++ "          predicateWithEnoughCharacters firstArgument secondArgument value :=\n"
       ++ "    eventuallyProofWithEnoughCharacters firstArgument secondArgument <| by exact proof\n"
+      ++ "  exact True.intro\n")
+
+  check "parser-owned-header-does-not-claim-value-head"
+    ("theorem obtainValueHead : True := by\n"
+      ++ "  obtain ⟨value, proof⟩ : Exists veryLongPredicateNameWithEnoughCharactersToBreakHeader :=\n"
+      ++ "    proofHead <| by exact witness\n"
+      ++ "  exact True.intro\n")
+    ("theorem obtainValueHead : True := by\n"
+      ++ "  obtain ⟨value, proof⟩ : Exists veryLongPredicateNameWithEnoughCharactersToBreakHeader :=\n"
+      ++ "    proofHead <| by exact witness\n"
       ++ "  exact True.intro\n")
 
 def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
@@ -17872,6 +17915,48 @@ def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
     Formatter.formatSourceWithEnv env result.formatted
       "parser-owned-clause-bodies-formatted-again.lean" { lineWidth := 50 }
   assertEq "parser-owned clause formatting is idempotent" result.formatted formattedAgain
+  let headerClauseSource :=
+    "example : True := by\n"
+    ++ "  project_filter_upwards [firstEvent, secondEvent] with firstValue firstProof secondValue secondProof using veryLongProofTerm firstArgument secondArgument thirdArgument\n"
+  let headerClauseExpected :=
+    "example : True := by\n"
+    ++ "  project_filter_upwards [firstEvent,\n"
+    ++ "    secondEvent]\n"
+    ++ "    with firstValue firstProof\n"
+    ++ "      secondValue secondProof\n"
+    ++ "    using veryLongProofTerm\n"
+    ++ "      firstArgument secondArgument\n"
+    ++ "      thirdArgument\n"
+  let headerClauseResult ←
+    Formatter.formatSourceWithEnvDetailed env headerClauseSource
+      "parser-owned-header-clause.lean" { lineWidth := 40 }
+  assertTrue "parser-owned header clause formatting does not fall back"
+    (!headerClauseResult.fellBack)
+  let headerClausePolicy :=
+    (ParserLayout.kindFacts env {} `projectHeaderClauseTactic).ownedBody?
+  assertTrue "parser metadata identifies the owned header clause keyword"
+    (headerClausePolicy.any fun policy => policy.headerClauseKeywords.contains "with")
+  assertEq "a trailing parser-owned header clause keeps its keyword with its first peer"
+    headerClauseExpected headerClauseResult.formatted
+  assertTrue "parser-owned header clause formatting preserves code"
+    (← codePreservedIgnoringWhitespace env headerClauseSource
+        headerClauseResult.formatted)
+  let headerClauseTree ←
+    SyntaxTree.parseModuleStringWithEnv env headerClauseResult.formatted
+      "parser-owned-header-clause-formatted.lean"
+  let some clause :=
+    findTreeNodeStartingWith? .parserOwnedHeader "with" headerClauseTree.tree
+  | throw <| IO.userError "expected parser-owned header clause tree"
+  let clauseSegment := Formatter.LineBreakRules.Segment.ofTree clause
+  let clauseBreaks :=
+    (Formatter.LineBreakRules.formattingRuleFor clause).breakPoints {} clauseSegment
+  assertTrue "parser-owned header clause peers share one continuation base"
+    (clauseBreaks.all fun breakPoint => breakPoint.indentLevels == 1)
+  let headerClauseAgain ←
+    Formatter.formatSourceWithEnv env headerClauseResult.formatted
+      "parser-owned-header-clause-formatted-again.lean" { lineWidth := 40 }
+  assertEq "parser-owned header clause formatting is idempotent"
+    headerClauseResult.formatted headerClauseAgain
   let longSuffixSource :=
     "theorem collectSubfields_pairKeysNodup : True := by\n"
     ++ "  simpa [GraphQL.NormalForm.collectSubfields_eq_collectFields_mergedFieldSelectionSet]\n"

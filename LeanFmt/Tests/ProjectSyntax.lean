@@ -15,6 +15,13 @@ syntax:max (name := projectTightIndexed) (priority := high) term noWs "[" term "
 syntax (name := contextClassifiedTactic) "context_classified_tactic " ident ident : tactic
 syntax (name := contextTermTactic) "context_term_tactic " term : tactic
 syntax (name := projectSaysTactic) "project_simp? " term " says " tacticSeq : tactic
+syntax (name := projectHeaderClauseTactic)
+  "project_filter_upwards" (" [" term,* "]")?
+  (" with" (ppSpace colGt term:max)*)? (" using " term)? : tactic
+declare_syntax_cat projectProofSeq
+syntax (name := projectProofStep) "project_step " ident : projectProofSeq
+syntax (name := projectOpaqueArrowTactic)
+  "project_conv_lhs" " => " projectProofSeq : tactic
 syntax (name := projectTryTactic) "project_try? " term : tactic
 syntax (name := projectOptionalSaysTactic)
   tactic " project_says" (colGt tacticSeq)? : tactic
