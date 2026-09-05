@@ -34,9 +34,12 @@ Most stable differences are intentional:
 - unary prefixes and parser-declaration fragments may retain source-protected layout.
 
 Atomic-looking differences such as double-quoted names, `?_`, `?name`, `:60`,
-`ns:ident`, and `atomic(...)` did not produce internal breaks in focused narrow-width probes. Their
-explicit compatibility entries may be inventory cleanup candidates, but they are not
-formatting defects.
+`ns:ident`, and `atomic(...)` did not produce internal breaks in focused narrow-width probes.
+The final inventory review found that these are not redundant dispatch entries: the relevant
+trees either have multiple content children whose boundaries must stay protected, or deliberately
+use default contextual ownership. Double-quoted names already use general structural regrouping.
+The one exact duplicate, the single-child `Lean.Parser.Syntax.atom` wrapper, now uses the same
+transparent structural fallback as an unregistered extension wrapper.
 
 ## Resolved findings
 

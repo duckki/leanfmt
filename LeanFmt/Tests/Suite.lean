@@ -15218,6 +15218,15 @@ def assertFormatterArchitecture : IO Unit := do
   assertTrue "atomic extension wrappers need no dedicated line-break rule"
     ((Formatter.LineBreakRules.ruleFor atomicExtensionWrapper).any
       fun rule => rule.name == "transparent")
+  let builtinAtomicWrapper :=
+    SyntaxTree.Tree.node (.raw `Lean.Parser.Syntax.atom)
+      #[.node (.raw `str) #[.leaf (syntheticAtomToken "\"literal\"")]]
+  assertTrue "built-in atomic wrappers use the same structural fallback"
+    ((Formatter.LineBreakRules.structuralRawRule? builtinAtomicWrapper).any
+      fun rule => rule.name == "transparent")
+  assertTrue "built-in atomic wrappers need no compatibility entry"
+    ((Formatter.LineBreakRules.ruleFor builtinAtomicWrapper).any
+      fun rule => rule.name == "transparent")
   let atomicExtensionWithEmptyParserState :=
     SyntaxTree.Tree.node (.raw `Test.Term.atomicWithEmptyParserState)
       #[

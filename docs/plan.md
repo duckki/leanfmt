@@ -4,14 +4,6 @@ Rules must describe general syntax ownership. External paths and declaration
 names are evidence for tests, never formatter conditions. Missing-rule coverage
 is release-blocking only for Lean's standard library and Mathlib.
 
-## Open Issues
-
-### Rule inventory
-
-Core, Std, and Mathlib remain first-class syntax targets, but the dispatch table still
-contains historical compatibility entries. Remove an entry only when parser metadata or
-a general structural owner gives the same reviewed layout across the validation corpus.
-
 ## Progress
 
 ### Checkpoint 1: structural headers and peer continuations
@@ -131,13 +123,25 @@ boundaries while leaving generated applications, structured binders, and nested 
 owners unchanged. Focused tests cover exact layout, code preservation, overflow,
 idempotency, tree shape, and every exposed boundary.
 
-## Next Checkpoints
+### Checkpoint 11: rule inventory closure
 
-### 0.4 release gate
+Review the atomic-looking audit candidates against their real Core, Std, and Mathlib tree
+shapes. Keep explicit policy for multi-child atomic syntax and contextual default ownership.
+Remove the sole exact duplicate, `Lean.Parser.Syntax.atom`, whose one content child is already
+covered by the transparent structural fallback used for extension syntax.
 
-Run the complete local gate, GraphQL and quantum review, width-100 Hex, and a clean
-Mathlib build-and-format validation. Minor formatting changes are acceptable when they
-follow the simpler documented ownership model.
+### Checkpoint 12: 0.4 release gate
+
+Complete the local gate and fresh external validation with automatic worker counts. GraphQL
+and quantum passed their clean and post-format builds; quantum was unchanged, and GraphQL
+only removed one duplicated space. Width-100 Hex passed all 873 owned files, every formatter
+diagnostic, and both post-format builds. Its heaviest formatter batch took 145 seconds, within
+the established large-file variance.
+
+The exact width-100 Mathlib `v4.33.0` release gate formatted all 8,311 selected files in 84
+clean batches. The 4,377-target changed-module closure and final 8,705-job aggregate build
+both passed. The complete Mathlib run took 6,713 seconds. No open release blocker remains;
+the current tree is ready for the 0.4 release.
 
 ## Validation standard
 

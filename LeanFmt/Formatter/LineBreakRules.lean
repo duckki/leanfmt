@@ -4707,7 +4707,6 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Batteries.ExtendedBinder.extBinderParenthesized) _ =>
       some binderRule
   | .node (.raw `choice) _ => some transparentRule
-  | .node (.raw `Lean.Parser.Syntax.atom) _ => some transparentRule
   | .node (.raw `Lean.Parser.Syntax.unary) _ => some defaultRule
   | .node (.raw `Lean.Parser.Syntax.cat) _ => some transparentRule
   | .node (.raw `Lean.Parser.Syntax.paren) _ => some transparentRule
