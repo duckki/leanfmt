@@ -336,7 +336,7 @@ The main punctuation rules are:
 - no space after `(`, `[`, `⟨`, `⟪`, `@`, or `@[`;
 - no space before `)`, `]`, `⟩`, `⟫`, `,`, `;`, or `@`;
 - dots stay tight in projections and qualified names;
-- the two-backtick prefix of fully qualified name quotations stays tight;
+- the complete two-backtick prefix of fully qualified name quotations stays tight;
 - ordinary operators and declaration punctuation receive surrounding spaces;
 - compact `!value` remains compact when `!` and the following token were
   adjacent; otherwise `! value` retains a space.
@@ -344,6 +344,11 @@ The main punctuation rules are:
 Source-tight edge pieces of generated notation remain structural units when
 the surrounding term wraps. This keeps forms such as `#{...}`, `∂μ`, and
 `∂.pi` from splitting at a boundary where the notation supplied no whitespace.
+Source-tight ordinary infix operators and type ascriptions are still normalized:
+
+```lean
+(3 : R) * (x + y)
+```
 
 Braces retain the source's tight or spaced style where adjacency makes that
 distinction safe:
@@ -400,6 +405,14 @@ namespace Example
 def answer : Nat := 42
 
 end Example
+```
+
+When an `open` command wraps, its names continue one indentation level from the
+command base rather than aligning under the first name.
+
+```lean
+open CategoryTheory ModuleCat MonoidalCategory Limits Functor.LaxMonoidal
+  Functor.OplaxMonoidal TensorProduct
 ```
 
 A module docstring is separated from the first declaration. Leading comments
@@ -1244,6 +1257,10 @@ Logical and equality operators recognized for balanced proposition layout are
 `->`, `→`, `∧`, `∨`, `/\`, `\/`, and `=`. A lower-precedence outer connector
 breaks before nested higher-precedence expressions.
 
+Multiplication chains instead flow: a line break does not force every remaining
+factor onto its own line. Additive peers remain separated while fitting factors
+pack on each continuation line.
+
 ```lean
 def leadingEqualityAndOperand : Prop :=
   firstCondition = secondConditionWithEnoughCharactersForLayoutTesting
@@ -1334,6 +1351,8 @@ such as `∀ᵉ` share the classification of their base operator. A trailing
 notation suffix after the body, such as `∂μ` on an integral, stays with the body
 and does not move the comma/body break. When an extended binder's type wraps,
 the `:` stays with the first line of the type.
+For an interval binder, the body break remains first priority and the boundary
+after `..` provides a second structural split between long endpoints.
 
 ```lean
 ⨆ p : Index,
@@ -1954,6 +1973,9 @@ closing delimiter break together.
 ]
 ```
 
+Matrix notation uses the same balanced policy, with commas and row semicolons
+remaining attached to the preceding entry.
+
 A protected proof body does not protect its surrounding anonymous constructor or
 structure instance. When the proof retains a source line break, the surrounding
 construct still applies its balanced item, field, and closing-delimiter breaks.
@@ -2106,6 +2128,8 @@ and dedentation become conservative syntax-layout facts. A descriptor that prove
 word-like head followed by one term or identifier operand reuses ordinary application
 layout, including when `ppSpace` appears as a separate combinator. Parser-owned trailing
 term and tactic bodies similarly reuse existing suffix/body ownership.
+Generated comma- or semicolon-separated syntax with a printing break and matching
+outer delimiters reuses the corresponding balanced collection layout.
 
 When metadata does not prove a layout, the generic rule examines only the node's
 immediate child shape:

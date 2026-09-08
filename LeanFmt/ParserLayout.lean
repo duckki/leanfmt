@@ -66,6 +66,11 @@ def Facts.isSpacedApplication (facts : Facts) (kind : SyntaxNodeKind) : Bool :=
 def Facts.ownedBody? (facts : Facts) (kind : SyntaxNodeKind) : Option OwnedBodyPolicy :=
   (facts.find? kind) >>= (·.ownedBody?)
 
+def Facts.hasPrintingBreak (facts : Facts) (kind : SyntaxNodeKind) : Bool :=
+  (facts.find? kind).any
+    fun kindFacts =>
+      kindFacts.annotations.softBreak || kindFacts.annotations.hardBreak
+
 private def hasRegisteredFormatter (env : Environment) (kind : SyntaxNodeKind) : Bool :=
   !(KeyedDeclsAttribute.getValues PrettyPrinter.formatterAttribute env kind).isEmpty
 

@@ -34,7 +34,7 @@ private def sourceLineIndentationAt
   let linePrefix := SyntaxTree.sourceText sourceMap.source lineStart position
   (leadingWhitespace linePrefix).length
 
-private partial def hasTacticSequenceContinuationAt
+private partial def hasSourceAlignedTacticSequenceContinuation
     (sourceMap : SyntaxTree.SourcePositionMap) (firstPosition : String.Pos.Raw)
     (sourceIndent : Nat)
     : SyntaxTree.Tree → Bool
@@ -48,10 +48,12 @@ private partial def hasTacticSequenceContinuationAt
       startsAtProofBase
       || (containsSequence
           && children.any
-              (hasTacticSequenceContinuationAt sourceMap firstPosition sourceIndent))
+              (hasSourceAlignedTacticSequenceContinuation sourceMap firstPosition
+                sourceIndent))
   | .node (.proofBody _) children
   | .node (.raw `null) children =>
-      children.any (hasTacticSequenceContinuationAt sourceMap firstPosition sourceIndent)
+      children.any
+        (hasSourceAlignedTacticSequenceContinuation sourceMap firstPosition sourceIndent)
   | _ => false
 
 private def shiftLineIndent (sourceColumn targetColumn : Nat) (line : String) : String :=
@@ -423,6 +425,18 @@ private def isStructuredCalcTree : SyntaxTree.Tree → Bool
         | _ => false
   | _ => false
 
+private partial def containsDetachedExtractedProofIntroducer : SyntaxTree.Tree → Bool
+  | .node (.raw kind) children =>
+      let firstTokenStartsNewLine :=
+        (children.findSome? SyntaxTree.Tree.firstToken?).any
+          fun token => token.leading.text.contains '\n'
+      ((kind == `Lean.Parser.Term.byTactic || kind == `Lean.Parser.Term.byTactic')
+        && !children.any SyntaxTree.Tree.isProofBodyEnvelope
+        && firstTokenStartsNewLine)
+      || children.any containsDetachedExtractedProofIntroducer
+  | .node _ children => children.any containsDetachedExtractedProofIntroducer
+  | _ => false
+
 private def isProtectedTacticTree : SyntaxTree.Tree → Bool
   | .node (.raw `Mathlib.Tactic.dsimpPercent) _ => false
   | .node (.tactic `Mathlib.Tactic.dsimpPercent _ _ _ _) _ => false
@@ -436,6 +450,7 @@ private def isProtectedTacticTree : SyntaxTree.Tree → Bool
             !isTacticSequenceKind rawKind
             && !isOwner
             && !containsOwner
+            && !containsDetachedExtractedProofIntroducer tree
             && !(tree.isSpacedApplicationTactic && containsAttachedProofTerm tree)
         | .infixChain rawKind =>
             coreTacticKindName (toString rawKind) && !tree.containsTacticLayoutOwner
@@ -1132,8 +1147,9 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
             let normalizedContinuation :=
               (leadingColumn / indentationSpaces + 1) * indentationSpaces
             let targetIndent :=
-              if hasTacticSequenceContinuationAt
-                  request.sourceMap firstToken.span.start sourceProofBase tree then
+              if tree.proofBodyHasMultipleTactics
+                  || hasSourceAlignedTacticSequenceContinuation
+                      request.sourceMap firstToken.span.start sourceProofBase tree then
                 leadingColumn
               else
                 normalizedContinuation

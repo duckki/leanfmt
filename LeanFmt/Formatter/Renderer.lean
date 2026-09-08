@@ -682,7 +682,16 @@ def WhitespaceState.defaultWhitespace (state : WhitespaceState) (token : SyntaxT
 def RenderState.defaultWhitespace (state : RenderState) (token : SyntaxTree.Token)
     (preserveLines : Bool := false)
     : String :=
-  state.whitespaceState.defaultWhitespace token preserveLines
+  let normalizeAdjacent :=
+    state.context.ancestors.any
+      fun frame =>
+        SyntaxTree.Tree.normalizesStructuralBoundary frame.segment.parent frame.childIndex
+          token
+  match state.lastToken?, state.pendingIndent? with
+  | some left, none =>
+      SpaceRules.interTokenWhitespace state.source left token preserveLines
+        normalizeAdjacent
+  | _, _ => state.whitespaceState.defaultWhitespace token preserveLines
 
 def RenderState.allowsStartAlignment (state : RenderState) : Bool :=
   match state.lastToken?, state.pendingIndent? with
@@ -876,32 +885,17 @@ def RenderState.segmentStartBaseFor
     | none => state.currentColumn
   { column, indentation := indentationLevelForColumn column }
 
-def RenderState.preserveBlankBoundaryBefore (state : RenderState) (tree : SyntaxTree.Tree)
-    : RenderState :=
-  match state.lastToken?, state.pendingIndent?, SyntaxTree.Tree.firstToken? tree with
-  | some left, none, some right =>
-      let trivia := SyntaxTree.sourceText state.source left.span.stop right.span.start
-      let boundary := SourceBoundary.ofText trivia
-      if hasBlankLineStructure trivia && !boundary.hasComment then
-        { state.appendOutput (SpaceRules.cleanTrivia trivia) with lastToken? := none }
-      else
-        state
-  | _, _, _ => state
-
 def renderedTreeIsMultiline (before after : RenderState) (tree : SyntaxTree.Tree)
     : Bool :=
-  let prepared := before.preserveBlankBoundaryBefore tree
   let leadingBreakCount :=
-    prepared.outputLineBreakCount
-    - before.outputLineBreakCount
-    + match SyntaxTree.Tree.firstToken? tree with
-      | some token =>
-          let whitespace := prepared.defaultWhitespace token
-          if hasLineBreakChar whitespace then
-            (appendedLines "" whitespace prepared.options.lineWidth).lineBreakCount
-          else
-            0
-      | none => 0
+    match SyntaxTree.Tree.firstToken? tree with
+    | some token =>
+        let whitespace := before.defaultWhitespace token
+        if hasLineBreakChar whitespace then
+          (appendedLines "" whitespace before.options.lineWidth).lineBreakCount
+        else
+          0
+    | none => 0
   before.outputLineBreakCount + leadingBreakCount < after.outputLineBreakCount
 
 def renderedSegmentIsMultiline
@@ -1072,14 +1066,19 @@ partial def renderWithoutRuleBreaks
         (fun state index =>
           match segment.child? index with
           | some child =>
-              match OriginalTree.plan? child with
-              | some islandPlan =>
-                  state.emitOriginalTree child
-                    (formatLeadingBoundary :=
-                      formatOriginalChildLeadingBoundary state.context segment index)
-                    (islandPlan? := some islandPlan)
-              | none =>
-                  renderWithoutRuleBreaks state (LineBreakRules.Segment.ofTree child)
+              let parentContext := state.context
+              let rendered :=
+                match OriginalTree.plan? child with
+                | some islandPlan =>
+                    state.emitOriginalTree child
+                      (formatLeadingBoundary :=
+                        formatOriginalChildLeadingBoundary parentContext segment index)
+                      (islandPlan? := some islandPlan)
+                | none =>
+                    renderWithoutRuleBreaks
+                      { state with context := parentContext.push segment index }
+                      (LineBreakRules.Segment.ofTree child)
+              { rendered with context := parentContext }
           | none => state)
         state
 
@@ -1102,21 +1101,23 @@ partial def probeLayoutWithoutRuleBreaks?
             match segment.child? index with
             | none => loop state rest
             | some child =>
+                let parentContext := state.context
                 let rendered? :=
                   match OriginalTree.plan? child with
                   | some islandPlan =>
                       let rendered :=
                         state.emitOriginalTree child
                           (formatLeadingBoundary :=
-                            formatOriginalChildLeadingBoundary state.context segment
+                            formatOriginalChildLeadingBoundary parentContext segment
                               index)
                           (islandPlan? := some islandPlan)
                       if layoutProbeHasNotOverflowed rendered then some rendered else none
                   | none =>
-                      probeLayoutWithoutRuleBreaks? state
+                      probeLayoutWithoutRuleBreaks?
+                        { state with context := parentContext.push segment index }
                         (LineBreakRules.Segment.ofTree child)
                 match rendered? with
-                | some rendered => loop rendered rest
+                | some rendered => loop { rendered with context := parentContext } rest
                 | none => none
       loop state segment.indexes
 
@@ -1825,6 +1826,10 @@ def sourceBreaksForRule?
     : Option (List SourceBreak) :=
   let sourceBreaks :=
     sourceBreaksAllowedByBreakPointsInState state segment plan.breakPoints
+    |>.filter
+        fun sourceBreak =>
+          !(plan.formatsOriginalLeadingBoundary sourceBreak.index
+            && plan.keepsPrefixWithChildFirstLine sourceBreak.index)
   if sourceBreaks.isEmpty then
     none
   else
@@ -1929,6 +1934,27 @@ def FlowRenderContext.childFirstLineFits
   !outputIntroducedLineBreak probe rendered
   && lineFitsWithTrailingWidth rendered.currentLine rendered.lineFitSuffixWidth
       rendered.options.lineWidth
+
+def FlowRenderContext.childLeadingOwnedPieceFits
+    (flow : FlowRenderContext) (state : RenderState) (index : Nat)
+    (context : LineBreakRules.RuleContext) (child : SyntaxTree.Tree)
+    : Bool :=
+  let segment := LineBreakRules.Segment.ofTree child
+  let plan := LayoutPlan.resolve context segment
+  match plan.breakPoints.head? with
+  | some breakPoint =>
+      if plan.formatsOriginalLeadingBoundary breakPoint.index then
+        let probe :=
+          {
+            flow.stateForChildFit state index child with
+              context
+              layoutFacts? := state.layoutFacts? >>= fun facts => facts.child? index
+              lineFitSuffixWidth := 0
+          }
+        (measureLayout probe (segment.slice segment.start breakPoint.index) false).flat
+      else
+        flow.childFirstLineFits state index context child
+  | none => flow.childFirstLineFits state index context child
 
 def FlowRenderContext.childSourceFirstLineFitsAfterPrefix
     (flow : FlowRenderContext) (state : RenderState) (index : Nat)
@@ -2228,8 +2254,12 @@ mutual
         if !plan.isFlow then
           renderBalancedSegment state segment plan
         else
-          match renderSegmentWithSourceBreaksIfFits? state segment sourceBreaks with
-          | some rendered => rendered
+          match renderFlowSegmentWithSourceBreaks? state segment sourceBreaks with
+          | some rendered =>
+              if renderedCandidateFits state rendered then
+                rendered
+              else
+                renderRuleLayout state segment plan
           | none =>
               if segmentContainsMultilineOriginalEmission state.source segment
                   state.layoutFacts? then
@@ -2246,11 +2276,6 @@ mutual
     let childLayoutFacts? := state.layoutFacts? >>= (·.child? index)
     let originalPlan? := originalPlanForTree state.source child childLayoutFacts?
     let emitOriginal := originalPlan?.isSome
-    let state :=
-      if emitOriginal || OriginalTree.startsWithEmission child then
-        state
-      else
-        state.preserveBlankBoundaryBefore child
     let childContext := state.context.push segment index
     let childSegment := LineBreakRules.Segment.ofTree child
     let childPlan := LayoutPlan.resolve childContext childSegment
@@ -2413,7 +2438,25 @@ mutual
     let scope := ChildRenderScope.capture state
     let childBase :=
       if inheritsBase then
-        { column := state.segmentBaseColumn, indentation := state.segmentIndentation }
+        match state.pendingIndent? with
+        | some pendingIndent =>
+            if childPlan.roundsUpBase then
+              let indentation :=
+                max state.segmentIndentation (indentationLevelForColumn pendingIndent)
+              {
+                column :=
+                  if indentation == state.segmentIndentation then
+                    state.segmentBaseColumn
+                  else
+                    indentation * indentationSpaces
+                indentation
+              }
+            else
+              {
+                column := state.segmentBaseColumn, indentation := state.segmentIndentation
+              }
+        | none =>
+            { column := state.segmentBaseColumn, indentation := state.segmentIndentation }
       else
         state.segmentStartBaseFor childSegment
     let layoutAnchor :=
@@ -2571,28 +2614,6 @@ mutual
     else
       renderSegment state (segment.slice start stop)
 
-  partial def renderSegmentWithSourceBreaks
-      (state : RenderState) (segment : LineBreakRules.Segment) (breaks : List SourceBreak)
-      : RenderState :=
-    let layout : SourceBreakLayout := { segment, breaks }
-    let rec loop (state : RenderState) (index : Nat) : RenderState :=
-      if index < segment.stop then
-        match segment.child? index with
-        | none => loop state (index + 1)
-        | some child =>
-            let state :=
-              match layout.breakAt? index with
-              | some sourceBreak =>
-                  state.withPendingIndent sourceBreak.indent
-              | none => state
-            loop
-              (renderNestedSegment state segment index child
-                (some (layout.nextBreakIndex index)))
-              (index + 1)
-      else
-        state
-    loop state segment.start
-
   partial def renderFlowSegmentWithSourceBreaks?
       (state : RenderState) (segment : LineBreakRules.Segment) (breaks : List SourceBreak)
       : Option RenderState :=
@@ -2619,16 +2640,6 @@ mutual
       else
         some state
     loop state segment.start
-
-  partial def renderSegmentWithSourceBreaksIfFits?
-      (state : RenderState) (segment : LineBreakRules.Segment)
-      (sourceBreaks : List SourceBreak)
-      : Option RenderState :=
-    let candidate := renderSegmentWithSourceBreaks state segment sourceBreaks
-    if renderedCandidateFits state candidate then
-      some candidate
-    else
-      none
 
   partial def renderFlowSegment
       (state : RenderState) (segment : LineBreakRules.Segment)
@@ -2682,7 +2693,8 @@ mutual
       state
     else
       match flow.segment.child? index with
-      | none => renderFlowChildren state flow (index + 1) breakAfterPreviousChild
+      | none =>
+          renderFlowChildren state flow (index + 1) breakAfterPreviousChild
       | some child =>
           let state :=
             if index + 1 == flow.segment.stop
@@ -2701,7 +2713,7 @@ mutual
             flow.plan.keepsPrefixWithChildFirstLine index
           let childFirstLineFits :=
             if keepsPrefixWithChildFirstLine then
-              flow.childFirstLineFits state index childContext child
+              flow.childLeadingOwnedPieceFits state index childContext child
             else
               false
           let childStartsWithLineBreakingComment :=
@@ -2941,7 +2953,8 @@ def renderModuleTree (moduleTree : SyntaxTree.Module) (options : Options := {})
         options, source := moduleTree.source, sourceMap, layoutFacts? := some layoutFacts
       }
       (LineBreakRules.Segment.ofTree moduleTree.tree)
-  SpaceRules.normalizeFinalNewline (state.output ++ state.finalTrivia)
+  SpaceRules.normalizeFinalNewline
+  <| SpaceRules.stripTrailingWhitespace (state.output ++ state.finalTrivia)
 
 def renderModuleTreeWithTrace (moduleTree : SyntaxTree.Module) (options : Options := {})
     : String × String :=
@@ -2957,7 +2970,9 @@ def renderModuleTreeWithTrace (moduleTree : SyntaxTree.Module) (options : Option
         trace := { enabled := true }
       }
       (LineBreakRules.Segment.ofTree moduleTree.tree)
-  let formatted := SpaceRules.normalizeFinalNewline (state.output ++ state.finalTrivia)
+  let formatted :=
+    SpaceRules.normalizeFinalNewline
+    <| SpaceRules.stripTrailingWhitespace (state.output ++ state.finalTrivia)
   (formatted, state.trace.formatWithOutput formatted)
 
 end Formatter

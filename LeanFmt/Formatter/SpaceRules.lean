@@ -537,8 +537,8 @@ def preservesTightInterpolationSpacing (left right : SyntaxTree.Token) : Bool :=
   || (left.lexeme != "{" && left.lexeme.endsWith "{")
   || (right.lexeme != "}" && right.lexeme.startsWith "}")
 
-def preservesTightQuotedNameSpacing (left right : SyntaxTree.Token) : Bool :=
-  left.lexeme == "`" && right.lexeme == "`"
+def preservesTightQuotedNameSpacing (left _right : SyntaxTree.Token) : Bool :=
+  left.lexeme == "`"
 
 def spaceBetweenTokens (left right : SyntaxTree.Token) : String :=
   if left.lexeme.isEmpty || right.lexeme.isEmpty then
@@ -556,6 +556,7 @@ def spaceBetweenTokens (left right : SyntaxTree.Token) : String :=
 
 def interTokenWhitespace
     (source : String) (left right : SyntaxTree.Token) (preserveLines : Bool := true)
+    (normalizeAdjacent : Bool := false)
     : String :=
   let trivia := SyntaxTree.sourceText source left.span.stop right.span.start
   if hasCommentStart trivia then
@@ -569,7 +570,7 @@ def interTokenWhitespace
   else if preserveLines && hasLineStructure trivia then
     cleanTrivia trivia
   else if trivia.isEmpty then
-    ""
+    if normalizeAdjacent then spaceBetweenTokens left right else ""
   else if left.lexeme == "." && hasOnlyHorizontalTrivia trivia then
     " "
   else if preservesSourceSpaceBeforeClosingToken left right then

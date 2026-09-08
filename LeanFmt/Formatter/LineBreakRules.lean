@@ -164,6 +164,10 @@ def defaultInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   || (segment.rawKind? == some `null
       && (context.parentRawKind? == some `Lean.Parser.Term.doReturn
           || context.parentRawKind? == some `Lean.Parser.Term.termReturn))
+  || ((segment.rawKind? == some `Lean.Parser.Command.openSimple
+        || segment.rawKind? == some `Lean.Parser.Command.openScoped
+        || segment.rawKind? == some `Lean.Parser.Command.openOnly)
+      && context.parentRawKind? == some `Lean.Parser.Command.open)
 
 def parentIsSignatureParameters (context : RuleContext) : Bool :=
   match context.ancestors with
@@ -921,6 +925,7 @@ def spacedApplicationOwnsNestedBase : List Frame -> Bool
 def nullInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   defaultInheritBase context segment
   || singletonDelimitedItemWrapper context segment
+  || openIdentifierList context
   || (segment.singleChild?.any
         fun (_, child) =>
           treeIsRawKind child `Lean.Elab.ConfigEval.configEntries)
@@ -1381,7 +1386,6 @@ def matrixNotationRule : LineBreakRule :=
               match segment.child? index with
               | some (.node (.proofBody false) _) => true
               | _ => false
-    flow := fun _ _ => true
     inheritBase := fun _ segment => 1 < delimitedItemCount segment
     roundUpBaseIndentation := true
     breakPoints := fun _ segment => delimitedCollectionBreaks segment
@@ -1461,6 +1465,10 @@ def typeAscriptionBreaks (_context : RuleContext) (segment : Segment) : List Bre
       | some breakPoint => [breakPoint]
       | none => []
   | none => []
+
+def typeAscriptionValueStartsAt (segment : Segment) (index : Nat) : Bool :=
+  (segment.indexes.find? fun candidate => childStartsWithLexeme segment candidate ":").any
+    fun colonIndex => index == colonIndex + 1
 
 def namedArgumentBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   [boundaryBreak? segment 3 1, boundaryBreak? segment 4 0].filterMap id
@@ -2123,6 +2131,22 @@ def attachedBodyIndentLevels (context : RuleContext) : Nat :=
   else
     1
 
+def annotatedTacticAttachedBodyShape (segment : Segment) : Bool :=
+  segment.size == 2
+  && (segment.child? segment.start).any
+      (SyntaxTree.Tree.containsNodeKind .parserOwnedHeader)
+  && (segment.child? (segment.start + 1)).any
+      fun
+      | .node .parserOwnedTacticBody _ => true
+      | _ => false
+
+def byTacticHasDirectAnnotatedBody (segment : Segment) : Bool :=
+  (segment.child? (segment.start + 1)).any
+    fun
+    | tree@(.node .tacticAttachedProof _) =>
+        annotatedTacticAttachedBodyShape (Segment.ofTree tree)
+    | _ => false
+
 def byTacticBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   [breakAfterLexeme? segment "by" (attachedBodyIndentLevels context)].filterMap id
 
@@ -2387,6 +2411,11 @@ def letRule : LineBreakRule :=
           .preferred
         else
           .required
+    inheritBase :=
+      fun context segment =>
+        defaultInheritBase context segment
+        || (segment.rawKind? == some `Lean.Parser.Term.letI
+            && parentIsRawKind context `Lean.Parser.Term.paren)
     breakPoints := letBreaks
   }
 
@@ -2443,6 +2472,13 @@ def byTacticRule : LineBreakRule :=
       fun context _ =>
         parentIsRawKind context `Lean.Parser.Term.basicFun
         || attachedBodyFollowsDelimiter context ";"
+    flow := fun _ segment => byTacticHasDirectAnnotatedBody segment
+    formatOriginalChildLeadingBoundary :=
+      fun _ segment index =>
+        byTacticHasDirectAnnotatedBody segment && index == segment.start + 1
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index =>
+        byTacticHasDirectAnnotatedBody segment && index == segment.start + 1
     inheritBase := fun _ _ => true
     breakPoints := byTacticBreaks
   }
@@ -2845,6 +2881,11 @@ def structureUpdateRule : LineBreakRule :=
 def typeAscriptionRule : LineBreakRule :=
   {
     name := "typeAscription"
+    formatOriginalChildLeadingBoundary :=
+      fun _ segment index => typeAscriptionValueStartsAt segment index
+    keepPrefixWithChildFirstLine :=
+      fun _ segment index => typeAscriptionValueStartsAt segment index
+    flow := fun _ _ => true
     liftsTailIndentation := fun _ _ => true
     breakPoints := typeAscriptionBreaks
   }
@@ -2882,17 +2923,19 @@ def setBuilderRule : LineBreakRule :=
     breakPoints := setBuilderBreaks
   }
 
-def indexedNotationBreaks (_context : RuleContext) (segment : Segment)
-    : List BreakPoint :=
+def indexedNotationBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
+  let indentLevels :=
+    if context.ancestors.head?.any frameWrapsDelimitedSelectedChild then 1 else 0
   match segment.parent, nonemptyChildIndexes segment with
   | .node (.indexedInfix _) _, [_, operatorIndex, _, _, _] =>
-      [boundaryBreak? segment operatorIndex 0].filterMap id
+      [boundaryBreak? segment operatorIndex indentLevels].filterMap id
   | _, _ => []
 
 def indexedNotationRule : LineBreakRule :=
   {
     name := "indexedNotation"
     useExistingBreaks := fun _ _ => true
+    inheritBase := fun _ _ => true
     liftsTailIndentation := fun _ _ => true
     breakPoints := indexedNotationBreaks
   }
@@ -3176,16 +3219,17 @@ def quantifierBodyIndex? (segment : Segment) : Option Nat :=
   | none => contentIndexes.getLast?
 
 def quantifierBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
-  match quantifierBodyIndex? segment with
-  | some bodyIndex =>
-      let bodyIsSameQuantifier :=
-        match segment.parent, segment.child? bodyIndex with
-        | .node (.raw kind) _, some (.node (.raw childKind) _) => childKind == kind
-        | _, _ => false
-      match boundaryBreak? segment bodyIndex (if bodyIsSameQuantifier then 0 else 1) with
-      | some breakPoint => [breakPoint]
-      | none => []
-  | none => []
+  let bodyBreaks :=
+    match quantifierBodyIndex? segment with
+    | some bodyIndex =>
+        let bodyIsSameQuantifier :=
+          match segment.parent, segment.child? bodyIndex with
+          | .node (.raw kind) _, some (.node (.raw childKind) _) => childKind == kind
+          | _, _ => false
+        [boundaryBreak? segment bodyIndex (if bodyIsSameQuantifier then 0 else 1)]
+        |>.filterMap id
+    | none => []
+  bodyBreaks ++ [breakAfterLexeme? segment ".." 1].filterMap id
 
 def basicFunBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   if attachedBodyStart segment 3 then
@@ -3370,8 +3414,19 @@ def framesContainLogicalContext : List Frame → Bool
 def arrowInfixLogicalContext (context : RuleContext) : Bool :=
   framesContainLogicalContext context.ancestors
 
+def multiplicativeInfixSegment (segment : Segment) : Bool :=
+  let operators :=
+    segment.parentIndexes.filterMap
+      fun index =>
+        if index % 2 == 1 then
+          (segment.parentChild? index >>= SyntaxTree.Tree.singleToken?).map (·.lexeme)
+        else
+          none
+  !operators.isEmpty && operators.all (· == "*")
+
 def infixFlow (context : RuleContext) (segment : Segment) : Bool :=
   lowPriorityInfixAllRhsCanFlow segment
+  || multiplicativeInfixSegment segment
   || (arrowInfixSegment segment && !arrowInfixLogicalContext context)
 
 def infixAlternativeSequence (context : RuleContext) (segment : Segment) : Bool :=
@@ -3742,14 +3797,26 @@ def suffixGroupRule : LineBreakRule :=
 def tacticAssignmentProofRule : LineBreakRule :=
   { suffixGroupRule with name := "tacticAssignmentProof", flow := fun _ _ => false }
 
+def tacticAttachedProofBreaks (context : RuleContext) (segment : Segment)
+    : List BreakPoint :=
+  if annotatedTacticAttachedBodyShape segment then
+    [boundaryBreak? segment 1 1].filterMap id
+  else
+    suffixGroupBreaks context segment
+
 def tacticAttachedProofRule : LineBreakRule :=
   {
     suffixGroupRule with
       name := "tacticAttachedProof"
       mandatory := fun _ _ => false
       flow := fun _ _ => true
-      inheritBase := fun _ _ => false
+      inheritBase := fun _ segment => annotatedTacticAttachedBodyShape segment
       roundUpBaseIndentation := true
+      keepPrefixWithChildFirstLine :=
+        fun context segment index =>
+          !annotatedTacticAttachedBodyShape segment
+          && suffixGroupChildFirstLineStaysAttached context segment index
+      breakPoints := tacticAttachedProofBreaks
   }
 
 def namedDiscriminantRule : LineBreakRule :=
@@ -4338,7 +4405,10 @@ def isGeneratedMathlibCrossRefKind (kind : Lean.SyntaxNodeKind) : Bool :=
     fun suffix => name.endsWith suffix
 
 def delimitedRuleFor (tree : SyntaxTree.Tree) : SyntaxTree.DelimiterKind -> LineBreakRule
-  | .paren => parenRule
+  | .paren =>
+      match tree with
+      | .node (.delimitedCollection _) _ => tupleRule
+      | _ => parenRule
   | .bracket => if treeContainsLexeme ";" tree then matrixNotationRule else arrayRule
   | .brace => bracedTermRule
   | .anonymousConstructor => anonymousCtorRule
