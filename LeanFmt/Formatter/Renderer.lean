@@ -131,6 +131,7 @@ def treeFirstSourceLineWidth? (source : String) (tree : SyntaxTree.Tree)
 rendering can reuse classification results without moving syntax policy into the renderer. -/
 structure TreeLayoutSummary where
   originalPlan? : Option OriginalTree.IslandPlan := none
+  startsWithUnbreakableOriginalFirstLine : Bool := false
   containsMultilineOriginalEmission : Bool := false
   containsCommentForcedBreak : Bool := false
   containsLineCommentForcedBreak : Bool := false
@@ -218,6 +219,17 @@ partial def ofTree (source : String) (tree : SyntaxTree.Tree) : TreeLayoutFacts 
       let lastToken? := childFacts.findSomeRev? fun child => child.summary.lastToken?
       let boundaries := childFacts.foldl (BoundaryFold.push source) {}
       let originalPlan? := OriginalTree.plan? tree
+      let startsWithUnbreakableOriginalFirstLine :=
+        match originalPlan? with
+        | some plan => plan.policy.firstLine == .unbreakable
+        | none =>
+            (childFacts.findSome?
+              fun child =>
+                if child.summary.firstToken?.isSome then
+                  some child.summary.startsWithUnbreakableOriginalFirstLine
+                else
+                  none).getD
+              false
       let containsMultilineOriginalEmission :=
         match originalPlan? with
         | some plan =>
@@ -232,6 +244,7 @@ partial def ofTree (source : String) (tree : SyntaxTree.Tree) : TreeLayoutFacts 
       .node
         {
           originalPlan?
+          startsWithUnbreakableOriginalFirstLine
           containsMultilineOriginalEmission
           containsCommentForcedBreak := boundaries.containsCommentForcedBreak
           containsLineCommentForcedBreak := boundaries.containsLineCommentForcedBreak
@@ -1951,6 +1964,21 @@ def FlowRenderContext.withBreak
       entryBaseColumn entryIndentation breakPoint
   state.withRuleBreakIndent base.column base.indentation breakPoint
 
+def FlowRenderContext.childSourceFirstLineFitsAfterBreak
+    (flow : FlowRenderContext) (state : RenderState) (index : Nat)
+    (child : SyntaxTree.Tree)
+    : Bool :=
+  let brokenState :=
+    match flow.breakAt? index with
+    | some breakPoint => flow.withBreak state breakPoint
+    | none => state.withPendingIndent (state.segmentBaseIndent + indentationSpaces)
+  let probe := flow.stateForChildFit brokenState index child
+  match treeFirstSourceLineWidth? probe.source child with
+  | some firstLineWidth =>
+      probe.currentColumn + firstLineWidth + probe.lineFitSuffixWidth
+      <= probe.options.lineWidth
+  | none => false
+
 def FlowRenderContext.stateForForcedNestedChild?
     (flow : FlowRenderContext) (state : RenderState) (index : Nat)
     (child : SyntaxTree.Tree)
@@ -2696,11 +2724,19 @@ mutual
             ⟨fun _ =>
               flow.measureChild state index childContext childSegment
                 (index == flow.segment.start)⟩
+          let childStartsWithUnbreakableOriginalFirstLine :=
+            (state.layoutFacts? >>= (·.child? index)).any
+              (·.summary.startsWithUnbreakableOriginalFirstLine)
+          let childFirstLineCannotFitAfterBreak :=
+            (flow.breakAt? index).isNone
+            && childStartsWithUnbreakableOriginalFirstLine
+            && !flow.childSourceFirstLineFitsAfterBreak state index child
           let keepPrefixWithChildFirstLine :=
             (keepsPrefixWithChildFirstLine
               && !childStartsWithLineBreakingComment
               && (childIsDelimiterCloser
                   || childFirstLineFits
+                  || childFirstLineCannotFitAfterBreak
                   || flow.childSourceFirstLineFitsAfterPrefix state index child))
             || (!childIsDelimiterCloser
                 && childStartsWithLineBreakingComment

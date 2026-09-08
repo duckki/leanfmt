@@ -1585,6 +1585,35 @@ def regroupSignatureParameters : Tree → Tree
   | .node (.raw `null) children => .node .signatureParameters children
   | tree => tree
 
+private def regroupSignatureOnlyDeclarationChildren? (children : Array Tree)
+    : Option (Array Tree) := do
+  let declarationIndexes :=
+    (List.range children.size).filter
+      fun index =>
+        match children[index]? with
+        | some child =>
+            child.firstToken?.isSome
+            && rawKind? child != some `Lean.Parser.Command.declModifiers
+        | none => false
+  let [keywordIndex, identifierIndex, signatureIndex] := declarationIndexes | none
+  let keyword ← children[keywordIndex]?
+  let identifier ← children[identifierIndex]?
+  let signature ← children[signatureIndex]?
+  let _ ← directLeafAtomToken? keyword
+  if rawKind? identifier != some `Lean.Parser.Command.declId then
+    none
+  let .node (.raw signatureKind) signatureChildren := signature | none
+  if signatureKind != `Lean.Parser.Command.declSig
+      && signatureKind != `Lean.Parser.Command.optDeclSig then
+    none
+  let #[_, _] := signatureChildren | none
+  let header :=
+    .node .declarationHeader #[.node .suffixGroup #[keyword, identifier], signature]
+  some
+  <| children.set! keywordIndex header
+      |>.set! identifierIndex .missing
+      |>.set! signatureIndex .missing
+
 def flattenDeclarationIdentifierChild : Tree → Array Tree
   | .node (.raw `Lean.Parser.Command.optDeclSig) children
   | .node (.raw `Lean.Parser.Command.declSig) children =>
@@ -2142,6 +2171,24 @@ private def tacticEndsWithDetachedBodySuffix (parserLayout : ParserLayout.Facts)
           || (isCoreTacticKindName (toString kind) && token.lexeme == "=>")
   | _ => false
 
+private def splitLeadingDetachedTacticBodySuffix?
+    (parserLayout : ParserLayout.Facts) (kind : NodeKind) (body : Tree)
+    : Option (Tree × Tree) := do
+  let .tactic rawKind _ _ _ _ := kind | none
+  if Tree.isTacticSequenceKind rawKind then
+    none
+  let (suffix, body) ←
+    splitLeadingToken?
+      (fun token =>
+        ((parserLayout.ownedBody? rawKind).any
+          fun policy => policy.suffixes.contains token.lexeme)
+        || (isCoreTacticKindName (toString rawKind) && token.lexeme == "=>"))
+      body
+  if hasContentToken body then
+    some (suffix, body)
+  else
+    none
+
 private partial def splitTrailingOwnedSuffix? (suffixes : List String)
     : Tree → Option (Tree × Tree)
   | tree@(.leaf token) =>
@@ -2179,6 +2226,9 @@ private def regroupDirectParserOwnedTacticBody?
   if !body.isTacticSequenceTree then
     none
   let header := .node kind (children.set! bodyIndex .missing)
+  if let some (suffix, body) :=
+      splitLeadingDetachedTacticBodySuffix? parserLayout kind body then
+    return Tree.attachDetachedParserOwnedBody header suffix body
   if let some (header, suffix) := splitDetachedParserOwnedSuffix? parserLayout header then
     return Tree.attachDetachedParserOwnedBody header suffix body
   if !tacticEndsWithDetachedBodySuffix parserLayout header then
@@ -3847,7 +3897,11 @@ def regroupRawNode
             else
               match regroupDefinitionChildren children with
               | some definitionChildren => .node .definition definitionChildren
-              | none => regroupOtherRawNode kind children
+              | none =>
+                  (regroupSignatureOnlyDeclarationChildren? children).map
+                      (.node (.raw kind) ·)
+                    |>.getD
+                  <| regroupOtherRawNode kind children
 
 private partial def regroupTreeWithPrecedencesInContext
     (parserLayout : ParserLayout.Facts)

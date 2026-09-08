@@ -4931,7 +4931,6 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Mathlib.GuardExceptions.parseCmd) _ => some defaultRule
   | .node (.raw `transImportsStx) _ => some defaultRule
   | .node (.raw `commandUnsuppress_compilationIn_) _ => some commandInChainRule
-  | .node (.raw `proof_wanted) _ => some defaultRule
   | .node (.raw `antiquotNestedExpr) _ => some defaultRule
   | .node (.raw `Lean.Parser.«command__Dsimproc__[_]_(_):=_») _ =>
       some defaultRule

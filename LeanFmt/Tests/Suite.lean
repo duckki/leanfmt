@@ -7498,6 +7498,36 @@ def assertLowPriorityPipeKeepsStructurallyRenderedOperand (env : Lean.Environmen
       "low-priority-pipe-show-proof-formatted.lean" { lineWidth := 60 }
   assertEq "a detached show proof is idempotent" showProofResult.formatted showProofAgain
 
+  let overlongShowSource :=
+    "def pipeShowCycle :=\n"
+    ++ "  outer\n"
+    ++ "  <| rewriteProof\n"
+    ++ "      ▸ (inner\n"
+    ++ "          <|\n"
+    ++ "            show firstVeryLongExpressionName = secondVeryLongExpressionName by proof\n"
+    ++ "            ▸ result)\n"
+  let overlongShowExpected :=
+    "def pipeShowCycle :=\n"
+    ++ "  outer\n"
+    ++ "  <| rewriteProof\n"
+    ++ "      ▸ (inner\n"
+    ++ "          <| show firstVeryLongExpressionName = secondVeryLongExpressionName by proof\n"
+    ++ "            ▸ result)\n"
+  let overlongShowResult ←
+    Formatter.formatSourceWithEnvDetailed env overlongShowSource
+      "low-priority-pipe-overlong-show-proof.lean" { lineWidth := 60 }
+  assertTrue "an overlong pipe show proof does not cycle" (!overlongShowResult.fellBack)
+  assertEq "a no-benefit break does not detach an overlong show proof from its pipe"
+    overlongShowExpected overlongShowResult.formatted
+  assertTrue "an overlong pipe show proof preserves code"
+    (← codePreservedIgnoringWhitespace env overlongShowSource
+        overlongShowResult.formatted)
+  let overlongShowAgain ←
+    Formatter.formatSourceWithEnv env overlongShowResult.formatted
+      "low-priority-pipe-overlong-show-proof-formatted.lean" { lineWidth := 60 }
+  assertEq "an overlong pipe show proof is idempotent"
+    overlongShowResult.formatted overlongShowAgain
+
   let byProofSource :=
     "theorem pipeByProof (hb : True → True) : True :=\n"
     ++ "  fun e ↦ hb <| by\n"
@@ -8157,6 +8187,28 @@ def assertExtensionDeclarationParametersUseCommandBase (_env : Lean.Environment)
       "extension-declaration-parameter-command-base-formatted.lean" { lineWidth := 72 }
   assertEq "extension declaration parameter command bases are idempotent"
     result.formatted formattedAgain
+
+  let signatureOnlySource :=
+    "project_signature declarationNameLongEnoughToForceAParameterContinuation\n"
+    ++ "                           (first : Nat) (second : Nat) : first = first\n"
+  let signatureOnlyExpected :=
+    "project_signature declarationNameLongEnoughToForceAParameterContinuation\n"
+    ++ "    (first : Nat) (second : Nat) : first = first\n"
+  let signatureOnlyResult ←
+    Formatter.formatSourceWithEnvDetailed env signatureOnlySource
+      "extension-signature-command-base.lean" { lineWidth := 72 }
+  assertTrue "signature-only extension command bases do not fall back"
+    (!signatureOnlyResult.fellBack)
+  assertEq "signature-only extension commands use the declaration base"
+    signatureOnlyExpected signatureOnlyResult.formatted
+  assertTrue "signature-only extension command bases preserve code"
+    (← codePreservedIgnoringWhitespace env signatureOnlySource
+        signatureOnlyResult.formatted)
+  let signatureOnlyAgain ←
+    Formatter.formatSourceWithEnv env signatureOnlyResult.formatted
+      "extension-signature-command-base-formatted.lean" { lineWidth := 72 }
+  assertEq "signature-only extension command bases are idempotent"
+    signatureOnlyResult.formatted signatureOnlyAgain
 
 def assertDefinitionSourceBreakAfterAssignOverridesFlat (env : Lean.Environment)
     : IO Unit := do
@@ -10878,6 +10930,30 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
       "detached-tactic-alternative-bodies-formatted.lean"
   assertEq "detached tactic alternative formatting is idempotent"
     detachedAlternativeBodiesResult.formatted detachedAlternativeBodiesAgain
+
+  let inlineAlternativeBodySource :=
+    "theorem inlineCaseArrow (h : True) : True := by\n"
+    ++ "  case mp => cases h with | intro => exact True.intro\n"
+  let inlineAlternativeBodyExpected :=
+    "theorem inlineCaseArrow (h : True) : True := by\n"
+    ++ "  case mp =>\n"
+    ++ "    cases h with\n"
+    ++ "    | intro => exact True.intro\n"
+  let inlineAlternativeBodyResult ←
+    Formatter.formatSourceWithEnvDetailed env inlineAlternativeBodySource
+      "inline-tactic-alternative-body.lean" { lineWidth := 60 }
+  assertTrue "an inline tactic alternative body does not fall back"
+    (!inlineAlternativeBodyResult.fellBack)
+  assertEq "a tactic alternative arrow remains with its header"
+    inlineAlternativeBodyExpected inlineAlternativeBodyResult.formatted
+  assertTrue "inline tactic alternative formatting preserves code"
+    (← codePreservedIgnoringWhitespace env inlineAlternativeBodySource
+        inlineAlternativeBodyResult.formatted)
+  let inlineAlternativeBodyAgain ←
+    Formatter.formatSourceWithEnv env inlineAlternativeBodyResult.formatted
+      "inline-tactic-alternative-body-formatted.lean" { lineWidth := 60 }
+  assertEq "inline tactic alternative formatting is idempotent"
+    inlineAlternativeBodyResult.formatted inlineAlternativeBodyAgain
 
   let detachedParserOwnedBodySource :=
     "theorem detachedParserOwnedBody : True := by\n"
@@ -16328,7 +16404,6 @@ def assertMathlibLowRiskSyntaxKindsHaveRules : IO Unit := do
       `SimplexCategory.Truncated.mkNotation,
       `TopCat.Presheaf.attrSheaf_restrict,
       `TopCat.Presheaf.attrSheaf_restrict_1,
-      `proof_wanted,
       `BigOperators.bigexpect,
       `Std.termF!_,
       `antiquotNestedExpr,

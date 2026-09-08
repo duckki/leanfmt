@@ -37,6 +37,8 @@ syntax (name := projectOptionalTermCommand) "#project_optional " ident (term)? :
 syntax (name := projectWhereTermCommand) "#project_where " ident " where " term : command
 syntax (name := projectLemma) (priority := default + 1) declModifiers
   group("project_lemma " declId ppIndent(declSig) declVal) : command
+syntax (name := projectSignatureOnlyDeclaration)
+  "project_signature " declId ppIndent(declSig) : command
 elab (name := projectNoteCommand) "#project_note " (docComment)? : command =>
   pure ()
 
