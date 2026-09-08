@@ -13682,6 +13682,8 @@ def assertBangApplicationDiagnostics (env : Lean.Environment) : IO Unit := do
 def assertCliParsing : IO Unit := do
   assertTextContains "CLI help documents exception checks" LeanFmt.Cli.usage
     "--check-exception"
+  assertTextContains "CLI help documents missing-rule checks" LeanFmt.Cli.usage
+    "--check-missing-rules"
   assertTextContains "CLI help documents import-prefix cache control"
     LeanFmt.Cli.usage "--env-cache-size"
   assertTextContains "CLI help documents import-first environment control"
@@ -13741,6 +13743,16 @@ def assertCliParsing : IO Unit := do
       throw
       <| IO.userError
           s!"CLI parser should accept --check-exception and files: {repr result}"
+  match LeanFmt.Cli.parseArgs ["--check-missing-rules", "GraphQL.lean"] with
+  | .run options =>
+      assertTrue "CLI missing-rule check flag" options.checkMissingRules
+      assertTrue "CLI missing-rule check does not imply no-write check" (!options.check)
+      assertTrue "CLI missing-rule check file order"
+        (options.files.map toString == ["GraphQL.lean"])
+  | result =>
+      throw
+      <| IO.userError
+          s!"CLI parser should accept --check-missing-rules and files: {repr result}"
   match LeanFmt.Cli.parseArgs ["--check-idempotent", "GraphQL.lean"] with
   | .run options =>
       assertTrue "CLI idempotence check flag" options.checkIdempotent
@@ -13752,11 +13764,20 @@ def assertCliParsing : IO Unit := do
       <| IO.userError
           s!"CLI parser should accept --check-idempotent and files: {repr result}"
   match LeanFmt.Cli.parseArgs
-          ["--check", "--check-exception", "--check-idempotent", "GraphQL.lean"] with
+          [
+            "--check",
+            "--check-exception",
+            "--check-missing-rules",
+            "--check-idempotent",
+            "GraphQL.lean"
+          ] with
   | .run options =>
       assertTrue "CLI combined check flag" options.check
       assertTrue "CLI combined exception flag" options.checkException
+      assertTrue "CLI combined missing-rule flag" options.checkMissingRules
       assertTrue "CLI combined idempotence flag" options.checkIdempotent
+      assertTrue "worker receives missing-rule flag"
+        ((options.workerArgs .exact options.files).contains "--check-missing-rules")
   | result =>
       throw
       <| IO.userError s!"CLI parser should accept combined check flags: {repr result}"
@@ -14931,6 +14952,11 @@ def assertCliChecksStillFormatUnlessCheck
     LeanFmt.Driver.summarizeOutcomes { check := true } [{ changed := true }]
   assertTrue "CLI ordinary --check still fails on formatting changes"
     (ordinaryCheckExitCode == 1)
+  let missingRuleCheckExitCode ←
+    LeanFmt.Driver.summarizeOutcomes
+      { check := true, checkMissingRules := true } [{ changed := true }]
+  assertTrue "CLI missing-rule --check ignores formatting changes"
+    (missingRuleCheckExitCode == 0)
 
 def assertCliFormatsDirectory
     (env : Lean.Environment) (loader : LeanFmt.Driver.EnvironmentLoader)
@@ -16660,14 +16686,25 @@ def assertMissingRuleCheckUsesDispatch (env projectSyntaxEnv : Lean.Environment)
         customNonTermTree).isEmpty)
   let moduleTree : SyntaxTree.Module :=
     { source, rawSyntax := .missing, tree := sourceTree, tokens := sourceTree.tokens }
-  let exceptions := Formatter.Diagnostics.formattingExceptions moduleTree moduleTree
-  assertTrue "exception check includes missing rules"
-    (exceptions.any
+  let safetyExceptions :=
+    Formatter.Diagnostics.formattingSafetyExceptions moduleTree moduleTree
+  assertTrue "safety checks omit missing rules"
+    (!(safetyExceptions.any
+        fun exception =>
+          match exception with
+          | .missingRule _ => true
+          | _ => false))
+  let missingRuleExceptions := Formatter.Diagnostics.missingRuleExceptions moduleTree
+  assertTrue "missing-rule checks include unknown syntax"
+    (missingRuleExceptions.any
       fun exception =>
         match exception with
         | .missingRule occurrence =>
             occurrence.kind == "Lean.Parser.Term.syntheticUnknownForTest"
         | _ => false)
+  let exceptions := Formatter.Diagnostics.formattingExceptions moduleTree moduleTree
+  assertTrue "combined diagnostics include missing rules"
+    (exceptions == safetyExceptions ++ missingRuleExceptions)
   assertTrue "registered Lean formatter is identified"
     (Formatter.Diagnostics.leanFormatterAvailability env (some `Lean.Parser.Term.app)
       == .registered)

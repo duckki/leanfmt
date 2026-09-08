@@ -46,10 +46,12 @@ def usage : String :=
       "  --import-env-first",
       "            Import the source header environment before trying default parsing.",
       "  --check-exception",
-      "            Check code preservation, remaining overflow, and missing rules.",
+      "            Check code preservation and remaining overflow.",
+      "  --check-missing-rules",
+      "            Fail when syntax nodes have no registered line-break rule.",
       "  --check-idempotent",
       "            Fail if formatting the formatted output changes it again.",
-      "  With either diagnostic option, --check is a dry run; formatting",
+      "  With any diagnostic option, --check is a dry run; formatting",
       "  differences alone do not affect the exit status."
     ]
 
@@ -63,6 +65,8 @@ def parseArgs (args : List String) : ParseResult :=
     | "--check" :: rest => loop { options with check := true } files rest
     | "--check-exception" :: rest =>
         loop { options with checkException := true } files rest
+    | "--check-missing-rules" :: rest =>
+        loop { options with checkMissingRules := true } files rest
     | "--check-idempotent" :: rest =>
         loop { options with checkIdempotent := true } files rest
     | "--profile" :: rest =>

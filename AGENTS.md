@@ -85,9 +85,9 @@ developing, then run the complete sequence before requesting review.
    ```
 
    This invocation writes formatting changes only for files without exceptions.
-   `--check-exception` checks non-whitespace code preservation, actionable line
-   overflow, and missing rule dispatch; `--check-idempotent` performs a second
-   formatting pass. Review `git diff -- LeanFmt` after it runs, including
+   `--check-exception` checks non-whitespace code preservation and actionable line
+   overflow; `--check-idempotent` performs a second formatting pass. Review
+   `git diff -- LeanFmt` after it runs, including
    mechanically generated changes.
 
 4. If fixture or self-formatting output changed Lean sources, rerun `lake build`
@@ -104,8 +104,8 @@ developing, then run the complete sequence before requesting review.
    merely need formatting are reported, while diagnostic exceptions determine
    failure. The final run should report neither formatting drift nor exceptions.
 
-Summarize the build, test, fixture, preservation, overflow, missing-rule, and
-idempotency results for review. Do not commit generated or handwritten changes
+Summarize the build, test, fixture, preservation, overflow, and idempotency results
+for review. Do not commit generated or handwritten changes
 until the reviewer explicitly asks for a commit.
 
 ## Short-term external-validation goal
@@ -148,7 +148,9 @@ For each project the script builds leanfmt, creates a fresh clone under
 and runs one complete build before formatting. It resolves selected sources through
 Lake, builds non-default module targets, reports and skips sources without Lake module
 ownership, and formats staged copies with `--check-exception --check-idempotent`
-under the target project's `lake env`. The project-wide set of native libraries and
+under the target project's `lake env`. The project named `mathlib` additionally uses
+`--check-missing-rules`; other projects may contain unsupported custom syntax. The
+project-wide set of native libraries and
 parser plugins declared by Lake setup files is loaded in Lake's required order.
 After every requested formatter batch succeeds, the validator applies the staged output, builds changed
 modules, and runs one complete project build. A formatter failure leaves project
@@ -175,8 +177,9 @@ Per-batch output and the last batch state are persisted under
 `.scratch/external-validation/logs/PROJECT/`.
 
 Review external changes and diagnostics in the scratch clone. Treat code changes,
-non-idempotence, missing rules, actionable overflow, and either build failure as
-formatter issues to investigate. Convert each issue into a focused internal test
+non-idempotence, actionable overflow, and either build failure as formatter issues
+to investigate. Treat missing rules as required failures only for Mathlib. Convert
+each issue into a focused internal test
 or fixture and a formatter fix; do not make the scratch clone the source of the
 fix. Rerun the affected project until clean, then rerun the explicit CSLib/mathlib
 pair to close the short-term goal.

@@ -53,6 +53,10 @@ formatter diagnostics and idempotency checks, applies the staged output for
 review, and skips every target-project build. Run the ordinary command for the
 full release gate and to establish or refresh the checkpoint baseline.
 
+Missing-rule diagnostics are enabled only for the project explicitly named
+mathlib. Other projects still check preservation, overflow, fallback, and
+idempotency without requiring dedicated rules for their custom syntax.
+
 Set LEANFMT_VALIDATION_LINE_WIDTH=N to pass --line-width N to every formatter
 invocation. For example, validate mathlib at width 100 with:
 
@@ -662,7 +666,12 @@ run_project_validation_batches() {
   local -a selected_files=()
   local -a files=()
   local -a staged_files=()
+  local -a formatter_diagnostic_args=(--check-exception --check-idempotent)
   local file
+
+  if [[ "$project_name" == "mathlib" ]]; then
+    formatter_diagnostic_args+=(--check-missing-rules)
+  fi
 
   if ((${#build_targets[@]} > 0)); then
     build_command+=("${build_targets[@]}")
@@ -847,6 +856,8 @@ run_project_validation_batches() {
     "$([[ -n "$runtime_dynlibs" ]] && printf enabled || printf none)" \
     "$([[ -n "$runtime_plugins" ]] && printf enabled || printf none)"
   printf 'Staged formatter output: %s\n' "$stage_dir"
+  printf 'Missing-rule diagnostics: %s\n' \
+    "$([[ "$project_name" == "mathlib" ]] && printf enabled || printf disabled)"
   if [[ -n "$FORMATTER_WORKER_JOBS" ]]; then
     printf 'Formatter worker jobs override: %d\n' "$FORMATTER_WORKER_JOBS"
   else
@@ -893,7 +904,7 @@ run_project_validation_batches() {
         "Format and check $project_name batch $batch/$total_batches ($file_selector)" \
         run_logged_formatter_file_list "$project_dir" "$list_file" "$log_file" \
           "$formatter" "$runtime_dynlibs" "$runtime_plugins" \
-          --check-exception --check-idempotent; then
+          "${formatter_diagnostic_args[@]}"; then
       :
     else
       formatter_status=$?

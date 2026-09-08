@@ -173,8 +173,9 @@ Lean parser
 
 The formatter preserves code tokens, token order, comments, and protected source
 regions. With `--check-exception --check-idempotent`, CI can also fail on
-unexpected code changes, actionable line overflow, missing formatting rules, or a
-non-idempotent result.
+unexpected code changes, actionable line overflow, or a non-idempotent result.
+Formatter development for first-class syntax can add `--check-missing-rules` to
+fail when a syntax node has no registered line-break rule.
 
 ## Status
 

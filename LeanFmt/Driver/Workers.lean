@@ -111,7 +111,7 @@ def runDiagnosticChecks
     (source formatted : String)
     : IO ExceptionCounts := do
   let exceptions ←
-    if options.checkException then
+    if options.checkException || options.checkMissingRules then
       let normalized := Formatter.Internal.normalizeSource source
       let formattedModule ←
         Formatter.Internal.parseModuleWithEnv env formatted path.toString
@@ -121,8 +121,15 @@ def runDiagnosticChecks
         else
           Formatter.Internal.parseModuleWithEnv env normalized path.toString
       pure
-      <| Formatter.Diagnostics.formattingExceptions sourceModule formattedModule
-          options.formatterOptions
+      <| (if options.checkException then
+            Formatter.Diagnostics.formattingSafetyExceptions
+              sourceModule formattedModule options.formatterOptions
+          else
+            [])
+          ++ if options.checkMissingRules then
+                Formatter.Diagnostics.missingRuleExceptions sourceModule
+              else
+                []
     else
       pure []
   let mut exceptionCounts : ExceptionCounts := {}
@@ -225,6 +232,8 @@ def Options.workerArgs
       args := args.push "--check"
     if options.checkException then
       args := args.push "--check-exception"
+    if options.checkMissingRules then
+      args := args.push "--check-missing-rules"
     if options.checkIdempotent then
       args := args.push "--check-idempotent"
     if options.profile then
@@ -511,7 +520,8 @@ def summarizeOutcomes (options : Options) (outcomes : List FileOutcome) : IO UIn
     outcomes.foldl (fun counts outcome => counts.add outcome.exceptionCounts) {}
   if !exceptionCounts.isEmpty then
     IO.eprintln exceptionCounts.summary
-  let diagnosticMode := options.checkException || options.checkIdempotent
+  let diagnosticMode :=
+    options.checkException || options.checkMissingRules || options.checkIdempotent
   let formattingDifferenceFailed := options.check && !diagnosticMode && changed
   pure <| if failed || formattingDifferenceFailed then 1 else 0
 

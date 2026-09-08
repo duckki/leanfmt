@@ -759,7 +759,7 @@ def overflowShiftedWithUnbreakableLineHead
               && sourceLine.trimAscii == occurrence.text.trimAscii
           | none => false
 
-def formattingExceptions (sourceModule formattedModule : SyntaxTree.Module)
+def formattingSafetyExceptions (sourceModule formattedModule : SyntaxTree.Module)
     (options : Options := {})
     : List FormattingException :=
   let codeExceptions :=
@@ -810,9 +810,16 @@ def formattingExceptions (sourceModule formattedModule : SyntaxTree.Module)
             none
           else
             some <| FormattingException.lineOverflow occurrence
-  let missingRuleExceptions :=
-    (missingRuleOccurrencesForModule sourceModule).map FormattingException.missingRule
-  codeExceptions ++ overflowExceptions ++ missingRuleExceptions
+  codeExceptions ++ overflowExceptions
+
+def missingRuleExceptions (sourceModule : SyntaxTree.Module) : List FormattingException :=
+  (missingRuleOccurrencesForModule sourceModule).map FormattingException.missingRule
+
+def formattingExceptions (sourceModule formattedModule : SyntaxTree.Module)
+    (options : Options := {})
+    : List FormattingException :=
+  formattingSafetyExceptions sourceModule formattedModule options
+  ++ missingRuleExceptions sourceModule
 
 end Diagnostics
 end Formatter

@@ -7,6 +7,7 @@ namespace LeanFmt.Driver
 structure Options where
   check : Bool := false
   checkException : Bool := false
+  checkMissingRules : Bool := false
   checkIdempotent : Bool := false
   profile : Bool := false
   importEnvFirst : Bool := false

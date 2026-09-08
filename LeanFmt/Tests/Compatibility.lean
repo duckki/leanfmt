@@ -39,6 +39,7 @@ private def assertCliParsing : IO Unit := do
           [
             "--check",
             "--check-exception",
+            "--check-missing-rules",
             "--check-idempotent",
             "--jobs",
             "2",
@@ -47,6 +48,7 @@ private def assertCliParsing : IO Unit := do
   | .run options =>
       assertTrue "CLI check flag" options.check
       assertTrue "CLI exception flag" options.checkException
+      assertTrue "CLI missing-rule flag" options.checkMissingRules
       assertTrue "CLI idempotence flag" options.checkIdempotent
       assertTrue "CLI jobs flag" (options.workerJobs? == some 2)
       assertTrue "CLI input file" (options.files.map toString == ["Compatibility.lean"])

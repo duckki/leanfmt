@@ -445,7 +445,7 @@ rule owns the same break between complete identifiers in either shape.
 
 The full dispatch table lives in `LineBreakRules.ruleFor`. If a raw node is not
 recognized, `ruleFor` returns `none`, the renderer uses `defaultRule`, and
-`--check-exception` reports the missing rule. For raw parser kinds, the report also
+`--check-missing-rules` reports the missing rule. For raw parser kinds, the report also
 classifies the same `ParserLayout` metadata source used during regrouping: an explicit
 formatter registration, a generated `ParserDescr` fallback, or neither.
 The missing-rule report intentionally filters unstable implementation-detail kinds such as
@@ -1282,24 +1282,24 @@ Diagnostics are separate from formatting. The compact-bang diagnostic examines t
 and reports ambiguous spellings such as `!f a b`, but it does not rewrite them. The
 diagnostic API lives under `Formatter.Diagnostics`.
 
-Formatter-exception checking is also separate from rendering. It orders source-backed
+Formatter safety checking is also separate from rendering. It orders source-backed
 tokens by their lexeme spans, scans every physical source gap between them for comments,
 then compares the code-token sequence and comment text. Line-comment text and relative
 block-comment whitespace are exact. A uniform indentation shift of a complete multiline
 block comment is normalized against the comment's opening column, allowing the comment
 to move with its owning syntax without allowing internal relative whitespace to change.
 The check does not rely solely on Lean's token-trivia attachment, because comments after
-delimiters may exist only in those source gaps. The check also reports remaining line
-overflow and missing rules with their source location and tree slice. Each missing raw
-syntax kind is also classified by whether Lean provides a registered formatter, only a
-parser-description fallback, or no formatter metadata. The classification comes from the
-same parser-layout adapter used by regrouping; it does not delegate rendering to Lean's
-pretty printer. Non-ignorable missing leanfmt rules remain exceptions regardless of the
-classification. Preservation
-normalization gives every code token and comment boundary one canonical space, so ordinary
-formatting whitespace is ignored without conflating tokenizations such as `ab c` and
-`a bc`. `ruleFor` returning `none` still renders with `defaultRule`, so unknown nodes remain
-conservatively formatable. Generated private parser node names beginning with `_private.`,
+delimiters may exist only in those source gaps. The safety check also reports remaining
+line overflow. The separate opt-in missing-rule check reports source locations and tree
+slices. Each missing raw syntax kind is classified by whether Lean provides a registered
+formatter, only a parser-description fallback, or no formatter metadata. The
+classification comes from the same parser-layout adapter used by regrouping; it does not
+delegate rendering to Lean's pretty printer. Non-ignorable missing leanfmt rules become
+exceptions when that check is enabled. Preservation normalization gives every code token
+and comment boundary one canonical space, so ordinary formatting whitespace is ignored
+without conflating tokenizations such as `ab c` and `a bc`. `ruleFor` returning `none`
+still renders with `defaultRule`, so unknown nodes remain conservatively formatable.
+Generated private parser node names beginning with `_private.`,
 custom term-notation node names such as `termℂ` or `Some.Namespace.termFoo`, token nodes,
 and generated `stx` helper names are ignored by missing-rule reporting because they are
 not stable rule targets. Diagnostic analysis and the exception model live in

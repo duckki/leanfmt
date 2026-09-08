@@ -156,18 +156,22 @@ These options are intended for formatter development, not everyday user formatti
 
 ```sh
 lake exe fmt --check-exception path/to/File.lean
+lake exe fmt --check-missing-rules Mathlib/path/to/File.lean
 lake exe fmt --check-idempotent path/to/File.lean
 lake exe fmt --check --check-exception --check-idempotent --recursive Some/Directory
 ```
 
-`--check-exception` runs the formatter's internal diagnostic bundle:
+`--check-exception` runs the formatter's safety diagnostics:
 
 - compare the code-token sequence before and after formatting while preserving
   comment text exactly and requiring the parsed syntax shape, with source positions
   erased, to remain unchanged;
-- report actionable formatted lines that still exceed the configured width;
-- report syntax nodes that have no registered line-break rule, together with the
-  parser-layout metadata source used by generic regrouping.
+- report actionable formatted lines that still exceed the configured width.
+
+`--check-missing-rules` separately reports syntax nodes that have no registered
+line-break rule, together with the parser-layout metadata source used by generic
+regrouping. External validation enables it only for the project named `mathlib`;
+other downstream projects may rely on custom syntax that is not first-class support.
 
 Overflow inside comments is ignored. A line is also exempt when every column beyond the
 configured width belongs to one indivisible syntax unit, since the renderer has no legal
@@ -176,11 +180,11 @@ atomic syntax elements followed immediately by tokens in the diagnostic's exclud
 line-ender set. The set contains closing delimiters and punctuation such as commas and
 semicolons that may finish a formatted line.
 
-The bundle is designed to accept additional formatter-development checks later. Any
-reported exception makes the command fail. Without `--check`, the formatter still
-writes an available checked candidate so a subsequent build can validate that exact
-output. A format fallback has no candidate and keeps the source unchanged. The
-formatter also processes the remaining files, then prints counts for every exception
+The wider diagnostic set is designed to accept additional formatter-development
+checks later. Any reported exception makes the command fail. Without `--check`, the
+formatter still writes an available checked candidate so a subsequent build can validate
+that exact output. A format fallback has no candidate and keeps the source unchanged.
+The formatter also processes the remaining files, then prints counts for every exception
 kind at the end.
 
 `--check-idempotent` remains separate because changed output requires another complete
@@ -188,7 +192,7 @@ formatting pass. Output that already equals its source is a fixed point and does
 to be recomputed. Non-idempotence is a hard exception and is included in the final
 exception counts.
 
-When `--check` is combined with either diagnostic option, it becomes a dry-run switch:
+When `--check` is combined with any diagnostic option, it becomes a dry-run switch:
 files are not rewritten, but merely needing formatting does not make the command fail.
 The command succeeds when there are no diagnostic exceptions. Without a diagnostic
 option, `--check` retains its ordinary behavior and fails when a file needs formatting.
@@ -373,7 +377,8 @@ Avoid optimizing by moving syntax decisions into the renderer.
 A typical rule change follows this path:
 
 1. Add or inspect a fixture that reproduces the layout problem.
-2. Use `--check-exception` if the syntax may be falling through to `defaultRule`.
+2. Use `--check-missing-rules` if first-class syntax may be falling through to
+   `defaultRule`.
 3. Use `--trace-renderer` to find the segment path and current rule.
 4. If raw parser shape is awkward, add a lossless raw-node decision in
    `SyntaxTree.regroupRawNode`; keep `regroupTree` as the recursive traversal.
@@ -450,7 +455,7 @@ For a real-world smoke test, run the formatter in
 Before asking for review, summarize:
 
 - which rule or renderer behavior changed,
-- whether `--check-exception` passed,
+- whether the requested safety and missing-rule diagnostics passed,
 - whether formatting is idempotent on affected files,
 - which fixtures or unit tests cover the change,
 - any missing-rule exceptions intentionally left unresolved.

@@ -2117,8 +2117,8 @@ immediate child shape:
 This provides conservative wrapping for long custom syntax without pretending to
 understand it. A registered Lean formatter is recorded as useful coverage information,
 but its executable `Std.Format` output is not used unless it can be aligned losslessly
-to source tokens. Formatting developers can use `--check-exception` to identify syntax
-whose parser annotations and structural shape are still insufficient.
+to source tokens. Formatting developers can use `--check-missing-rules` to identify
+first-class syntax whose parser annotations and structural shape are still insufficient.
 
 A generated term node with exactly three present children whose first and last
 children are the same atom is treated as a symmetric delimited term. Its
