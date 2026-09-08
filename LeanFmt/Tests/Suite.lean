@@ -7745,6 +7745,121 @@ def assertExplicitLambdaKeepsPrefixMarker (env : Lean.Environment) : IO Unit := 
       "explicit-lambda-prefix-marker-formatted.lean"
   assertEq "explicit lambda prefix marker is idempotent" result.formatted formattedAgain
 
+def assertResolvedIslandFactsDriveProbes : IO Unit := do
+  let source := "first   second third"
+  let first :=
+    SyntaxTree.Tree.node (.raw `null)
+      #[
+        .leaf (syntheticIdentTokenAt "first" 0 5),
+        .leaf (syntheticIdentTokenAt "second" 8 14)
+      ]
+  let last :=
+    SyntaxTree.Tree.node (.raw `null)
+      #[
+        .leaf (syntheticIdentTokenAt "third" 15 20)
+      ]
+  let tree := SyntaxTree.Tree.node (.raw `null) #[first, last]
+  let segment := Formatter.LineBreakRules.Segment.ofTree tree
+  let facts := Formatter.TreeLayoutFacts.ofTree source tree
+  let selected :=
+    facts.withAlternative source
+      (.structural
+        #[
+          .preserve (Formatter.OriginalTree.planForKind .proof),
+          .unchanged
+        ])
+  let state : Formatter.RenderState :=
+    {
+      source
+      sourceMap := SyntaxTree.SourcePositionMap.ofString source
+      layoutFacts? := some selected
+      options := { lineWidth := 19 }
+    }
+  assertTrue "selected source policy refreshes first-line facts"
+    (selected.summary.startsWithOriginalEmission
+      && selected.summary.startsWithUnbreakableOriginalFirstLine)
+  assertEq "flat emission uses selected source policy" source
+    (Formatter.renderWithoutRuleBreaks state segment).output
+  assertEq "first-line measurement uses selected source policy" source
+    (Formatter.renderFirstLineOfTree state tree).1.output
+  let suffix :=
+    Formatter.measureSuffixOfTree {}
+      { whitespaceState := state.whitespaceState, suffixWidth := 0 } tree
+      (some selected)
+  assertTrue "suffix measurement counts the preserved region before the next argument"
+    (suffix.1.suffixWidth == "first   second".length && suffix.2)
+  assertTrue "fit probes count preserved spaces"
+    (Formatter.probeLayoutWithoutRuleBreaks? state segment).isNone
+  let structural :=
+    selected.withAlternative source
+      (.structural #[.structural #[.unchanged, .unchanged], .unchanged])
+  let structuralState := { state with layoutFacts? := some structural }
+  assertTrue "opening a source region refreshes first-line facts"
+    (!structural.summary.startsWithOriginalEmission
+      && !structural.summary.startsWithUnbreakableOriginalFirstLine)
+  assertEq "structural emission no longer uses the inherited source policy"
+    "first second third"
+    (Formatter.renderWithoutRuleBreaks structuralState segment).output
+  assertTrue "fit probes use the same structural alternative as emission"
+    (Formatter.probeLayoutWithoutRuleBreaks? structuralState segment).isSome
+
+def assertSourceIslandRecoveryPreservesNeighbors (env : Lean.Environment) : IO Unit := do
+  let header :=
+    "theorem selectiveRecovery (t : Nat) : True := by\n"
+    ++ "  induction t with\n"
+    ++ "  | zero => exact True.intro\n"
+    ++ "  | succ t ih =>\n"
+  let source :=
+    header
+    ++ "    intro   z hz\n"
+    ++ "    have neighbor : True :=\n"
+    ++ "      True.intro\n"
+    ++ "    have quoted := `(term| f   x)\n"
+    ++ "    have hstep : (tm.configs cfg (t + 1)).workTapePos i - (tm.configs cfg t).workTapePos i ≤ 10000 := by\n"
+    ++ "      exact   proof\n"
+    ++ "    exact   neighbor\n"
+  let expected :=
+    header
+    ++ "      intro   z hz\n"
+    ++ "      have neighbor : True :=\n"
+    ++ "        True.intro\n"
+    ++ "      have quoted := `(term| f   x)\n"
+    ++ "      have hstep\n"
+    ++ "          : (tm.configs cfg (t + 1)).workTapePos i - (tm.configs cfg t).workTapePos i ≤ 10000 := by\n"
+    ++ "        exact   proof\n"
+    ++ "      exact   neighbor\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "selective-island-recovery.lean" { lineWidth := 100 }
+  assertTrue "selective island recovery does not fall back" (!result.fellBack)
+  assertEq "declaration recovery preserves neighboring and nested source regions"
+    expected result.formatted
+  assertTrue "selective island recovery removes the overflow"
+    ((result.formatted.splitOn "\n").all fun line => line.length <= 100)
+  assertTrue "selective island recovery preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let again ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "selective-island-recovery-formatted.lean" { lineWidth := 100 }
+  assertEq "selective island recovery is idempotent" result.formatted again
+
+  let unrelated :=
+    header
+    ++ "    have neighbor : True :=\n"
+    ++ "      True.intro\n"
+    ++ "    exact exceedinglyLongProtectedTacticArgumentWithNoAvailableBreakPointsAlongItsLengthAtAllForThisTest\n"
+  let unrelatedExpected :=
+    header
+    ++ "      have neighbor : True :=\n"
+    ++ "        True.intro\n"
+    ++ "      exact exceedinglyLongProtectedTacticArgumentWithNoAvailableBreakPointsAlongItsLengthAtAllForThisTest\n"
+  let unrelatedResult ←
+    Formatter.formatSourceWithEnvDetailed env unrelated
+      "unrelated-island-overflow.lean" { lineWidth := 100 }
+  assertTrue "unrelated island overflow does not fall back" (!unrelatedResult.fellBack)
+  assertEq "an unrelated overflow does not open a fitting declaration"
+    unrelatedExpected unrelatedResult.formatted
+
 def assertHaveTermFormatting (env : Lean.Environment) : IO Unit := do
   let source :=
     "theorem haveTermLayoutWithLongHeaderName (h : VeryLongHypothesisNameForLayoutTesting) : VeryLongTargetNameForLayoutTesting :=\n"
@@ -7784,6 +7899,44 @@ def assertHaveTermFormatting (env : Lean.Environment) : IO Unit := do
       "long-have-term-formatting-formatted.lean"
   assertEq "long have term formatting is idempotent"
     longResult.formatted longFormattedAgain
+  let shiftedSource :=
+    "theorem shiftedHaveHeaderOverflow (t : Nat) : True := by\n"
+    ++ "  induction t with\n"
+    ++ "  | zero => exact True.intro\n"
+    ++ "  | succ t ih =>\n"
+    ++ "    intro   z hz\n"
+    ++ "    have neighbor : True :=\n"
+    ++ "      True.intro\n"
+    ++ "    have quoted := `(term| f   x)\n"
+    ++ "    have hstep : (tm.configs cfg (t + 1)).workTapePos i - (tm.configs cfg t).workTapePos i ≤ 10000 :=\n"
+    ++ "      proof\n"
+    ++ "    exact True.intro\n"
+  let shiftedExpected :=
+    "theorem shiftedHaveHeaderOverflow (t : Nat) : True := by\n"
+    ++ "  induction t with\n"
+    ++ "  | zero => exact True.intro\n"
+    ++ "  | succ t ih =>\n"
+    ++ "      intro   z hz\n"
+    ++ "      have neighbor : True :=\n"
+    ++ "        True.intro\n"
+    ++ "      have quoted := `(term| f   x)\n"
+    ++ "      have hstep\n"
+    ++ "          : (tm.configs cfg (t + 1)).workTapePos i - (tm.configs cfg t).workTapePos i ≤ 10000 :=\n"
+    ++ "        proof\n"
+    ++ "      exact True.intro\n"
+  let shiftedResult ←
+    Formatter.formatSourceWithEnvDetailed env shiftedSource
+      "shifted-have-header-overflow.lean" { lineWidth := 100 }
+  assertTrue "a shifted have header does not fall back" (!shiftedResult.fellBack)
+  assertEq "a shifted have header breaks before its declaration colon"
+    shiftedExpected shiftedResult.formatted
+  assertTrue "a shifted have header preserves code"
+    (← codePreservedIgnoringWhitespace env shiftedSource shiftedResult.formatted)
+  let shiftedAgain ←
+    Formatter.formatSourceWithEnv env shiftedResult.formatted
+      "shifted-have-header-overflow-formatted.lean" { lineWidth := 100 }
+  assertEq "shifted have header formatting is idempotent"
+    shiftedResult.formatted shiftedAgain
   let multilineProofSource :=
     "theorem multilineHaveProof : True := by\n"
     ++ "  have hpreserve' :\n"
@@ -19612,6 +19765,8 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertMovedInlineCalcKeepsContinuationLayout env
   assertExplicitLambdaKeepsPrefixMarker env
   assertHaveTermFormatting env
+  assertResolvedIslandFactsDriveProbes
+  assertSourceIslandRecoveryPreservesNeighbors env
   assertHaveProofAfterInfixPreservesLayout env
   assertSingletonDelimitedHaveInheritsCollectionBase env
   assertAbsoluteValueDelimitersStayAttached env

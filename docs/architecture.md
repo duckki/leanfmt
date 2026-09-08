@@ -1107,7 +1107,27 @@ line now follows a formatted prefix such as `:`. Every protected line moves by t
 delta. A proof island normally cannot move left of its structural proof indentation,
 which keeps a block proof beneath its owning `have` rather than beneath a wrapped type
 continuation or outside its declaration. This structural floor is retained even when an
-unbreakable tactic line consequently exceeds the configured width. A source-emitted
+unbreakable tactic line consequently exceeds the configured width.
+
+Source preservation is node-local, not a recursive rendering mode. An opaque node emits
+its source slice; a structural node visits children using their own resolved policies.
+When moving a protected proof right overflows a declaration's first source line,
+`OriginalTree.overflowAlternative?` can propose a sparse alternative: open the path to
+that declaration, retain its children's ordinary plans, and explicitly preserve all
+neighboring source regions. A fitting declaration is not opened because an unrelated
+tactic overflows. Quotations, ignored regions, and other non-proof islands are opaque
+barriers to this search. Existing declaration rules supply every new breakpoint.
+
+The renderer resolves this alternative into its immutable `TreeLayoutFacts`, refreshing
+the original-emission and multiline summaries along the changed path. Flat probes,
+first-line and suffix measurement, and text emission all consume that same fact tree;
+child traversal restores the parent's facts on return. There is no recursive switch
+that disables descendant protection, and no mutation of the lossless syntax tree.
+The alternative is built only after a moved source island overflows and is selected
+only if it reduces the overflow count. Nested proof bodies therefore remain protected
+even while their enclosing declaration is formatted structurally.
+
+A source-emitted
 quotation or compound proof-layout island may instead reduce a uniform shift by whole
 indentation levels, never past its original source column. That fit calculation reserves
 any closing delimiters and other tight parent suffix that must remain on the island's

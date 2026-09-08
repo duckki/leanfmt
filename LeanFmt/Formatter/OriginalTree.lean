@@ -798,6 +798,74 @@ def planForKind (kind : LayoutIslandKind) : IslandPlan :=
 def plan? (tree : SyntaxTree.Tree) : Option IslandPlan :=
   (classify? tree).map planForKind
 
+/-- A sparse alternative to source emission. Untouched children retain their own plans;
+preserved neighbors stay opaque even when their parent becomes structural. -/
+inductive OverflowAlternative where
+  | unchanged
+  | preserve (plan : IslandPlan)
+  | structural (children : Array OverflowAlternative)
+
+private def allowsDeclarationRecovery (kind : LayoutIslandKind) : Bool :=
+  kind == .proof || kind == .proofLayout || kind == .mathlibTactic
+
+private partial def isAttachedDeclarationHeader : SyntaxTree.Tree → Bool
+  | .node .declarationHeader _ => true
+  | .node .suffixGroup children => children.any isAttachedDeclarationHeader
+  | _ => false
+
+private def ownsDeclarationHeader : SyntaxTree.Tree → Bool
+  | .node .declarationHeader _ | .node .suffixGroup _ => false
+  | .node _ children => children.any isAttachedDeclarationHeader
+  | _ => false
+
+private def firstSourceLineOverflows
+    (sourceMap : SyntaxTree.SourcePositionMap) (shift limit : Nat)
+    (tree : SyntaxTree.Tree)
+    : Bool :=
+  tree.firstToken?.any
+    fun first =>
+      let line := sourceMap.lineNumberAt first.span.start
+      tree.tokens.any
+        fun token =>
+          sourceMap.lineNumberAt token.span.stop == line
+          && limit < sourceMap.columnAt token.span.stop + shift
+
+private partial def declarationOverflowAlternative?
+    (sourceMap : SyntaxTree.SourcePositionMap) (shift limit : Nat)
+    (inheritedPlan : IslandPlan) (tree : SyntaxTree.Tree)
+    : Option OverflowAlternative :=
+  match tree with
+  | .missing | .leaf _ => none
+  | .node _ children =>
+      let localPlan? := plan? tree
+      if localPlan?.any fun plan => !allowsDeclarationRecovery plan.kind then
+        none
+      else if ownsDeclarationHeader tree
+              && firstSourceLineOverflows sourceMap shift limit tree then
+        some <| .structural (children.map fun _ => .unchanged)
+      else
+        let inheritedPlan := localPlan?.getD inheritedPlan
+        let alternatives :=
+          children.map
+            (declarationOverflowAlternative? sourceMap shift limit inheritedPlan)
+        if !alternatives.any Option.isSome then
+          none
+        else
+          some
+          <| .structural
+          <| children.mapIdx
+              fun index child =>
+                (alternatives[index]!).getD (.preserve ((plan? child).getD inheritedPlan))
+
+def overflowAlternative?
+    (sourceMap : SyntaxTree.SourcePositionMap) (tree : SyntaxTree.Tree)
+    (plan : IslandPlan) (shift limit : Nat)
+    : Option OverflowAlternative :=
+  if shift == 0 || !allowsDeclarationRecovery plan.kind then
+    none
+  else
+    declarationOverflowAlternative? sourceMap shift limit plan tree
+
 private partial def wrapsBracketedCollection : SyntaxTree.Tree → Bool
   | .node _ children =>
       if SyntaxTree.outerDelimiterKind? children == some .bracket then
@@ -817,23 +885,6 @@ def canUseStructuralLayoutAfterParentMove : SyntaxTree.Tree → Bool
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _
   | .node (.raw `«term{_}») _ => true
   | _ => false
-
-partial def startsWithEmission : SyntaxTree.Tree → Bool
-  | .missing => false
-  | .leaf _ => false
-  | tree@(.node _ children) =>
-      if (classify? tree).isSome then
-        true
-      else
-        let rec loop (index : Nat) : Bool :=
-          match children[index]? with
-          | some child =>
-              if SyntaxTree.Tree.firstToken? child |>.isSome then
-                startsWithEmission child
-              else
-                loop (index + 1)
-          | none => false
-        loop 0
 
 structure EmissionRequest where
   source : String

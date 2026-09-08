@@ -131,6 +131,7 @@ def treeFirstSourceLineWidth? (source : String) (tree : SyntaxTree.Tree)
 rendering can reuse classification results without moving syntax policy into the renderer. -/
 structure TreeLayoutSummary where
   originalPlan? : Option OriginalTree.IslandPlan := none
+  startsWithOriginalEmission : Bool := false
   startsWithUnbreakableOriginalFirstLine : Bool := false
   containsMultilineOriginalEmission : Bool := false
   containsCommentForcedBreak : Bool := false
@@ -198,6 +199,46 @@ private def sourceHasLineStructure
         (SyntaxTree.sourceText source firstToken.span.start lastToken.span.stop)
   | _, _ => false
 
+private def resolveSummary
+    (source : String) (summary : TreeLayoutSummary)
+    (originalPlan? : Option OriginalTree.IslandPlan) (children : Array TreeLayoutFacts)
+    : TreeLayoutSummary :=
+  let firstChild? := children.find? fun child => child.summary.firstToken?.isSome
+  {
+    summary with
+      originalPlan?
+      startsWithOriginalEmission :=
+        originalPlan?.isSome || firstChild?.any (·.summary.startsWithOriginalEmission)
+      startsWithUnbreakableOriginalFirstLine :=
+        match originalPlan? with
+        | some plan => plan.policy.firstLine == .unbreakable
+        | none => firstChild?.any (·.summary.startsWithUnbreakableOriginalFirstLine)
+      containsMultilineOriginalEmission :=
+        match originalPlan? with
+        | some plan =>
+            sourceHasLineStructure source summary.firstToken? summary.lastToken?
+            || (plan.policy.content == .proof
+                && summary.firstToken?.any
+                    fun token => (SourceBoundary.beforeToken token).hasLineStructure)
+        | none => children.any (·.summary.containsMultilineOriginalEmission)
+  }
+
+/-- Resolve an alternative once, including the summaries used by fit and suffix probes. -/
+partial def withAlternative
+    (source : String) (facts : TreeLayoutFacts)
+    (alternative : OriginalTree.OverflowAlternative)
+    : TreeLayoutFacts :=
+  match alternative, facts with
+  | .unchanged, _ => facts
+  | .preserve plan, .node summary children =>
+      .node (resolveSummary source summary (some plan) children) children
+  | .structural alternatives, .node summary children =>
+      let children :=
+        children.mapIdx
+          fun index child =>
+            child.withAlternative source (alternatives[index]?.getD .unchanged)
+      .node (resolveSummary source summary none children) children
+
 partial def ofTree (source : String) (tree : SyntaxTree.Tree) : TreeLayoutFacts :=
   match tree with
   | .missing => .node {} #[]
@@ -219,40 +260,17 @@ partial def ofTree (source : String) (tree : SyntaxTree.Tree) : TreeLayoutFacts 
       let lastToken? := childFacts.findSomeRev? fun child => child.summary.lastToken?
       let boundaries := childFacts.foldl (BoundaryFold.push source) {}
       let originalPlan? := OriginalTree.plan? tree
-      let startsWithUnbreakableOriginalFirstLine :=
-        match originalPlan? with
-        | some plan => plan.policy.firstLine == .unbreakable
-        | none =>
-            (childFacts.findSome?
-              fun child =>
-                if child.summary.firstToken?.isSome then
-                  some child.summary.startsWithUnbreakableOriginalFirstLine
-                else
-                  none).getD
-              false
-      let containsMultilineOriginalEmission :=
-        match originalPlan? with
-        | some plan =>
-            sourceHasLineStructure source firstToken? lastToken?
-            || (plan.policy.content == .proof
-                && firstToken?.any
-                    fun token => (SourceBoundary.beforeToken token).hasLineStructure)
-        | none =>
-            childFacts.any
-              fun child =>
-                child.summary.containsMultilineOriginalEmission
       .node
-        {
-          originalPlan?
-          startsWithUnbreakableOriginalFirstLine
-          containsMultilineOriginalEmission
-          containsCommentForcedBreak := boundaries.containsCommentForcedBreak
-          containsLineCommentForcedBreak := boundaries.containsLineCommentForcedBreak
-          firstToken?
-          lastToken?
-          firstSourceToken? := boundaries.firstSourceToken?
-          lastSourceToken? := boundaries.lastSourceToken?
-        }
+        (resolveSummary source
+          {
+            containsCommentForcedBreak := boundaries.containsCommentForcedBreak
+            containsLineCommentForcedBreak := boundaries.containsLineCommentForcedBreak
+            firstToken?
+            lastToken?
+            firstSourceToken? := boundaries.firstSourceToken?
+            lastSourceToken? := boundaries.lastSourceToken?
+          }
+          originalPlan? childFacts)
         childFacts
 
 end TreeLayoutFacts
@@ -1067,8 +1085,10 @@ partial def renderWithoutRuleBreaks
           match segment.child? index with
           | some child =>
               let parentContext := state.context
+              let parentFacts? := state.layoutFacts?
+              let childFacts? := parentFacts? >>= (·.child? index)
               let rendered :=
-                match OriginalTree.plan? child with
+                match originalPlanForTree state.source child childFacts? with
                 | some islandPlan =>
                     state.emitOriginalTree child
                       (formatLeadingBoundary :=
@@ -1076,9 +1096,13 @@ partial def renderWithoutRuleBreaks
                       (islandPlan? := some islandPlan)
                 | none =>
                     renderWithoutRuleBreaks
-                      { state with context := parentContext.push segment index }
+                      {
+                        state with
+                          context := parentContext.push segment index
+                          layoutFacts? := childFacts?
+                      }
                       (LineBreakRules.Segment.ofTree child)
-              { rendered with context := parentContext }
+              { rendered with context := parentContext, layoutFacts? := parentFacts? }
           | none => state)
         state
 
@@ -1102,8 +1126,10 @@ partial def probeLayoutWithoutRuleBreaks?
             | none => loop state rest
             | some child =>
                 let parentContext := state.context
+                let parentFacts? := state.layoutFacts?
+                let childFacts? := parentFacts? >>= (·.child? index)
                 let rendered? :=
-                  match OriginalTree.plan? child with
+                  match originalPlanForTree state.source child childFacts? with
                   | some islandPlan =>
                       let rendered :=
                         state.emitOriginalTree child
@@ -1114,10 +1140,20 @@ partial def probeLayoutWithoutRuleBreaks?
                       if layoutProbeHasNotOverflowed rendered then some rendered else none
                   | none =>
                       probeLayoutWithoutRuleBreaks?
-                        { state with context := parentContext.push segment index }
+                        {
+                          state with
+                            context := parentContext.push segment index
+                            layoutFacts? := childFacts?
+                        }
                         (LineBreakRules.Segment.ofTree child)
                 match rendered? with
-                | some rendered => loop { rendered with context := parentContext } rest
+                | some rendered =>
+                    loop
+                      {
+                        rendered with
+                          context := parentContext, layoutFacts? := parentFacts?
+                      }
+                      rest
                 | none => none
       loop state segment.indexes
 
@@ -1275,6 +1311,7 @@ def SuffixState.emitOriginalFirstLine (state : SuffixState) (tree : SyntaxTree.T
 partial def measureSuffixOfTree
     (context : LineBreakRules.RuleContext) (state : SuffixState)
     (tree : SyntaxTree.Tree)
+    (facts? : Option TreeLayoutFacts := none)
     : SuffixState × Bool :=
   match tree with
   | .missing => (state, false)
@@ -1287,7 +1324,7 @@ partial def measureSuffixOfTree
         | .emit => state.emitToken token false
         | .stop => (state.appendCommentTriviaBeforeToken token, true)
   | .node _ _ =>
-      if (OriginalTree.plan? tree).isSome then
+      if (originalPlanForTree state.whitespaceState.source tree facts?).isSome then
         state.emitOriginalFirstLine tree
       else
         let segment := LineBreakRules.Segment.ofTree tree
@@ -1305,7 +1342,8 @@ partial def measureSuffixOfTree
                     (state.appendCommentTriviaBeforeTree child, true)
                   else
                     let childContext := context.push segment index
-                    measureSuffixOfTree childContext state child)
+                    measureSuffixOfTree childContext state child
+                      (facts? >>= (·.child? index)))
           (state, false)
 
 def RenderState.firstLineOfOriginalTree (state : RenderState) (tree : SyntaxTree.Tree)
@@ -1349,7 +1387,7 @@ partial def renderFirstLineOfTree (state : RenderState) (tree : SyntaxTree.Tree)
           stopped
         )
   | .node _ _ =>
-      if (OriginalTree.plan? tree).isSome then
+      if (originalPlanForTree state.source tree state.layoutFacts?).isSome then
         state.firstLineOfOriginalTree tree
       else
         let segment := LineBreakRules.Segment.ofTree tree
@@ -1367,8 +1405,20 @@ partial def renderFirstLineOfTree (state : RenderState) (tree : SyntaxTree.Tree)
                   else
                     let childContext := state.context.push segment index
                     let (rendered, stopped) :=
-                      renderFirstLineOfTree { state with context := childContext } child
-                    ({ rendered with context := state.context }, stopped))
+                      renderFirstLineOfTree
+                        {
+                          state with
+                            context := childContext
+                            layoutFacts? := state.layoutFacts? >>= (·.child? index)
+                        }
+                        child
+                    (
+                      {
+                        rendered with
+                          context := state.context, layoutFacts? := state.layoutFacts?
+                      },
+                      stopped
+                    ))
           (state.withoutLineFitSuffix, false)
 
 partial def lineFitSuffixAfterChild
@@ -1387,6 +1437,7 @@ partial def lineFitSuffixAfterChild
             let childContext := context.push segment nextIndex
             let (rendered, stopped) :=
               measureSuffixOfTree childContext suffixState nextChild
+                (state.layoutFacts? >>= (·.child? nextIndex))
             if stopped then (rendered, false) else loop rendered (nextIndex + 1)
       | none => loop suffixState (nextIndex + 1)
     else
@@ -1565,6 +1616,7 @@ def sourceBreaksAllowedByBreakPointsInState
 
 def segmentHasOriginalEmissionAtRuleSourceBreak
     (source : String) (segment : LineBreakRules.Segment) (plan : LayoutPlan.Plan)
+    (facts? : Option TreeLayoutFacts := none)
     : Bool :=
   plan.breakPoints.any
     fun breakPoint =>
@@ -1577,7 +1629,8 @@ def segmentHasOriginalEmissionAtRuleSourceBreak
           && child.firstToken?.any
               fun first =>
                 hasSourceBreakBetweenTokens source prefixToken first
-                && OriginalTree.startsWithEmission child
+                && (treeLayoutSummary source child
+                      (facts? >>= (·.child? breakPoint.index))).startsWithOriginalEmission
       | _, _ => false
 
 def segmentHasAllowedSourceBreaks
@@ -1626,7 +1679,7 @@ partial def segmentAllowsLayoutWithoutRuleBreaks
           || !treeSourceHasLineStructure source segment.parent
       | none =>
           let plan := LayoutPlan.resolve context segment
-          if segmentHasOriginalEmissionAtRuleSourceBreak source segment plan
+          if segmentHasOriginalEmissionAtRuleSourceBreak source segment plan facts?
               || (!plan.isFlow
                   && treeContainsLineCommentForcedBreak source segment.parent facts?)
               || plan.isMandatory
@@ -1637,7 +1690,8 @@ partial def segmentAllowsLayoutWithoutRuleBreaks
             match segment.singleChild? with
             | some (index, child) =>
                 segmentAllowsLayoutWithoutRuleBreaks source (context.push segment index)
-                  (LineBreakRules.Segment.ofTree child) true (facts? >>= (·.child? index))
+                  (LineBreakRules.Segment.ofTree child) true
+                  (facts? >>= (·.child? index))
             | none =>
                 if respectSourceBreaks
                     && segmentHasAllowedSourceBreaks source context segment then
@@ -2169,6 +2223,18 @@ mutual
   partial def renderSegmentByPlan (state : RenderState) (segment : LineBreakRules.Segment)
       (plan : LayoutPlan.Plan)
       : RenderState :=
+    let facts :=
+      match state.layoutFacts? with
+      | some facts => facts
+      | none => TreeLayoutFacts.ofTree state.source segment.parent
+    let state :=
+      if facts.summary.originalPlan?.isSome then
+        {
+          state with
+            layoutFacts? := some (facts.withAlternative state.source (.structural #[]))
+        }
+      else
+        state
     if plan.isAtomic then
       renderWithoutRuleBreaks state segment
     else if plan.isMandatory && !plan.breakPoints.isEmpty then
@@ -2531,11 +2597,35 @@ mutual
             plan.policy.content == .proof
             && renderedOutputOverflowCount childState rendered == 0
             && 0 < overflowCount
+      let alternative? := do
+        let plan ← originalPlan?
+        let first ← child.firstToken?
+        if renderedOutputOverflowCount childState rendered == 0 then
+          none
+        else
+          let shift :=
+            childState.segmentStartColumn childSegment
+            - state.sourceMap.columnAt first.span.start
+          OriginalTree.overflowAlternative? state.sourceMap child plan shift
+            state.options.lineWidth
       if emitOriginal
           && (OriginalTree.canUseStructuralOverflowFallback child
-              || suffixOverflowsPreservedProof)
+              || suffixOverflowsPreservedProof
+              || alternative?.isSome)
           && 0 < overflowCount then
-        let structural := renderSegmentByPlan childState childSegment childPlan
+        let structuralState :=
+          match alternative? with
+          | some alternative =>
+              let facts :=
+                match childLayoutFacts? with
+                | some facts => facts
+                | none => TreeLayoutFacts.ofTree state.source child
+              {
+                childState with
+                  layoutFacts? := some (facts.withAlternative state.source alternative)
+              }
+          | none => childState
+        let structural := renderSegmentByPlan structuralState childSegment childPlan
         preferCandidateWithFewerOverflows childState rendered structural
       else
         rendered
