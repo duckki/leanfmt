@@ -2942,6 +2942,134 @@ def assertStructureSpreadStaysAfterProofField (env : Lean.Environment) : IO Unit
   assertEq "structure spread after proof field formatting is idempotent"
     result.formatted formattedAgain
 
+def assertRecordPatternEllipsisKeepsCommaBoundary (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def destructure value :=\n"
+    ++ "  let {first, second, ..} := value\n"
+    ++ "  first + second\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "record-pattern-ellipsis.lean"
+  assertTrue "record pattern ellipsis does not fall back" (!result.fellBack)
+  assertEq "a comma-separated record pattern remains compact" source result.formatted
+  assertTrue "record pattern ellipsis preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let again ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "record-pattern-ellipsis-again.lean"
+  assertEq "record pattern ellipsis is idempotent" result.formatted again
+  for compactSource
+      in [
+        "def record := {first := value, ..}\n",
+        "def destructure value :=\n"
+        ++ "  let {first, second, /- remaining fields -/ ..} := value\n"
+        ++ "  first + second\n"
+      ] do
+    let compactResult ←
+      Formatter.formatSourceWithEnvDetailed env compactSource
+        "compact-record-ellipsis.lean"
+    assertTrue "a commented or value record ellipsis does not fall back"
+      (!compactResult.fellBack)
+    assertEq "a comma remains a separator through comments and field wrappers"
+      compactSource compactResult.formatted
+  let longSource :=
+    "def destructure value :=\n"
+    ++ "  let {firstFieldWithALongName, secondFieldWithALongName, ..} := value\n"
+    ++ "  firstFieldWithALongName\n"
+  let longExpected :=
+    "def destructure value :=\n"
+    ++ "  let {\n"
+    ++ "    firstFieldWithALongName,\n"
+    ++ "    secondFieldWithALongName, ..\n"
+    ++ "  } :=\n"
+    ++ "    value\n"
+    ++ "  firstFieldWithALongName\n"
+  let longResult ←
+    Formatter.formatSourceWithEnvDetailed env longSource "long-record-ellipsis.lean"
+      { lineWidth := 50 }
+  assertTrue "a long record pattern does not fall back" (!longResult.fellBack)
+  assertEq "a long record pattern still wraps its fields" longExpected
+    longResult.formatted
+  assertTrue "a long record pattern preserves code"
+    (← codePreservedIgnoringWhitespace env longSource longResult.formatted)
+  assertTrue "a long record pattern fits" (Formatter.linesFit longResult.formatted 50)
+  let longAgain ←
+    Formatter.formatSourceWithEnv env longResult.formatted
+      "long-record-ellipsis-again.lean" { lineWidth := 50 }
+  assertEq "a long record pattern is idempotent" longResult.formatted longAgain
+
+def assertInlineMultitacticAlternativeBreaksBeforeBody (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "theorem inlineArm (h : Nat) : True := by\n"
+    ++ "  cases h with\n"
+    ++ "  | zero => apply id\n"
+    ++ "            trivial\n"
+    ++ "  | succ n => trivial\n"
+  let expected :=
+    "theorem inlineArm (h : Nat) : True := by\n"
+    ++ "  cases h with\n"
+    ++ "  | zero =>\n"
+    ++ "      apply id\n"
+    ++ "      trivial\n"
+    ++ "  | succ n => trivial\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "inline-multitactic-alternative.lean"
+  assertTrue "inline multitactic alternative does not fall back" (!result.fellBack)
+  assertEq "a multitactic alternative breaks before its entire body" expected
+    result.formatted
+  assertTrue "multitactic alternative preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let again ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "inline-multitactic-alternative-again.lean"
+  assertEq "multitactic alternative is idempotent" result.formatted again
+  let semicolonSource :=
+    source.replace "apply id\n            trivial" "apply id; trivial"
+  let semicolonExpected := expected.replace "apply id\n      trivial" "apply id; trivial"
+  let semicolonResult ←
+    Formatter.formatSourceWithEnvDetailed env semicolonSource "semicolon-alternative.lean"
+  assertTrue "a semicolon alternative does not fall back" (!semicolonResult.fellBack)
+  assertEq "multiple tactics keep their body boundary even when semicolon-joined"
+    semicolonExpected semicolonResult.formatted
+  assertTrue "a semicolon alternative preserves code"
+    (← codePreservedIgnoringWhitespace env semicolonSource semicolonResult.formatted)
+  let combinatorSource :=
+    source.replace "apply id\n            trivial" "apply id <;> trivial"
+  let combinatorResult ←
+    Formatter.formatSourceWithEnvDetailed env combinatorSource
+      "combinator-alternative.lean"
+  assertTrue "a combinator alternative does not fall back" (!combinatorResult.fellBack)
+  assertEq "one tactic combinator remains a compact alternative"
+    combinatorSource combinatorResult.formatted
+
+def assertBinderSuffixStaysWithMultilineBody (env : Lean.Environment) : IO Unit := do
+  let syntaxSource :=
+    "syntax:60 \"∫test \" ident \", \" term:60 \" ∂\" term:70 : term\n"
+    ++ "syntax:max \"testSet{\" term \" | \" term \"}\" : term\n"
+  let source :=
+    syntaxSource
+    ++ "def test := ∫test x, measure testSet{y | veryLongPredicateName firstArgument secondArgument y} ∂Q\n"
+  let expected :=
+    syntaxSource
+    ++ "def test :=\n"
+    ++ "  ∫test x,\n"
+    ++ "    measure\n"
+    ++ "      testSet{y |\n"
+    ++ "        veryLongPredicateName firstArgument secondArgument y\n"
+    ++ "      } ∂Q\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "multiline-binder-suffix.lean"
+      { lineWidth := 70 }
+  assertTrue "a multiline binder suffix does not fall back" (!result.fellBack)
+  assertEq "a binder suffix stays on the last line of its body" expected result.formatted
+  assertTrue "a multiline binder suffix preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  assertTrue "a multiline binder suffix fits" (Formatter.linesFit result.formatted 70)
+  let again ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "multiline-binder-suffix-again.lean" { lineWidth := 70 }
+  assertEq "a multiline binder suffix is idempotent" result.formatted again
+
 def assertMultitokenChildKeepsStructuralBase (env : Lean.Environment) : IO Unit := do
   let source :=
     "instance (i j : J) :\n"
@@ -19728,6 +19856,9 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertProtectedBodiesUseStructuralIndentation env
   assertBracketedTacticSequenceUsesStructuralBreaks env
   assertStructureSpreadStaysAfterProofField env
+  assertRecordPatternEllipsisKeepsCommaBoundary env
+  assertInlineMultitacticAlternativeBreaksBeforeBody env
+  assertBinderSuffixStaysWithMultilineBody env
   assertMultitokenChildKeepsStructuralBase env
   assertOverflowRecoveryKeepsNestedCommandIndent env
   assertFittingTrailingLineCommentStaysAttached env

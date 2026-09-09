@@ -1393,7 +1393,13 @@ private def groupGeneratedTightPiece
     | .node kind children => .node kind (#[left] ++ children)
     | _ => .node .suffixGroup #[left, right]
   else
-    .node .suffixGroup #[left, right]
+    match right with
+    | .node .application children =>
+        match children[0]? with
+        | some head =>
+            .node .application (children.set! 0 (.node .suffixGroup #[left, head]))
+        | none => .node .suffixGroup #[left, right]
+    | _ => .node .suffixGroup #[left, right]
 
 private def splitGeneratedLeadingApplication? (children : Array Tree)
     : Option (Array Tree) := do

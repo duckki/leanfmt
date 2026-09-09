@@ -1273,9 +1273,10 @@ def structInstHasWith (segment : Segment) : Bool :=
   | none => false
 
 def hasCommaBetweenFields (segment : Segment) (left right : Nat) : Bool :=
-  segment.indexes.any
-    fun index =>
-      left < index && index < right && childStartsWithLexeme segment index ","
+  ((segment.child? left).bind SyntaxTree.Tree.lastToken?).any (·.lexeme == ",")
+  || segment.indexes.any
+      fun index =>
+        left < index && index < right && childStartsWithLexeme segment index ","
 
 def hasMissingCommaBetweenFields (segment : Segment) : List Nat → Bool
   | left :: right :: rest =>
@@ -3212,7 +3213,9 @@ def quantifierBodyIndex? (segment : Segment) : Option Nat :=
         | some child => treeHasContent child
         | none => false
   let separatorIndex? :=
-    (contentIndexes.filter fun index => childStartsWithLexeme segment index ",").getLast?
+    (contentIndexes.filter
+      fun index => (segment.parentChild? index).any (treeFirstLexeme? · == some ","))
+    |>.getLast?
   match separatorIndex? with
   | some separatorIndex =>
       contentIndexes.find? fun index => separatorIndex < index
@@ -3721,7 +3724,7 @@ def constructorRule : LineBreakRule :=
       breakPoints := constructorBreaks
   }
 
-def suffixGroupRequiresProofBodyBreak (segment : Segment) : Bool :=
+def segmentHasMultipleTacticBody (segment : Segment) : Bool :=
   segment.indexes.any fun index => (segment.child? index).any proofBodyHasMultipleTactics
 
 def suffixGroupHasProofBody (segment : Segment) : Bool :=
@@ -3771,7 +3774,7 @@ def suffixGroupBreaks (_context : RuleContext) (segment : Segment) : List BreakP
 def suffixGroupRule : LineBreakRule :=
   {
     name := "suffixGroup"
-    mandatory := fun _ segment => suffixGroupRequiresProofBodyBreak segment
+    mandatory := fun _ segment => segmentHasMultipleTacticBody segment
     flow :=
       fun context segment =>
         suffixGroupHasProofBody segment || suffixGroupHasMovableChild context segment
@@ -3990,6 +3993,7 @@ def tacticAlternativeContainerRule : LineBreakRule :=
 def tacticAlternativeRule : LineBreakRule :=
   {
     name := "tacticAlternative"
+    mandatory := fun _ segment => segmentHasMultipleTacticBody segment
     useExistingBreaks := fun _ _ => true
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
@@ -4096,6 +4100,10 @@ def matchHeaderRule : LineBreakRule :=
 def quantifierRule : LineBreakRule :=
   {
     name := "quantifier"
+    flow :=
+      fun _ segment =>
+        (quantifierBodyIndex? segment).any
+          fun bodyIndex => segment.start == bodyIndex && bodyIndex + 1 < segment.stop
     inheritBase := fun context _ => context.usesIndexedInfixRhsBase
     breakPoints := quantifierBreaks
   }

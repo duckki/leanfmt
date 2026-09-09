@@ -358,6 +358,10 @@ distinction safe:
 { data := .null }
 ```
 
+A comma before a record ellipsis permits compact layout, including destructuring
+patterns such as `let {first, second, ..} := value`. Without a comma, the
+ellipsis retains its required separate-line boundary after the preceding field.
+
 When a brace-delimited term contains multiple comma-separated items and does not
 fit, it uses the same balanced layout as other collections:
 
@@ -1290,6 +1294,10 @@ def parenthesizedDisjunctionChain (schema : Schema) (implementation expected : N
 A quantifier stays flat when it fits. Otherwise its body begins after the comma
 and is indented one level.
 
+A trailing binder suffix, such as an integral's `∂μ`, stays on the body's final
+line when it fits, including after a closing delimiter. A multiline body does
+not itself require a break before that suffix.
+
 <!-- leanfmt-test -->
 ```lean
 def mixedAdjacentQuantifiersLong : Prop :=
@@ -1770,7 +1778,10 @@ also stays attached to `=>`, and its nested body owns subsequent breaks.
 Equation-style declaration arms follow the same alternative layout.
 
 Tactic alternatives that own a body after `=>` use the same two-level body
-indentation. An arrowless tactic alternative owns only its pattern; subsequent
+indentation. Multiple tactics require a break immediately after `=>`, even when
+the first tactic was written inline or the tactics are semicolon-joined. A
+single fitting tactic or tactic combinator can remain inline.
+An arrowless tactic alternative owns only its pattern; subsequent
 tactics remain peers in the surrounding tactic sequence because indenting them
 under the alternative changes Lean's parse. The owned indentation remains
 structural when a protected, unbreakable proof line becomes longer than the

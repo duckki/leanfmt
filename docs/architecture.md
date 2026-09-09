@@ -439,6 +439,21 @@ when the operator starts off-column. It does not gain an extra continuation
 level. Flow within one untyped binder-name group retains its own ordinary
 continuation indentation.
 
+Binder-body ownership is resolved against the complete parent tree, including
+when layout operates on a slice after the comma. A trailing measure clause is
+not reclassified as a new body when the comma lies outside that slice. The body
+and its suffixes use ordinary flow, so a fitting suffix can follow a multiline
+body while a long suffix can still move. For a source-tight generated marker
+before an application, grouping attaches the marker to the application head,
+not to the complete application. Thus `∂.pi` remains one head and its arguments
+retain ordinary application boundaries.
+
+Required proof-body boundaries share one structural multiple-tactic check for
+attached introducers and tactic alternatives. The enclosing rule owns the break;
+the protected body retains its relative layout. Record separator detection
+likewise accepts a comma owned by the preceding field-list wrapper as well as a
+direct sibling comma, without introducing a separate ellipsis layout policy.
+
 Open-command identifier lists use the same peer flow in both `open A B C` and
 parenthesized `open A (x y z)` forms. Their parser wrappers differ, but the list
 rule owns the same break between complete identifiers in either shape.
