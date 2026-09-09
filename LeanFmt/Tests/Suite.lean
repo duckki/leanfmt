@@ -5821,6 +5821,87 @@ def assertShowProofAfterMovedLambdaIsIdempotent (env : Lean.Environment) : IO Un
       "show-proof-after-moved-lambda-formatted.lean" { lineWidth := 100 }
   assertEq "show proof after moved lambda is idempotent" result.formatted formattedAgain
 
+def assertShiftedShowHeaderFitsWidth (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def shiftedShowHeader :=\n"
+    ++ "  ⟨outer <|\n"
+    ++ "     rewriteProof ▸\n"
+    ++ "     (inner <|\n"
+    ++ "      show firstVeryLongExpressionName argument = secondVeryLongExpressionName argument by grind ▸\n"
+    ++ "      result),\n"
+    ++ "   second⟩\n"
+  assertTrue "the original show header fits the requested width"
+    ((source.splitOn "\n").all fun line => line.length <= 100)
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "shifted-show-header.lean" { lineWidth := 100 }
+  let expected :=
+    "def shiftedShowHeader :=\n"
+    ++ "  ⟨\n"
+    ++ "    outer\n"
+    ++ "    <| rewriteProof\n"
+    ++ "        ▸ (inner\n"
+    ++ "            <| show firstVeryLongExpressionName argument = secondVeryLongExpressionName argument by\n"
+    ++ "              grind\n"
+    ++ "                ▸ result),\n"
+    ++ "    second\n"
+    ++ "  ⟩\n"
+  assertTrue "a shifted show header does not fall back" (!result.fellBack)
+  assertEq "a shifted show header uses the attached proof's existing breakpoint"
+    expected result.formatted
+  assertTrue s!"a shifted show header remains within width:\n{result.formatted}"
+    ((result.formatted.splitOn "\n").all fun line => line.length <= 100)
+  assertTrue "a shifted show header preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let again ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "shifted-show-header-formatted.lean" { lineWidth := 100 }
+  assertEq "shifted show header recovery is idempotent" result.formatted again
+
+def assertShiftedOptionalAssignmentFitsWidth (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "theorem shiftedObtainHeader : True := by\n"
+    ++ "  · induction h with\n"
+    ++ "    | refl => exact True.intro\n"
+    ++ "    | tail htr ih =>\n"
+    ++ "      subst hos'\n"
+    ++ "      obtain ⟨_, rfl⟩ := Option.isSome_iff_exists.mp <| toSingleAccept_tr_antiDerivative_isSome htr\n"
+    ++ "      exact .trans (ih rfl) (.single htr)\n"
+  assertTrue "the original optional assignment fits the requested width"
+    ((source.splitOn "\n").all fun line => line.length <= 100)
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "shifted-optional-assignment.lean" { lineWidth := 100 }
+  let expected :=
+    "theorem shiftedObtainHeader : True := by\n"
+    ++ "  · induction h with\n"
+    ++ "    | refl => exact True.intro\n"
+    ++ "    | tail htr ih =>\n"
+    ++ "        subst hos'\n"
+    ++ "        obtain ⟨_, rfl⟩ :=\n"
+    ++ "          Option.isSome_iff_exists.mp <| toSingleAccept_tr_antiDerivative_isSome htr\n"
+    ++ "        exact .trans (ih rfl) (.single htr)\n"
+  assertTrue "a shifted optional assignment does not fall back" (!result.fellBack)
+  assertEq "a shifted optional assignment uses the declaration value breakpoint"
+    expected result.formatted
+  assertTrue s!"a shifted optional assignment remains within width:\n{result.formatted}"
+    ((result.formatted.splitOn "\n").all fun line => line.length <= 100)
+  assertTrue "a shifted optional assignment preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let again ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "shifted-optional-assignment-formatted.lean" { lineWidth := 100 }
+  assertEq "optional assignment recovery is idempotent" result.formatted again
+  for assignment in ["obtain h", "obtain h := first, second", "obtain h :=\n    proof"] do
+    let source :=
+      s!"theorem untouchedOptionalAssignment : True := by\n  {assignment}\n  exact proof\n"
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source
+        "untouched-optional-assignment.lean" { lineWidth := 100 }
+    assertTrue "unsupported optional assignment forms do not fall back" (!result.fellBack)
+    assertEq "absent and multiple assignment values retain their source layout"
+      source result.formatted
+
 def assertShowProofTermUntouched (env : Lean.Environment) : IO Unit := do
   let source := "#check (show True by\n" ++ "  trivial)\n"
   let formatted ← Formatter.formatSourceWithEnv env source "show-proof-term.lean"
@@ -7610,13 +7691,14 @@ def assertLowPriorityPipeKeepsStructurallyRenderedOperand (env : Lean.Environmen
     ++ "  outer\n"
     ++ "  <| rewriteProof\n"
     ++ "      ▸ (inner\n"
-    ++ "          <| show firstVeryLongExpressionName = secondVeryLongExpressionName by proof\n"
+    ++ "          <| show firstVeryLongExpressionName\n"
+    ++ "            = secondVeryLongExpressionName by proof\n"
     ++ "            ▸ result)\n"
   let overlongShowResult ←
     Formatter.formatSourceWithEnvDetailed env overlongShowSource
       "low-priority-pipe-overlong-show-proof.lean" { lineWidth := 60 }
   assertTrue "an overlong pipe show proof does not cycle" (!overlongShowResult.fellBack)
-  assertEq "a no-benefit break does not detach an overlong show proof from its pipe"
+  assertEq "an overflowing show header uses its ordinary relation breakpoint"
     overlongShowExpected overlongShowResult.formatted
   assertTrue "an overlong pipe show proof preserves code"
     (← codePreservedIgnoringWhitespace env overlongShowSource
@@ -19709,6 +19791,8 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertDetachedInlineProofBodyKeepsInternalIndentation env
   assertShowProofAfterMovedLambdaIsIdempotent env
   assertShowProofTermUntouched env
+  assertShiftedShowHeaderFitsWidth env
+  assertShiftedOptionalAssignmentFitsWidth env
   assertTheoremTermProofBodyUntouched env
   assertTheoremEquationProofBodyUntouched env
   assertInstanceEquationArmsUseDeclarationBase env

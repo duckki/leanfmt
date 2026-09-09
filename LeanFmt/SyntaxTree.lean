@@ -798,6 +798,19 @@ private partial def containsLowPriorityInfixRhs : Tree -> Bool
   | .node _ children => children.any containsLowPriorityInfixRhs
   | _ => false
 
+private def regroupOptionalTacticAssignment? (children : Array Tree) : Option Tree := do
+  let index ←
+    (List.range children.size).reverse.find?
+      fun index => children[index]?.any hasContentToken
+  let .node (.raw `null) #[assignment@(.leaf token), .node (.raw `null) #[value]] ←
+    children[index]? | none
+  if token.lexeme != ":=" then
+    none
+  let header := children.extract 0 index
+  if (header.filter hasContentToken).size < 2 then
+    none
+  some <| .node .definition #[parserOwnedHeaderTree header, assignment, value]
+
 private def annotateTacticNode
     (kind : SyntaxNodeKind) (children : Array Tree) (isSpacedApplication := false)
     : Tree :=
@@ -863,12 +876,15 @@ private def annotateTacticNode
               children
     | _ =>
         let children :=
-          if isSpacedApplication then
-            match groupSimpleTrailingProofArgument? (.node (.raw `null) children) with
-            | some (.node _ grouped) => grouped
-            | _ => children
+          if let some declaration := regroupOptionalTacticAssignment? children then
+            #[declaration]
           else
-            children
+            if isSpacedApplication then
+              match groupSimpleTrailingProofArgument? (.node (.raw `null) children) with
+              | some (.node _ grouped) => grouped
+              | _ => children
+            else
+              children
         .node
           (.tactic kind summary.containsSequence false summary.containsOwner
             isSpacedApplication)

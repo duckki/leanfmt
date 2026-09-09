@@ -1111,12 +1111,19 @@ unbreakable tactic line consequently exceeds the configured width.
 
 Source preservation is node-local, not a recursive rendering mode. An opaque node emits
 its source slice; a structural node visits children using their own resolved policies.
-When moving a protected proof right overflows a declaration's first source line,
+When moving a protected proof right overflows a structural header's first source line,
 `OriginalTree.overflowAlternative?` can propose a sparse alternative: open the path to
-that declaration, retain its children's ordinary plans, and explicitly preserve all
+that owner, retain its children's ordinary plans, and explicitly preserve all
 neighboring source regions. A fitting declaration is not opened because an unrelated
 tactic overflows. Quotations, ignored regions, and other non-proof islands are opaque
-barriers to this search. Existing declaration rules supply every new breakpoint.
+barriers to this search. Declaration headers, parser-owned headers, and owners with a
+directly attached proof term are eligible. Existing declaration, expression, and proof
+rules supply every new breakpoint; for example, an overflowing `show ... by` can wrap
+its proposition or break after `by` without exposing the proof body's internal layout.
+Optional single-value tactic assignments are regrouped in the syntax tree into a
+definition with a parser-owned header, assignment token, and value. This exposes the
+ordinary value boundary for `obtain`-shaped syntax without a tactic-specific break rule.
+Absent assignments and multi-value assignment clauses retain their original shape.
 
 The renderer resolves this alternative into its immutable `TreeLayoutFacts`, refreshing
 the original-emission and multiline summaries along the changed path. Flat probes,
