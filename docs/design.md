@@ -1296,7 +1296,10 @@ and is indented one level.
 
 A trailing binder suffix, such as an integral's `∂μ`, stays on the body's final
 line when it fits, including after a closing delimiter. A multiline body does
-not itself require a break before that suffix.
+not itself require a break before that suffix. After the break following the
+comma, breaks inside the body take priority over breaks inside a parenthesized
+suffix operand: in `∫⁻ t : T, X ∂(Y)`, wrap `X` while reserving room for compact
+`∂(Y)`. If the measure cannot stay compact, it can still wrap by its own rules.
 
 <!-- leanfmt-test -->
 ```lean

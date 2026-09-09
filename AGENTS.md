@@ -108,6 +108,12 @@ Summarize the build, test, fixture, preservation, overflow, and idempotency resu
 for review. Do not commit generated or handwritten changes
 until the reviewer explicitly asks for a commit.
 
+## Commit messages
+
+Use a single-line summary, followed by a blank line and a few bullet points.
+Describe only what changed. Omit motivation, rationale, and validation results;
+report validation separately in the review summary.
+
 ## Short-term external-validation goal
 
 The current short-term goal is for both CSLib and mathlib to pass the complete

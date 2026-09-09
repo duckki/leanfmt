@@ -473,6 +473,59 @@ def segmentContentCount (segment : Segment) : Nat :=
 -- Line suffix computation
 -----------------------------------------------------------------------------------------
 
+def rawKindIsQuantifier (kind : Lean.SyntaxNodeKind) : Bool :=
+  kind == `Lean.Parser.Term.forall
+  || kind == `Lean.Parser.Term.exists
+  || kind == `Lean.«term∀__,_»
+  || kind == `Lean.«term∃__,_»
+  || kind == `«term∃_,_»
+
+def binderOperatorLexeme (lexeme : String) : Bool :=
+  ["∀", "∃", "⨆", "⨅", "⋃", "⋂", "∑", "∏", "𝔼", "∫", "∮"].any
+    fun operatorPrefix => lexeme.startsWith operatorPrefix
+
+def treeHasBinderBodySeparator (tree : SyntaxTree.Tree) : Bool :=
+  let segment := Segment.ofTree tree
+  match (nonemptyChildIndexes segment).getLast? with
+  | some bodyIndex =>
+      segment.indexes.any
+        fun index => index < bodyIndex && childStartsWithLexeme segment index ","
+  | none => false
+
+def treeHasDirectBinderCollection : SyntaxTree.Tree → Bool
+  | .node _ children =>
+      children.any
+        fun child =>
+          treeIsRawKind child `Lean.explicitBinders
+          || treeIsRawKind child `Lean.unbracketedExplicitBinders
+          || treeIsRawKind child `Batteries.ExtendedBinder.extBinderCollection
+  | _ => false
+
+def treeIsBinderOperatorTerm (tree : SyntaxTree.Tree) : Bool :=
+  match tree with
+  | .node (.raw kind) _ =>
+      rawKindIsQuantifier kind
+      || ((treeHasDirectBinderCollection tree
+            || (treeFirstLexeme? tree).any binderOperatorLexeme)
+          && treeHasBinderBodySeparator tree)
+  | _ => false
+
+def quantifierBodyIndex? (segment : Segment) : Option Nat :=
+  let contentIndexes :=
+    segment.parentIndexes.filter
+      fun index =>
+        match segment.parentChild? index with
+        | some child => treeHasContent child
+        | none => false
+  let separatorIndex? :=
+    (contentIndexes.filter
+      fun index => (segment.parentChild? index).any (treeFirstLexeme? · == some ","))
+    |>.getLast?
+  match separatorIndex? with
+  | some separatorIndex =>
+      contentIndexes.find? fun index => separatorIndex < index
+  | none => contentIndexes.getLast?
+
 def suffixKeywordLexeme (lexeme : String) : Bool :=
   lexemeIn lexeme
     [
@@ -609,6 +662,13 @@ def selectedChildIsProofBody (context : RuleContext) : Bool :=
       | _ => false
   | _ => false
 
+def suffixBinderOperandIn : List Frame → Bool
+  | [] => false
+  | parent :: ancestors =>
+      (treeIsBinderOperatorTerm parent.segment.parent
+        && (quantifierBodyIndex? parent.segment).any (· < parent.childIndex))
+      || suffixBinderOperandIn ancestors
+
 def suffixTokenAction (context : RuleContext) (token : SyntaxTree.Token)
     : SuffixTokenAction :=
   if token.lexeme.isEmpty then
@@ -618,6 +678,8 @@ def suffixTokenAction (context : RuleContext) (token : SyntaxTree.Token)
   else if suffixProjectionMember context || suffixInfixOperator context then
     .emit
   else if suffixEligibleToken token then
+    .emit
+  else if suffixBinderOperandIn context.ancestors then
     .emit
   else
     .stop
@@ -773,43 +835,6 @@ def doIfLetBindRule : LineBreakRule :=
 def singletonDelimitedItemWrapper (context : RuleContext) (segment : Segment) : Bool :=
   context.parentRawKind?.any SyntaxTree.isDelimitedCollectionKind
   && segmentContentCount segment == 1
-
-def rawKindIsQuantifier (kind : Lean.SyntaxNodeKind) : Bool :=
-  kind == `Lean.Parser.Term.forall
-  || kind == `Lean.Parser.Term.exists
-  || kind == `Lean.«term∀__,_»
-  || kind == `Lean.«term∃__,_»
-  || kind == `«term∃_,_»
-
-def binderOperatorLexeme (lexeme : String) : Bool :=
-  ["∀", "∃", "⨆", "⨅", "⋃", "⋂", "∑", "∏", "𝔼", "∫", "∮"].any
-    fun operatorPrefix => lexeme.startsWith operatorPrefix
-
-def treeHasBinderBodySeparator (tree : SyntaxTree.Tree) : Bool :=
-  let segment := Segment.ofTree tree
-  match (nonemptyChildIndexes segment).getLast? with
-  | some bodyIndex =>
-      segment.indexes.any
-        fun index => index < bodyIndex && childStartsWithLexeme segment index ","
-  | none => false
-
-def treeHasDirectBinderCollection : SyntaxTree.Tree → Bool
-  | .node _ children =>
-      children.any
-        fun child =>
-          treeIsRawKind child `Lean.explicitBinders
-          || treeIsRawKind child `Lean.unbracketedExplicitBinders
-          || treeIsRawKind child `Batteries.ExtendedBinder.extBinderCollection
-  | _ => false
-
-def treeIsBinderOperatorTerm (tree : SyntaxTree.Tree) : Bool :=
-  match tree with
-  | .node (.raw kind) _ =>
-      rawKindIsQuantifier kind
-      || ((treeHasDirectBinderCollection tree
-            || (treeFirstLexeme? tree).any binderOperatorLexeme)
-          && treeHasBinderBodySeparator tree)
-  | _ => false
 
 def quantifierBinderSequence (context : RuleContext) : Bool :=
   match context.ancestors with
@@ -3204,22 +3229,6 @@ def matchExpressionBreaks (_context : RuleContext) (segment : Segment)
       | some breakPoint => [breakPoint]
       | none => []
   | none => []
-
-def quantifierBodyIndex? (segment : Segment) : Option Nat :=
-  let contentIndexes :=
-    segment.parentIndexes.filter
-      fun index =>
-        match segment.parentChild? index with
-        | some child => treeHasContent child
-        | none => false
-  let separatorIndex? :=
-    (contentIndexes.filter
-      fun index => (segment.parentChild? index).any (treeFirstLexeme? · == some ","))
-    |>.getLast?
-  match separatorIndex? with
-  | some separatorIndex =>
-      contentIndexes.find? fun index => separatorIndex < index
-  | none => contentIndexes.getLast?
 
 def quantifierBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   let bodyBreaks :=

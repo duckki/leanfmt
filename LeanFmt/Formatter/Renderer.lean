@@ -1328,6 +1328,7 @@ partial def measureSuffixOfTree
         state.emitOriginalFirstLine tree
       else
         let segment := LineBreakRules.Segment.ofTree tree
+        let plan := LayoutPlan.resolve context segment
         segment.indexes.foldl
           (fun (state, stopped) index =>
             if stopped then
@@ -1337,8 +1338,9 @@ partial def measureSuffixOfTree
               | none => (state, false)
               | some child =>
                   if segment.start < index
-                      && hasRuleBreakAt context segment index
-                      && !suffixMayContinueAcrossRuleBreak context segment index then
+                      && plan.hasBreakAt index
+                      && (plan.isMandatory
+                          || !suffixMayContinueAcrossRuleBreak context segment index) then
                     (state.appendCommentTriviaBeforeTree child, true)
                   else
                     let childContext := context.push segment index

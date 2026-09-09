@@ -1079,6 +1079,15 @@ introducer; the proof renderer may still keep a fitting first tactic, such as `c
 or `calc`, on that line. When measurement stops before a token or rule boundary,
 same-line comment trivia preceding that boundary still contributes to the fit.
 
+The existing binder-body classification also identifies trailing operands as
+suffixes. For `∫⁻ t : T, X ∂(Y)`, the body reserves the compact `∂(Y)` width,
+including any enclosing declaration suffix. The rule layer classifies tokens in
+that trailing operand as suffix-eligible, allowing measurement across its optional
+breaks; mandatory boundaries and line-breaking comments still end measurement.
+This gives breaks inside `X` priority over breaks inside `Y`, without changing
+breakpoints or adding syntax knowledge to the renderer. Reservation guides fit checks, not emission:
+a measure that cannot remain compact still uses its ordinary structural layout.
+
 ### Proof and original-source escape hatches
 
 Proof subtrees, attribute instances, and unresolved parser `choice` nodes are not

@@ -3070,6 +3070,84 @@ def assertBinderSuffixStaysWithMultilineBody (env : Lean.Environment) : IO Unit 
       "multiline-binder-suffix-again.lean" { lineWidth := 70 }
   assertEq "a multiline binder suffix is idempotent" result.formatted again
 
+def assertBinderBodyBreaksBeforeDelimitedSuffix (env : Lean.Environment) : IO Unit := do
+  let syntaxSource := "syntax:60 \"∫test \" ident \", \" term:60 \" ∂\" term:70 : term\n"
+  let integrand :=
+    "(someLongFunctionNameForIntegralSuffixLayoutTestingX firstArgument secondArgument x)"
+  let source :=
+    syntaxSource
+    ++ "theorem integralSuffix : left = ∫test x, "
+    ++ integrand
+    ++ " ∂(.pi μ) := by\n"
+    ++ "  exact proof\n"
+  let expected :=
+    syntaxSource
+    ++ "theorem integralSuffix\n"
+    ++ "    : left\n"
+    ++ "      = ∫test x,\n"
+    ++ "          (someLongFunctionNameForIntegralSuffixLayoutTestingX firstArgument secondArgument\n"
+    ++ "            x) ∂(.pi μ) := by\n"
+    ++ "  exact proof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "binder-body-before-suffix.lean"
+      { lineWidth := 100 }
+  assertTrue "a binder with a delimited suffix does not fall back" (!result.fellBack)
+  assertEq "the binder body breaks internally before its compact suffix"
+    expected result.formatted
+  assertTrue "a binder with a delimited suffix preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  for width in [90, 100, 110] do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source
+        "binder-body-before-suffix-width.lean" { lineWidth := width }
+    assertTrue s!"binder suffix at width {width} does not fall back" (!result.fellBack)
+    assertTrue s!"binder suffix includes the parent suffix at width {width}"
+      (Formatter.linesFit result.formatted width)
+    assertTextContains "the tight marker and parenthesized value stay compact"
+      result.formatted "∂(.pi μ) := by"
+    let again ←
+      Formatter.formatSourceWithEnv env result.formatted
+        "binder-body-before-suffix-again.lean" { lineWidth := width }
+    assertEq s!"binder suffix at width {width} is idempotent" result.formatted again
+  for (label, measure, measureExpected)
+      in [
+        ("nested", "(.pi (density μ))", "∂(.pi (density μ)) := by"),
+        ("nested-binder", "(.pi (∫test y, f y ∂μ))", "∂(.pi (∫test y, f y ∂μ)) := by"),
+        (
+          "long",
+          "(.pi (veryLongMeasureFunction firstMeasureArgument secondMeasureArgument thirdMeasureArgument fourthMeasureArgument))",
+          "∂(.pi\n"
+        ),
+        (
+          "mandatory",
+          "(match x with | true => firstMeasure | false => secondMeasure)",
+          "∂(match x with\n"
+        ),
+        ("comment", "(.pi -- measure\n μ)", "∂(.pi -- measure\n")
+      ] do
+    let source := source.replace "(.pi μ)" measure
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source s!"binder-suffix-{label}.lean"
+        { lineWidth := 100 }
+    assertTrue s!"{label} binder suffix does not fall back" (!result.fellBack)
+    assertTrue s!"{label} binder suffix fits" (Formatter.linesFit result.formatted 100)
+    assertTextContains s!"the body breaks before the {label} measure"
+      result.formatted "secondArgument\n            x) ∂"
+    assertTextContains s!"{label} measure keeps its own layout boundaries"
+      result.formatted measureExpected
+    assertTrue s!"{label} binder suffix preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    let again ←
+      Formatter.formatSourceWithEnv env result.formatted
+        s!"binder-suffix-{label}-again.lean" { lineWidth := 100 }
+    assertEq s!"{label} binder suffix is idempotent" result.formatted again
+  let compactSource :=
+    syntaxSource ++ "def compactIntegral := ∫test x, f x ∂(density μ)\n"
+  let compact ←
+    Formatter.formatSourceWithEnv env compactSource "compact-binder-suffix.lean"
+      { lineWidth := 100 }
+  assertEq "a fitting body and suffix remain flat" compactSource compact
+
 def assertMultitokenChildKeepsStructuralBase (env : Lean.Environment) : IO Unit := do
   let source :=
     "instance (i j : J) :\n"
@@ -19859,6 +19937,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertRecordPatternEllipsisKeepsCommaBoundary env
   assertInlineMultitacticAlternativeBreaksBeforeBody env
   assertBinderSuffixStaysWithMultilineBody env
+  assertBinderBodyBreaksBeforeDelimitedSuffix env
   assertMultitokenChildKeepsStructuralBase env
   assertOverflowRecoveryKeepsNestedCommandIndent env
   assertFittingTrailingLineCommentStaysAttached env
