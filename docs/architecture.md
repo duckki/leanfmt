@@ -1065,6 +1065,11 @@ are not suffix-eligible. The suffix classifiers live with line-break rules; the 
 only measures with those classifications and the same whitespace policy used by actual
 emission. Tight optional-access `?` participates in that measurement, so a following
 defaulting call or projection can expose an earlier application break before overflowing.
+Final atoms in a `.suffixGroup` are suffix-eligible by their structural ownership,
+including generated postfix operators. Operand fit checks count those atoms together
+with enclosing suffixes such as `:= by`; the classifier uses the complete group's
+child list even when its current segment is sliced. Single-child wrappers preserve
+that ownership, while ordinary identifier arguments remain separate operands.
 A preserved proof island retries structurally only when its attached suffix creates an
 overflow that the preserved proof did not have. Parser-identified spaced tactic
 applications may participate in that retry, allowing their ordinary application

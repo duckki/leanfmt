@@ -654,6 +654,15 @@ def suffixInfixOperatorIn : List Frame → Bool
 def suffixInfixOperator (context : RuleContext) : Bool :=
   suffixInfixOperatorIn context.ancestors
 
+def suffixGroupAtomIn : List Frame → Bool
+  | [] => false
+  | parent :: ancestors =>
+      if parent.nodeKind? == some .suffixGroup then
+        (parent.segment.children?).any
+          fun children => 0 < parent.childIndex && parent.childIndex + 1 == children.size
+      else
+        frameWrapsOnlySelectedChild parent && suffixGroupAtomIn ancestors
+
 def selectedChildIsProofBody (context : RuleContext) : Bool :=
   match context.ancestors with
   | parent :: _ =>
@@ -678,6 +687,8 @@ def suffixTokenAction (context : RuleContext) (token : SyntaxTree.Token)
   else if suffixProjectionMember context || suffixInfixOperator context then
     .emit
   else if suffixEligibleToken token then
+    .emit
+  else if token.role == .atom && suffixGroupAtomIn context.ancestors then
     .emit
   else if suffixBinderOperandIn context.ancestors then
     .emit

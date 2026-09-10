@@ -10228,6 +10228,47 @@ def assertChildFitCountsDelimitedPostfixSuffix (env : Lean.Environment) : IO Uni
       { lineWidth := 80 }
   assertEq "child fit counts balanced postfix suffix" expected formatted
 
+def assertPostfixOperandFitCountsParentSuffix (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "theorem postfixFit (x : A) :\n"
+    ++ "    (maximalIdeal A).intValuation x =\n"
+    ++ "      (ENat.recTopCoe 0 (WithZero.coe <| Multiplicative.ofAdd <| Nat.cast · ) (addVal A x))⁻¹ := by\n"
+    ++ "  exact proof\n"
+  let expected :=
+    "theorem postfixFit (x : A)\n"
+    ++ "    : (maximalIdeal A).intValuation x\n"
+    ++ "      = (ENat.recTopCoe 0 (WithZero.coe <| Multiplicative.ofAdd <| Nat.cast · )\n"
+    ++ "          (addVal A x))⁻¹ := by\n"
+    ++ "  exact proof\n"
+  for (label, syntaxSource, suffix)
+      in [
+        ("inverse", "", "⁻¹"),
+        ("chained", "", "⁻¹⁻¹"),
+        ("custom", "postfix:max \"ᵀᵀ\" => id\n", "ᵀᵀ")
+      ] do
+    let source := syntaxSource ++ source.replace "⁻¹" suffix
+    for width in [90, 100, 110] do
+      let result ←
+        Formatter.formatSourceWithEnvDetailed env source s!"postfix-{label}-fit.lean"
+          { lineWidth := width }
+      assertTrue s!"{label} postfix at width {width} does not fall back"
+        (!result.fellBack)
+      assertTrue s!"{label} postfix at width {width} includes its parent suffix"
+        (Formatter.linesFit result.formatted width)
+      if width == 100 then
+        assertEq s!"{label} postfix wraps the operand before the parent suffix overflows"
+          (syntaxSource ++ expected.replace "⁻¹" suffix) result.formatted
+      if width == 110 then
+        assertTextContains s!"a fitting {label} postfix operand stays flat"
+          result.formatted
+          s!"(ENat.recTopCoe 0 (WithZero.coe <| Multiplicative.ofAdd <| Nat.cast · ) (addVal A x)){suffix} := by"
+      assertTrue s!"{label} postfix at width {width} preserves code"
+        (← codePreservedIgnoringWhitespace env source result.formatted)
+      let again ←
+        Formatter.formatSourceWithEnv env result.formatted
+          s!"postfix-{label}-fit-again.lean" { lineWidth := width }
+      assertEq s!"{label} postfix at width {width} is idempotent" result.formatted again
+
 def assertNestedChildFitCountsInfixSuffix (env : Lean.Environment) : IO Unit := do
   let source :=
     "def nestedInfixSuffixExample :=\n"
@@ -20119,6 +20160,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertLogicalArrowBreaksBalanced env
   assertChildFitCountsParentSuffix env
   assertChildFitCountsDelimitedPostfixSuffix env
+  assertPostfixOperandFitCountsParentSuffix env
   assertNestedChildFitCountsInfixSuffix env
   assertNestedInfixFitCountsPairedDelimiterSuffix env
   assertNestedChildFitCountsProjectionMemberSuffix env

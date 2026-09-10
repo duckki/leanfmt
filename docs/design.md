@@ -2164,6 +2164,8 @@ delimiters stay attached while the enclosed expression applies its own layout.
 This covers notation such as `|x|` and `‖x‖` without enumerating delimiter
 spellings. Generated postfix term nodes likewise keep their final atom attached
 to the preceding expression while that expression applies its own layout.
+The expression reserves width for the postfix atom and any enclosing suffix,
+such as `:= by`, before choosing its internal line breaks.
 
 A generated prefix-index term is recognized when its immediate opening atom
 ends in `[`, a later immediate atom is `]`, and an operand follows that closing
