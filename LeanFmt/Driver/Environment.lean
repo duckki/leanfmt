@@ -49,14 +49,14 @@ def usesDefaultEnvironmentImports (imports : Array Lean.Import) : Bool :=
     ]
   || imports.isEmpty
 
+def usesDefaultEnvironment (spec : LeanEnvironment.Spec) : Bool :=
+  spec.level == .private && usesDefaultEnvironmentImports spec.imports
+
 def shouldReuseImportPrefixes (options : Options) : Bool :=
   options.worker && options.importPrefixCacheSize != 0
 
 def isExactEnvironmentWorker (options : Options) : Bool :=
   options.worker && !options.workerDefaultEnvironment
-
-def shouldImportEnvironmentFirst (options : Options) : Bool :=
-  options.importEnvFirst || isExactEnvironmentWorker options
 
 def ImportPrefixCache.create (maxEntries : Nat) : IO ImportPrefixCache := do
   pure { maxEntries, entries := ← IO.mkRef [] }
@@ -123,9 +123,7 @@ def EnvironmentLoader.rememberExactEnvironment
 def EnvironmentLoader.environmentForSpec
     (loader : EnvironmentLoader) (spec : LeanEnvironment.Spec)
     : IO EnvironmentResult := do
-  if !loader.leakExact
-      && spec.level == .private
-      && usesDefaultEnvironmentImports spec.imports then
+  if !loader.leakExact && usesDefaultEnvironment spec then
     pure { environment := loader.default, origin := .default }
   else
     let key := spec.key
@@ -146,21 +144,11 @@ def EnvironmentLoader.environmentForImports
   pure (← loader.environmentForSpec { imports, level }).environment
 
 def EnvironmentLoader.environmentForSource
-    (loader : EnvironmentLoader) (options : Options) (source fileName : String)
+    (loader : EnvironmentLoader) (_options : Options) (source fileName : String)
     : IO Lean.Environment := do
   let normalized := Formatter.Internal.normalizeSource source
-  if shouldImportEnvironmentFirst options then
-    let importSpec ← LeanEnvironment.specForSource normalized fileName
-    pure (← loader.environmentForSpec importSpec).environment
-  else
-    try
-      discard
-      <| SyntaxTree.parseModuleSyntaxWithoutParserStateUpdates loader.default
-          normalized fileName
-      pure loader.default
-    catch _ =>
-      let importSpec ← LeanEnvironment.specForSource normalized fileName
-      pure (← loader.environmentForSpec importSpec).environment
+  let importSpec ← LeanEnvironment.specForSource normalized fileName
+  pure (← loader.environmentForSpec importSpec).environment
 
 def EnvironmentOrigin.description : EnvironmentOrigin → String
   | .default => "default-imports"
@@ -172,27 +160,11 @@ def EnvironmentLoader.environmentForSourceProfiled
     : IO Lean.Environment := do
   let (normalized, normalizeMs) ←
     timeIO <| pure <| Formatter.Internal.normalizeSource source
-  let loadFromHeader (defaultParse : String) : IO Lean.Environment := do
-    let (spec, headerMs) ← timeIO <| LeanEnvironment.specForSource normalized fileName
-    let (result, environmentMs) ← timeIO <| loader.environmentForSpec spec
-    profileLine options
-      s!"{fileName}: environment.normalize={normalizeMs}ms default-parse={defaultParse} import-header={headerMs}ms import-env={environmentMs}ms origin={result.origin.description}"
-    pure result.environment
-  if shouldImportEnvironmentFirst options then
-    loadFromHeader "skipped"
-  else
-    let defaultParseStart ← IO.monoMsNow
-    try
-      discard
-      <| SyntaxTree.parseModuleSyntaxWithoutParserStateUpdates loader.default
-          normalized fileName
-      let defaultParseStop ← IO.monoMsNow
-      profileLine options
-        s!"{fileName}: environment.normalize={normalizeMs}ms default-parse={defaultParseStop - defaultParseStart}ms import-header=0ms import-env=0ms cache=default"
-      pure loader.default
-    catch _ =>
-      let defaultParseStop ← IO.monoMsNow
-      loadFromHeader s!"{defaultParseStop - defaultParseStart}ms failed"
+  let (spec, headerMs) ← timeIO <| LeanEnvironment.specForSource normalized fileName
+  let (result, environmentMs) ← timeIO <| loader.environmentForSpec spec
+  profileLine options
+    s!"{fileName}: environment.normalize={normalizeMs}ms import-header={headerMs}ms import-env={environmentMs}ms origin={result.origin.description}"
+  pure result.environment
 
 def relativePathFromComponents (base path : List String) : Option FilePath :=
   let rec dropCommon : List String → List String → List String × List String

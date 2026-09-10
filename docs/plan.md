@@ -4,6 +4,26 @@ Rules must describe general syntax ownership. External paths and declaration
 names are evidence for tests, never formatter conditions. Missing-rule coverage
 is release-blocking only for Lean's standard library and Mathlib.
 
+## Open Issues
+
+### Frontend parser recovery
+
+The full-frontend fallback currently accepts recovered syntax after parser errors.
+For example, invalid `-[n + 1]` inside `namespace Int` can lose its closing bracket.
+Reject parser diagnostics separately from elaboration diagnostics, then repair tests
+that currently depend on recovery (including obsolete `match (dependent := true)`
+and quotations parsed without their tactic extensions). This is separate from the
+fixed import-environment selection and namespace/section tracking regressions.
+
+### Mathlib v4.33.1 build gate
+
+Repeat formatting from pristine sources and the changed-module/full builds after
+the parser-context fixes. Earlier formatting diagnostics alone did not detect
+`-[n+1]` or `mk_rpc_widget%` being parsed under the wrong environment.
+The focused width-100 gate passes all 43 files under `Mathlib/Data/Int` and
+`Mathlib/Tactic/Widget`; only the expected token corrections change output, and
+all five changed modules elaborate. CSLib's 200-file light gate is unchanged.
+
 ## Progress
 
 ### Checkpoint 1: structural headers and peer continuations
@@ -140,8 +160,8 @@ the established large-file variance.
 
 The exact width-100 Mathlib `v4.33.0` release gate formatted all 8,311 selected files in 84
 clean batches. The 4,377-target changed-module closure and final 8,705-job aggregate build
-both passed. The complete Mathlib run took 6,713 seconds. No open release blocker remains;
-the current tree is ready for the 0.4 release.
+both passed. The complete Mathlib run took 6,713 seconds. This establishes the
+`v4.33.0` baseline; it does not replace the pending `v4.33.1` gate above.
 
 ## Validation standard
 

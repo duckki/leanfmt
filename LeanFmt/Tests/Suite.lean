@@ -14792,17 +14792,57 @@ def assertDefaultEnvironmentPartition (env : Lean.Environment) : IO Unit := do
       let lastExact ← IO.mkRef none
       let loader : LeanFmt.Driver.EnvironmentLoader := { default := env, lastExact }
       let ordinary := root / "Ordinary.lean"
+      let importedOrdinary := root / "ImportedOrdinary.lean"
       let importedSyntax := root / "ImportedSyntax.lean"
-      IO.FS.writeFile ordinary "import Missing.Module\n\ndef ordinary : Nat := 0\n"
+      IO.FS.writeFile ordinary "def ordinary : Nat := 0\n"
+      IO.FS.writeFile importedOrdinary
+        "import Missing.Module\n\ndef ordinary : Nat := 0\n"
       IO.FS.writeFile importedSyntax
-        "import Missing.Module\n\ntheorem product : lhs ⬝ rhs := by trivial\n"
+        "import Missing.Module\n\ndef widget := exported_keyword% value\n"
       let (defaultFiles, importFiles) ←
         LeanFmt.Driver.partitionDefaultEnvironmentFiles loader 2
-          [ordinary, importedSyntax]
-      assertEq "ordinary imported files use the default environment"
+          [ordinary, importedOrdinary, importedSyntax]
+      assertEq "files without explicit imports use the default environment"
         (toString [ordinary]) (toString (defaultFiles.map (·.1)))
-      assertEq "unknown imported syntax requires the import environment"
-        (toString [importedSyntax]) (toString importFiles)
+      assertEq
+        "explicit imports require their environment even when default parsing succeeds"
+        (toString [importedOrdinary, importedSyntax]) (toString importFiles)
+
+def assertImportedKeywordUsesExactEnvironment (env : Lean.Environment) : IO Unit := do
+  let loader : LeanFmt.Driver.EnvironmentLoader :=
+    { default := env, lastExact := ← IO.mkRef none }
+  for header
+      in [
+        "import LeanFmt.Tests.ExportedModuleSyntax\n",
+        "module\npublic import LeanFmt.Tests.ExportedModuleSyntax\npublic meta section\n"
+      ] do
+    let source := header ++ "def widget := exported_keyword% 1\n"
+    let fileName := "imported-keyword.lean"
+    let defaultParsed ← SyntaxTree.parseModuleStringWithEnv env source fileName
+    assertTrue "default parsing silently accepts a split imported keyword"
+      (defaultParsed.tokens.any (·.lexeme == "%"))
+    for options
+        in ([
+              {},
+              { profile := true },
+              { worker := true },
+              { worker := true, workerDefaultEnvironment := true }
+            ]
+            : List LeanFmt.Driver.Options) do
+      let imported ←
+        if options.profile then
+          loader.environmentForSourceProfiled options source fileName
+        else
+          loader.environmentForSource options source fileName
+      let parsed ← SyntaxTree.parseModuleStringWithEnv imported source fileName
+      assertTrue "the driver retains the imported keyword atom"
+        (parsed.tokens.any (·.lexeme == "exported_keyword%"))
+      let result ← Formatter.formatSourceWithEnvDetailed imported source fileName
+      assertTrue "imported keyword formatting does not fall back" (!result.fellBack)
+      assertTextContains "the imported keyword remains unbroken" result.formatted
+        "def widget := exported_keyword% 1"
+      assertEq "imported keyword formatting is idempotent" result.formatted
+        (← Formatter.formatSourceWithEnv imported result.formatted fileName)
 
 def assertFormattingFilesAreSpread : IO Unit := do
   let batches :=
@@ -14863,11 +14903,6 @@ def assertWorkersUseInputLakeRoot : IO Unit := do
         (!LeanFmt.Driver.shouldUseWorker { files := [file] } explicitCwd? 1)
       assertTrue "worker subprocess does not spawn nested workers"
         (!LeanFmt.Driver.shouldUseWorker { worker := true } explicitCwd? 2)
-      assertTrue "exact worker imports its header before parsing"
-        (LeanFmt.Driver.shouldImportEnvironmentFirst { worker := true })
-      assertTrue "default-environment worker keeps default-first parsing"
-        (!LeanFmt.Driver.shouldImportEnvironmentFirst
-            { worker := true, workerDefaultEnvironment := true })
       assertTrue "exact worker leaks its sole imported environment"
         (LeanFmt.Driver.isExactEnvironmentWorker { worker := true })
       assertTrue "default-environment worker does not leak an exact environment"
@@ -17905,6 +17940,35 @@ def assertParserStateUpdatesAfterSyntaxCommands (env : Lean.Environment) : IO Un
   assertTrue "syntax command parser-state updates preserve parseability"
     (!(moduleTree.tokens.isEmpty))
 
+def assertParserStateRestoresScopes (env : Lean.Environment) : IO Unit := do
+  for scopeSource
+      in [
+        "namespace Nat\nend Nat\n",
+        "section\nend\n",
+        "section Outer\nnamespace Nat\nsection\nend\nend Nat\nend Outer\n"
+      ] do
+    let source :=
+      scopeSource ++ "namespace Int\ndef negative (n : Nat) : Int := -[n+1]\nend Int\n"
+    let fileName := "parser-state-scopes.lean"
+    let parsed ← SyntaxTree.parseModuleStringWithEnv env source fileName
+    assertTrue "Int notation retains its compound closing atom after leaving scopes"
+      (parsed.tokens.any (·.lexeme == "+1]"))
+    let result ← Formatter.formatSourceWithEnvDetailed env source fileName
+    assertTrue "scoped notation formatting does not fall back" (!result.fellBack)
+    assertTextContains "scoped notation keeps its internal keyword spelling"
+      result.formatted "-[n+1]"
+    assertEq "scoped notation formatting is idempotent" result.formatted
+      (← Formatter.formatSourceWithEnv env result.formatted fileName)
+  let localSource :=
+    "section\nlocal notation \"scope_value%\" => 0\n"
+    ++ "def localValue := scope_value%\nend\n"
+    ++ "def modulus (scope_value : Nat) := scope_value% 2\n"
+  let parsed ←
+    SyntaxTree.parseModuleStringWithEnv env localSource "local-notation-scope.lean"
+  assertTrue "local notation disappears outside its section"
+    ((parsed.tokens.filter (·.lexeme == "scope_value%")).size == 1
+      && parsed.tokens.any (·.lexeme == "%"))
+
 def assertSyntaxAuthoringDefinitionPreservesCode (env : Lean.Environment) : IO Unit := do
   let source :=
     "syntax \"customTerm\" : term\n"
@@ -20296,6 +20360,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertExportedEnvironmentSkipsPrivateTransitiveImports
   assertExportedEnvironmentIncludesMetaIrClosure
   assertDefaultEnvironmentPartition env
+  assertImportedKeywordUsesExactEnvironment env
   assertFormattingFilesAreSpread
   assertWorkersUseInputLakeRoot
   assertImportFilesGroupByHeader
@@ -20335,6 +20400,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertApplicationFitCountsFromSuffix env
   assertStructuralAttachmentPolicy env
   assertParserStateUpdatesAfterSyntaxCommands env
+  assertParserStateRestoresScopes env
   assertSyntaxAuthoringDefinitionPreservesCode env
   assertCustomBracedTermSyntaxKeepsNestedSourceLayout env
   assertTightIndexedExtensionUsesStructuralRule env

@@ -88,13 +88,16 @@ Formatting a file follows this pipeline:
    powers, conservative spaced-application shape, and parser-owned trailing bodies.
    These facts let logical regrouping follow imported and locally declared syntax
    without putting environment access, parser combinators, or project syntax names in
-   line-break rules. The CLI first tries
-   the default environment, then loads an import-specific
-   environment when project syntax requires it. For multi-file package formatting,
-   a bounded parallel classification pass reads each file once, determines whether it
-   needs an import-specific environment, and records its source size. Files that use the
-   default environment are sorted by size and spread across worker processes, keeping
-   large files from collecting in one batch. Imported files are grouped by exact
+   line-break rules. Namespace and section entry/exit are elaborated through Lean's
+   command state so scoped and local notation follow the source scopes.
+   The CLI selects the environment from the source import header before parsing.
+   A successful parse with fewer imports cannot establish equivalent syntax: an
+   imported keyword can otherwise parse as an identifier and an operator. Only
+   scripts with no imports beyond implicit `Init` use the default environment.
+   For multi-file package formatting, a bounded parallel classification pass reads
+   each file once, selects its environment from the header, and records its source
+   size. Files that use the default environment are sorted by size and spread across
+   worker processes, keeping large files from collecting in one batch. Imported files are grouped by exact
    normalized import header, and every file in one group stays in the same worker. The parent
    obtains the target package's augmented environment from Lake once, then starts all
    formatter workers directly with that process environment. When imported parser-state

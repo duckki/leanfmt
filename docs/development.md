@@ -632,8 +632,9 @@ the corresponding existing clone there. Set
 `LEANFMT_VALIDATION_FORMATTER_JOBS` passes `--jobs` to limit concurrent workers;
 the automatic worker count uses the machine's hardware concurrency for both default
 and imported environments. Multi-file package formatter invocations first process
-files that parse in leanfmt's default Lean environment, then process files that need
-imported syntax in short-lived workers. Default-environment classification runs in
+scripts with only implicit `Init` imports in leanfmt's default Lean environment, then
+process files with explicit imports in short-lived workers. Classification uses import
+headers, not speculative parsing without the declared extensions. It runs in
 bounded parallel batches and records source sizes from the same file reads; the worker
 scheduler spreads large files across its batches. The parent asks Lake
 for the target package's augmented process environment once and launches workers

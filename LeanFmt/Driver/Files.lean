@@ -4,16 +4,10 @@ open System
 
 namespace LeanFmt.Driver
 
-def sourceParsesWithDefaultEnvironment
-    (loader : EnvironmentLoader) (source fileName : String)
-    : IO Bool := do
-  try
-    discard
-    <| SyntaxTree.parseModuleSyntaxWithoutParserStateUpdates loader.default
-        (Formatter.Internal.normalizeSource source) fileName
-    pure true
-  catch _ =>
-    pure false
+def sourceUsesDefaultEnvironment (source fileName : String) : IO Bool := do
+  let spec ←
+    LeanEnvironment.specForSource (Formatter.Internal.normalizeSource source) fileName
+  pure (usesDefaultEnvironment spec)
 
 private structure ClassifiedFile where
   path : FilePath
@@ -28,8 +22,7 @@ private partial def splitIntoBatchCount (batchCount : Nat) (items : List α)
     let batchSize := (items.length + batchCount - 1) / batchCount
     items.take batchSize :: splitIntoBatchCount (batchCount - 1) (items.drop batchSize)
 
-private def classifyFiles (loader : EnvironmentLoader) (files : List FilePath)
-    : IO (List ClassifiedFile) := do
+private def classifyFiles (files : List FilePath) : IO (List ClassifiedFile) := do
   files.mapM
     fun file => do
       let source ← IO.FS.readFile file
@@ -37,21 +30,21 @@ private def classifyFiles (loader : EnvironmentLoader) (files : List FilePath)
         {
           path := file
           usesDefaultEnvironment :=
-            ← sourceParsesWithDefaultEnvironment loader source file.toString
+            ← sourceUsesDefaultEnvironment source file.toString
           sourceSize := source.length
         }
 
 /--
 During classification, read each file once to determine its required environment and
-estimate its formatting cost. Classification batches share the immutable default
-environment and run in parallel, while their results retain input order.
+estimate its formatting cost. Classification reads only import headers and runs
+in parallel, while its results retain input order.
 -/
 def partitionDefaultEnvironmentFiles
-    (loader : EnvironmentLoader) (workerJobs : Nat) (files : List FilePath)
+    (_loader : EnvironmentLoader) (workerJobs : Nat) (files : List FilePath)
     : IO (List (FilePath × Nat) × List FilePath) := do
   let batches := splitIntoBatchCount (min (max 1 workerJobs) files.length) files
   let tasks ←
-    batches.mapM fun batch => IO.asTask (prio := .dedicated) (classifyFiles loader batch)
+    batches.mapM fun batch => IO.asTask (prio := .dedicated) (classifyFiles batch)
   let classifiedBatches ← tasks.mapM fun task => IO.ofExcept task.get
   let mut defaultFiles := []
   let mut importFiles := []

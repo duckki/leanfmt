@@ -4337,7 +4337,9 @@ partial def syntaxContainsParserStateCommandKind : Syntax → Bool
   | _ => false
 
 def commandUpdatesParserState (command : Syntax) : Bool :=
-  syntaxContainsParserStateCommandKind command
+  command.isOfKind `Lean.Parser.Command.section
+  || command.isOfKind `Lean.Parser.Command.end
+  || syntaxContainsParserStateCommandKind command
 
 def parserStateCommandContext (inputContext : Parser.InputContext)
     : Elab.Command.Context :=

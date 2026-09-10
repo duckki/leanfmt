@@ -44,7 +44,7 @@ def usage : String :=
       "            Keep up to N first-import prefix states per worker;",
       "            zero uses Lean's direct importer for new exact environments.",
       "  --import-env-first",
-      "            Import the source header environment before trying default parsing.",
+      "            Compatibility option; source imports are always loaded before parsing.",
       "  --check-exception",
       "            Check code preservation and remaining overflow.",
       "  --check-missing-rules",
