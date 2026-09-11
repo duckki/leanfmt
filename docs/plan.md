@@ -14,44 +14,29 @@ def orthogonal := ...
 ```
 
 Quiet parsing skips ordinary definitions; later syntax declarations can need them.
-Bounded frontend recovery now avoids replaying the remaining file and earlier recovered
-prefixes. CSLib's `WellFormed.lean` improved from 8,597 to 242 ms of formatter time.
-`PhaseSemantics/Basic.lean` remains at 4,545 ms (previously 4,798 ms): ten notation
-declarations require successive dependency windows through line 705. Both outputs are
-unchanged. The audited Lean 4.33.1 APIs provide no source-dependency replay service. The theorem
-header helper is private; `Elab.async` schedules complete proofs rather than avoiding
-them. Parser-generating commands can inspect actual theorem bodies, as covered by
-`assertParserReplayRetainsTheoremBodyDependencies`. Selective elaboration therefore
-needs a separate design, not skipped proofs, ignored errors, or attribute exceptions.
-
-### Repeated diagnostic parsing
-
-```text
-formatting -> parsed module -> output text -> diagnostics parse the same text again
-```
-
-The driver discards the modules already parsed during convergence. On formatted CSLib
-`PhaseSemantics/Basic.lean`, formatting took 4,482 ms; adding preservation and idempotency
-checks took 9,165 ms. Identical source and output need just one diagnostic module, but
-even that module is currently rebuilt after formatting.
+Bounded frontend recovery preserves these dependencies, but CSLib's
+`PhaseSemantics/Basic.lean` still takes about 4.5 seconds for one parse: ten notation
+declarations require successive dependency windows through line 705. Lean 4.33.1 has
+no audited source-dependency replay API. Parser-generating commands can inspect actual
+theorem bodies, as covered by `assertParserReplayRetainsTheoremBodyDependencies`.
+Selective elaboration needs a separate design, not skipped proofs, ignored errors,
+or attribute exceptions. This is a performance issue, not a known formatting failure.
 
 ## Progress
 
-### Proposed checkpoint: reuse per-file parse results
-
-Carry original and converged modules into diagnostics within the same file operation.
-Keep public text results, fallback behavior, ignore-region whole-file validation, and
-the independent idempotency check unchanged. Do not add a global cache or reuse parser
-environments between different source texts. Require unchanged formatter output and
-fewer parser replays in focused tests and CSLib profiles. This proposal awaits review.
-
-### Later checkpoint: selective dependency design
+### Next checkpoint: dependency design decision
 
 Review a source-dependency model only if the remaining single-parse cost warrants it.
 It must preserve arbitrary command dependencies, declaration bodies, attributes,
 namespace and option scopes, and parser error rejection. Lean's reserved-name actions
 are not a general missing-source-declaration callback. Do not implement a scheduler or
 cross-source cache without approving that design.
+
+### Release gate
+
+Require complete CSLib and Mathlib validation, with all selected sources checked and
+post-format builds passing. Close any newly found safety or formatting regressions
+before release; checkpoint-only formatter sweeps do not replace these builds.
 
 ## Validation standard
 
@@ -85,44 +70,44 @@ toolchain, selector, and source manifest remain unchanged.
 
 ### Current baseline
 
-The dependency audit adds a passing theorem-body dependency regression test. It makes
-no production formatter changes beyond the bounded-replay baseline below. The complete
-local gate passed, including tests, linter, fixtures, self-formatting, preservation,
-width, and idempotency. No new external formatter sweep was run for this test-only
-audit. The performance issue remains open pending the next implementation checkpoint.
+The per-file module checkpoint is based on `5cb7b6c`. Diagnostics consume original and
+converged modules from one file operation, without a cross-source cache. Public text
+results, fallback behavior, ignored-region whole-file validation, and independent
+idempotency are unchanged. Inherited overflow is filtered before structural analysis,
+using the existing exemption without bypassing code preservation.
 
-The bounded-replay follow-up restores let-body metadata parity and limits frontend
-recovery to the needed prefix. Tests cover command-local scopes, repeated recovery,
-quiet continuation, complete file-map visibility, full-tail parser recovery, terminal
-commands, malformed tails, preservation, and idempotency. The complete local gate
-passed: build, tests, development linter, self-formatting, preservation, actionable
-width, and idempotency, with no fixture drift.
+Build, tests, development linter, fixtures, self-formatting, preservation, actionable
+width, and idempotency passed. Replay-count tests cover unchanged, changed, normalized,
+and ignored-region inputs; diagnostic tests cover inherited and newly introduced overflow.
+Fixture output is unchanged; self-formatting changed only the new implementation and
+test code. Because Apple's command-line tools became unavailable, the commands behind
+`make check` were run directly with the bundled Git and Lean toolchain.
 
-Full GraphQL and quantum validation passed on Lean 4.33.0 and 4.32.0 respectively.
-Final formatter/check time was 41 seconds for GraphQL and 15 seconds for quantum. GraphQL's
-13 changed files follow existing declaration and proof-layout rules; review found no
-new regressions. Quantum's output is unchanged. Both post-format builds passed.
+An initial matched profile of formatted CSLib `PhaseSemantics/Basic.lean` reduced
+formatting plus diagnostic time from 8,715 to 4,526 ms, with identical output. The
+single-parse dependency replay cost remains; this improvement removes duplicate work.
 
-Full width-100 CSLib validation passed all 200 files with an unchanged output baseline
-and successful final builds. The two runs took 95 and 85 seconds overall; formatter
-checks varied from 56 to 70 seconds.
+An alternating before/after comparison over GraphQL's 280 files on Lean 4.33.0 took
+30.65-38.88 seconds before and 18.68-19.04 seconds after. Aggregate CPU user time fell
+from about 162.5 to 95.9 seconds. The large proof-file diagnostic slowdown found during
+development was eliminated by applying the existing inherited-overflow exemption first.
 
-Mathlib's width-100 checkpoint passed all 8,311 files in 84 batches, with every
-formatter diagnostic at zero. Formatter checks took 2,988 seconds; total checkpoint
-time was 3,093 seconds. Only `Mathlib/Tactic/Monotonicity/Attr.lean` changed: `( let`
-became `(let`, with the multiline string and surrounding layout preserved. The changed
-module's 68-job build passed. Independent review found no new formatting issues.
-The other 8,310 files are byte-identical to the baseline.
+Full GraphQL (280 files), quantum (20 Lake-owned files; one unowned source skipped),
+and width-100 CSLib (200 files) passed with successful post-format builds and
+byte-identical output. Final batched formatter checks took 37, 52, and 69 seconds
+respectively; the quantum timing overlapped local checks, and its isolated checkpoint
+repeat took 19 seconds. CSLib's full validation took 82 seconds.
 
-That corpus run preceded the final terminal-command guard. After the guard, the full
-local, GraphQL, quantum, and CSLib gates passed again without further formatting
-changes. Six Mathlib regression files passed focused preservation, width, missing-rule,
-and idempotency checks. The full Mathlib formatter sweep was not repeated after the
-guard.
+The width-100 Mathlib checkpoint passed all 8,311 files in 84 batches, with every
+enabled diagnostic at zero and no changed sources. Formatter checks took 2,667 seconds;
+total checkpoint time was 2,781 seconds, compared with 2,988 and 3,093 seconds in the
+previous warm checkpoint. Two reviewers confirmed zero output changes through staged
+comparisons and complete pre/post snapshots, with a fresh checkout diff matching the
+snapshots. All 8,311 outputs are byte-identical to the pre-checkpoint baseline.
 
 Mathlib's recorded full-build baseline is parser-safety commit `a6c4545`: all 7,843
 sources changed from pristine passed the required module builds, followed by the
-8,705-job full build. This follow-up reuses that baseline and builds its changed module;
-it does not repeat the aggregate release build. The warm, already-formatted checkpoint
-timings are not a like-for-like comparison with the earlier full run. Baselines and
-batch logs are under `.scratch/external-validation/logs/`.
+8,705-job full build. The later one-space repair in `Mathlib/Tactic/Monotonicity/Attr.lean`
+also passed its 68-job module build. The current checkpoint reuses that baseline; it
+does not repeat the aggregate release build. Baselines and batch logs are under
+`.scratch/external-validation/logs/`.

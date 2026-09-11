@@ -15695,6 +15695,80 @@ def assertFormattingExceptionChecks (env : Lean.Environment) : IO Unit := do
       ])
     counts.summary
 
+def assertInheritedOverflowKeepsOtherDiagnostics (env : Lean.Environment) : IO Unit := do
+  let arguments := String.intercalate " " (List.replicate 12 "argument")
+  let source := s!"def inheritedOverflow := function {arguments}\ndef value := 0\n"
+  let original ←
+    Formatter.Internal.parseModuleWithEnv env source "inherited-overflow.lean"
+  assertTrue "inherited overflow is a breakable line"
+    (!(Formatter.Diagnostics.overflowOccurrences original).isEmpty)
+  let indented ←
+    Formatter.Internal.parseModuleWithEnv env ("  " ++ source)
+      "indented-inherited-overflow.lean"
+  assertTrue "source overflow retains its existing whitespace-insensitive exemption"
+    (Formatter.Diagnostics.formattingSafetyExceptions original indented).isEmpty
+  let changed ←
+    Formatter.Internal.parseModuleWithEnv env
+      (source.replace "def value := 0" "def value := 1") "changed-inherited-overflow.lean"
+  assertTrue "inherited overflow does not bypass code preservation"
+    ((Formatter.Diagnostics.formattingSafetyExceptions original changed).any
+      fun
+      | .codeChanged => true
+      | _ => false)
+  let short ←
+    Formatter.Internal.parseModuleWithEnv env "def inheritedOverflow := 0\n"
+      "fitting-overflow-source.lean"
+  assertTrue "new breakable overflow still reports a diagnostic"
+    ((Formatter.Diagnostics.formattingSafetyExceptions short original).any
+      fun
+      | .lineOverflow _ => true
+      | _ => false)
+
+def assertDiagnosticChecksReusePerFileModules (env : Lean.Environment) : IO Unit := do
+  IO.FS.withTempDir
+    fun root => do
+      let counter := root / "parse-count"
+      let file := root / "Counted.lean"
+      let source :=
+        "run_cmd do\n"
+        ++ "  let handle ← IO.FS.Handle.mk "
+        ++ reprStr counter.toString
+        ++ " .append\n"
+        ++ "  handle.putStr \"x\"\n\n"
+        ++ "def replayCountValue := 0\n"
+      let stable ← Formatter.formatSourceWithEnv env source file.toString
+      assertTextContains "counted source has a stable declaration" stable
+        "def replayCountValue := 0"
+      let changed := stable.replace "def replayCountValue := 0" "def  replayCountValue:=0"
+      let ignored := "-- leanfmt: off\n" ++ stable ++ "-- leanfmt: on\n"
+      let cases :=
+        [
+          ("stable", stable, 1, false),
+          ("changed", changed, 2, true),
+          ("normalized", stable.replace "\n" "\r\n", 1, true),
+          ("ignored", ignored, 1, false),
+          ("changed after ignored", ignored ++ "\ndef  afterIgnored:=0\n", 2, true)
+        ]
+      for (label, input, expectedParses, expectedChanged) in cases do
+        for checkIdempotent in [false, true] do
+          IO.FS.writeFile counter ""
+          let options : LeanFmt.Driver.Options :=
+            {
+              check := true
+              checkException := true
+              checkMissingRules := true
+              checkIdempotent
+            }
+          let outcome ← LeanFmt.Driver.formatSourceWithEnvForFile env options file input
+          assertTrue s!"{label}: reused modules retain every diagnostic"
+            (!outcome.failed && outcome.exceptionCounts.isEmpty)
+          assertTrue s!"{label}: source changes remain observable"
+            (outcome.changed == expectedChanged)
+          let expected :=
+            expectedParses + if checkIdempotent && expectedChanged then 1 else 0
+          assertEq s!"{label}: only convergence and independent idempotency reparse"
+            (String.ofList (List.replicate expected 'x')) (← IO.FS.readFile counter)
+
 def assertCliChecksStillFormatUnlessCheck
     (env : Lean.Environment) (loader : LeanFmt.Driver.EnvironmentLoader)
     : IO Unit := do
@@ -20662,6 +20736,8 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertImportFilesGroupByHeader
   assertRecursiveWorkerChecksTargetToolchain
   assertFormattingExceptionChecks projectSyntaxEnv
+  assertInheritedOverflowKeepsOtherDiagnostics env
+  assertDiagnosticChecksReusePerFileModules env
   assertCliChecksStillFormatUnlessCheck env loader
   assertCliFormatsDirectory env loader
   assertCliFormatsDirectoryRecursively env loader

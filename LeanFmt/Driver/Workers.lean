@@ -108,30 +108,19 @@ def runDiagnosticChecks
     (env : Lean.Environment)
     (options : Options)
     (path : FilePath)
-    (source formatted : String)
+    (source : String) (sourceModule formattedModule : SyntaxTree.Module)
     : IO ExceptionCounts := do
-  let exceptions ←
-    if options.checkException || options.checkMissingRules then
-      let normalized := Formatter.Internal.normalizeSource source
-      let formattedModule ←
-        Formatter.Internal.parseModuleWithEnv env formatted path.toString
-      let sourceModule ←
-        if normalized == formatted then
-          pure formattedModule
+  let formatted := formattedModule.source
+  let exceptions :=
+    (if options.checkException then
+        Formatter.Diagnostics.formattingSafetyExceptions
+          sourceModule formattedModule options.formatterOptions
+      else
+        [])
+    ++ if options.checkMissingRules then
+          Formatter.Diagnostics.missingRuleExceptions sourceModule
         else
-          Formatter.Internal.parseModuleWithEnv env normalized path.toString
-      pure
-      <| (if options.checkException then
-            Formatter.Diagnostics.formattingSafetyExceptions
-              sourceModule formattedModule options.formatterOptions
-          else
-            [])
-          ++ if options.checkMissingRules then
-                Formatter.Diagnostics.missingRuleExceptions sourceModule
-              else
-                []
-    else
-      pure []
+          []
   let mut exceptionCounts : ExceptionCounts := {}
   for exception in exceptions do
     let leanFormatter? :=
@@ -157,16 +146,18 @@ def formatSourceWithEnvForFile
     (env : Lean.Environment) (options : Options) (path : FilePath) (source : String)
     : IO FileOutcome := do
   try
-    let result ←
-      Formatter.formatSourceWithEnvDetailed env source path.toString
+    let (sourceModule, convergence) ←
+      Formatter.Internal.formatSourceWithModules env source path.toString
         options.formatterOptions
+    let result := convergence.toFormatResult
     let formatted := result.formatted
     let exceptionCounts ←
-      if result.fellBack then
-        IO.eprintln s!"format fallback: {path}"
-        pure { formatFallback := 1 }
-      else
-        runDiagnosticChecks env options path source formatted
+      match convergence with
+      | .fallback _ =>
+          IO.eprintln s!"format fallback: {path}"
+          pure { formatFallback := 1 }
+      | .converged formattedModule =>
+          runDiagnosticChecks env options path source sourceModule formattedModule
     let changed := !result.fellBack && formatted != source
     if changed && !options.check then
       IO.FS.writeFile path formatted

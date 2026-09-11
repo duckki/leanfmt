@@ -768,7 +768,18 @@ def formattingSafetyExceptions (sourceModule formattedModule : SyntaxTree.Module
     else
       [.codeChanged]
   let overflowExceptions :=
-    let formattedOccurrences := overflowOccurrencesWith formattedModule options false
+    let formattedOccurrences :=
+      let occurrences := overflowOccurrencesWith formattedModule options false
+      if occurrences.isEmpty then
+        []
+      else
+        let sourceOverflowTexts :=
+          (overflowOccurrencesWith sourceModule options false).map
+            fun occurrence =>
+              occurrence.text.trimAscii
+        occurrences.filter
+          fun occurrence =>
+            !sourceOverflowTexts.contains occurrence.text.trimAscii
     if formattedOccurrences.isEmpty then
       []
     else
@@ -782,10 +793,6 @@ def formattingSafetyExceptions (sourceModule formattedModule : SyntaxTree.Module
       let formattedUnbreakableOriginalSpans :=
         unbreakableOriginalSpans formattedModule.tree
       let formattedSyntaxCommentSpans := formattedModule.tree.syntaxCommentSpans
-      let sourceOverflowTexts :=
-        (overflowOccurrencesWith sourceModule options false).map
-          fun occurrence =>
-            occurrence.text.trimAscii
       let sourceCommentLineTexts := sourceCommentLineTexts sourceModule
       formattedOccurrences.filterMap
         fun occurrence =>
@@ -798,7 +805,6 @@ def formattingSafetyExceptions (sourceModule formattedModule : SyntaxTree.Module
                   occurrence options.lineWidth
               || overflowCoveredBySpans formattedMap formattedTokens
                   formattedAttachedSuffixHeadSpans occurrence options.lineWidth
-              || sourceOverflowTexts.contains occurrence.text.trimAscii
               || commentOnlyOverflowMatchesSource formattedMap formattedTokens
                   formattedSyntaxCommentSpans sourceCommentLineTexts occurrence
               || isolatedTokenSourceLineOverflowed sourceMap formattedMap

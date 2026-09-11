@@ -171,6 +171,22 @@ separate cleanup layout algorithm. If a construct formats poorly, the fix is to 
 refine a tree grouping, a line-break rule, a space rule, or renderer state logic. The
 renderer is the only component that emits text.
 
+The internal `ConvergenceResult` returns either the converged module or fallback text.
+`formatSourceWithModules` retains the original normalized module alongside that result
+for one file operation. The public formatting APIs still return their existing text
+results. The CLI uses the retained modules for preservation, overflow, and missing-rule
+diagnostics instead of reparsing them. Missing rules use the original module's source
+positions; overflow uses the converged module. Fallbacks do not supply a converged
+module and continue to bypass ordinary diagnostics.
+
+Ignored-region formatting retains the complete original module and parses the complete
+assembled candidate if its text changed. Individual chunk modules are never used as
+whole-file diagnostic evidence. The independent idempotency check still runs a fresh
+formatting operation when output differs from the input. This is per-file ownership of
+already-produced data, not a cache across files, sources, environments, or invocations.
+At most the original and current convergence modules are retained across passes; no
+module history is kept after the file operation returns.
+
 `Formatter.Internal.maxConvergencePasses` currently limits formatting to four passes. The
 driver tracks previously seen results. A parse failure, cycle, or exhausted pass limit
 causes a warning and returns the original normalized source. Fallback is deliberately
@@ -1528,6 +1544,8 @@ lines still indicate that the formatter left a possible structural break unresol
 Formatting exception checks compare normalized overflowing line text with the source and
 report only newly introduced shapes; unchanged pre-existing overflow remains available
 through direct `overflowOccurrences` analysis without being attributed to the formatter.
+They discard these inherited occurrences before building structural overflow evidence.
+Code preservation remains a separate check even when no new overflow remains.
 The standalone analysis keeps layout-island and isolated-token exemptions, while the
 source-versus-formatted comparison temporarily removes those movable exemptions. This
 reports a movable quotation or isolated token that fit in source but was shifted past

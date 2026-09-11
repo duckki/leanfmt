@@ -349,6 +349,19 @@ lake exe fmt-test --profile --check path/to/File.lean
 Profile output includes normalize, parse, syntax-tree construction, render, and total
 format time.
 
+For integrated driver and diagnostic timings, run the formatter under the target
+project's Lake environment with identical source, toolchain, and flags:
+
+```sh
+lake env /path/to/leanfmt/.lake/build/bin/fmt --profile --check \
+  --check-exception --check-idempotent --line-width 100 path/to/File.lean
+```
+
+Diagnostics reuse the original and converged modules from that file operation;
+idempotency still starts a fresh formatting operation when the source changed.
+`assertDiagnosticChecksReusePerFileModules` checks replay counts with an isolated
+`run_cmd` counter rather than a wall-clock threshold.
+
 The repository also includes a stable local workload that covers regrouping,
 original-layout emission, layout search, and convergence. Record a baseline before an
 optimization and compare the new implementation on the same machine:
