@@ -91,14 +91,28 @@ Formatting a file follows this pipeline:
    line-break rules. Namespace and section entry/exit are elaborated through Lean's
    command state so scoped and local notation follow the source scopes.
    Local syntax declarations, including `elab` and `run_cmd`, are replayed before
-   parsing subsequent commands. If replay fails or quiet parsing reports an error,
-   parsing restarts from the original header state through Lean's full frontend.
-   That retry rejects header and command-parser diagnostics, including errors that
-   Lean recovered from, while tolerating unrelated elaboration diagnostics. Recovered
-   malformed syntax is never accepted as the original tree or a formatted candidate.
-   The retry currently omits per-command let-body facts; missing facts use conservative
-   start alignment. Restoring metadata parity requires the original command scopes,
-   not probes against the final environment.
+   parsing subsequent commands. `ModuleParseState` keeps the parser position, command
+   state, syntax, and let-body facts together. A fully elaborated checkpoint begins at
+   the header. If quiet replay needs skipped declarations, Lean's frontend processes
+   only the pending prefix through that command; the resulting state becomes the next
+   checkpoint, and quiet parsing resumes. Earlier prefixes are not elaborated again.
+   Lean's parser end-position limit bounds this work without truncating the source or
+   file map visible to command elaborators.
+   If parsing itself fails, the command boundary is unreliable, so recovery processes
+   the complete remaining source instead, respecting Lean's terminal commands such
+   as `#exit`. Header and command-parser errors remain
+   fatal, including errors Lean recovered from; unrelated elaboration errors remain
+   tolerated. Each quiet replay checks only its own diagnostics.
+   Both paths record let-body facts with the pre-command parser context. Frontend
+   snapshots supply the state for the following command, keeping scoped syntax and
+   namespace transitions equivalent without probing against the final environment.
+   Missing facts still use conservative start alignment.
+   Recovery cannot assume theorem bodies are irrelevant to parsing: a command
+   elaborator can inspect a theorem's proof term before registering syntax. Lean's
+   asynchronous elaboration still computes those bodies and requires ownership of its
+   tasks and diagnostics; it is not a selective source-dependency API. Replacing
+   declarations with headers, skipping attributes, or guessing dependencies is not
+   part of the parser recovery contract.
    The CLI selects the environment from the source import header before parsing.
    A successful parse with fewer imports cannot establish equivalent syntax: an
    imported keyword can otherwise parse as an identifier and an operator. Only

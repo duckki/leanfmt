@@ -4426,7 +4426,8 @@ def elaborateParserStateCommand
   let (_, (_, commandState)) ←
     IO.FS.withIsolatedStreams (isolateStderr := true) do
       EIO.toIO (fun _ => IO.userError "failed to update parser command state")
-        ((Elab.Command.elabCommand command).run context |>.run commandState)
+        ((Elab.Command.elabCommand command).run context
+          |>.run { commandState with messages := {} })
   if commandState.messages.hasErrors then
     throw <| IO.userError "failed to update parser command state"
   pure commandState
@@ -4436,31 +4437,87 @@ def checkParserMessages (messages : MessageLog) : IO Unit := do
     let details ← messages.toList.mapM fun message => message.toString
     throw <| IO.userError s!"failed to parse file:\n{"\n".intercalate details}"
 
+structure ModuleParseState where
+  parserState : Parser.ModuleParserState
+  commandState : Elab.Command.State
+  commands : Array Syntax := #[]
+  letBodyParserFacts : Array LetBodyParserFact := #[]
+deriving Nonempty
+
+def ModuleParseState.recordCommand
+    (parsed : ModuleParseState) (source : String) (command : Syntax)
+    (parserState : Parser.ModuleParserState) (commandState : Elab.Command.State)
+    : ModuleParseState :=
+  {
+    parserState
+    commandState
+    commands := parsed.commands.push command
+    letBodyParserFacts :=
+      collectLetBodyParserFacts source (parserModuleContext parsed.commandState) command
+        parsed.letBodyParserFacts
+  }
+
+partial def replayModulePrefix
+    (inputContext : Parser.InputContext) (checkpoint : ModuleParseState)
+    (stop : String.Pos.Raw)
+    : IO ModuleParseState := do
+  let prefixContext : Parser.InputContext :=
+    {
+      inputContext with
+        endPos := min stop inputContext.endPos
+        endPos_valid := Std.le_trans Std.min_le_right inputContext.endPos_valid
+    }
+  let snapshot ←
+    Language.Lean.processCommands prefixContext checkpoint.parserState
+      checkpoint.commandState
+  collect checkpoint snapshot.get
+where
+  collect (parsed : ModuleParseState) (snapshot : Language.Lean.CommandParsedSnapshot)
+      : IO ModuleParseState := do
+    checkParserMessages snapshot.diagnostics.msgLog
+    let commandState := snapshot.elabSnap.resultSnap.get.cmdState
+    if Parser.isTerminalCommand snapshot.stx then
+      return { parsed with parserState := snapshot.parserState, commandState }
+    let parsed :=
+      parsed.recordCommand inputContext.inputString snapshot.stx snapshot.parserState
+        commandState
+    if let some next := snapshot.nextCmdSnap? then
+      collect parsed next.get
+    else
+      pure parsed
+
 partial def parseModuleCommandsQuiet
-    (inputContext : Parser.InputContext)
-    (state : Parser.ModuleParserState) (messages : MessageLog)
-    (commandState : Elab.Command.State)
-    (updateParserState : Bool)
-    (commands : Array Syntax)
-    (letBodyParserFacts : Array LetBodyParserFact)
-    : IO (Array Syntax × Array LetBodyParserFact × Elab.Command.State) := do
-  let parserContext := parserModuleContext commandState
-  let (command, state, messages) :=
-    Parser.parseCommand inputContext parserContext state messages
-  if Parser.isTerminalCommand command then
-    checkParserMessages messages
-    pure (commands, letBodyParserFacts, commandState)
-  else do
-    let letBodyParserFacts :=
-      collectLetBodyParserFacts inputContext.inputString parserContext command
-        letBodyParserFacts
-    let commandState ←
-      if updateParserState && commandUpdatesParserState command then
-        elaborateParserStateCommand inputContext commandState command
-      else
-        pure commandState
-    parseModuleCommandsQuiet inputContext state messages commandState
-      updateParserState (commands.push command) letBodyParserFacts
+    (inputContext : Parser.InputContext) (parsed : ModuleParseState)
+    (updateParserState : Bool) (checkpoint : ModuleParseState)
+    : IO ModuleParseState := do
+  let (command, parserState, messages) :=
+    Parser.parseCommand inputContext (parserModuleContext parsed.commandState)
+      parsed.parserState {}
+  let commandState? ←
+    try
+      checkParserMessages messages
+      let commandState ←
+        if updateParserState && commandUpdatesParserState command then
+          elaborateParserStateCommand inputContext parsed.commandState command
+        else
+          pure parsed.commandState
+      pure (some commandState)
+    catch error =>
+      if !updateParserState then
+        throw error
+      pure none
+  if let some commandState := commandState? then
+    if Parser.isTerminalCommand command then
+      return { parsed with parserState, commandState }
+    let parsed :=
+      parsed.recordCommand inputContext.inputString command parserState commandState
+    parseModuleCommandsQuiet inputContext parsed updateParserState checkpoint
+  else
+    -- A recovered parse has no reliable command boundary. Replay the remaining file in that case.
+    if messages.hasErrors then
+      return ← replayModulePrefix inputContext checkpoint inputContext.endPos
+    let recovered ← replayModulePrefix inputContext checkpoint parserState.pos
+    parseModuleCommandsQuiet inputContext recovered updateParserState recovered
 
 structure ParsedModuleSyntax where
   rawSyntax : Syntax
@@ -4471,44 +4528,25 @@ instance : Repr ParsedModuleSyntax where
   reprPrec parsed precedence :=
     reprPrec (parsed.rawSyntax, parsed.letBodyParserFacts, parsed.parserLayout) precedence
 
-partial def checkFrontendParserMessages (snapshot : Language.Lean.CommandParsedSnapshot)
-    : IO Unit := do
-  checkParserMessages snapshot.diagnostics.msgLog
-  if let some next := snapshot.nextCmdSnap? then
-    checkFrontendParserMessages next.get
-
 def parseModuleSyntaxWithEnvCoreDetailed
     (env : Environment) (source fileName : String) (updateParserState : Bool)
     : IO ParsedModuleSyntax := do
   let inputContext := Parser.mkInputContext source fileName
   let (header, state, messages) ← Parser.parseHeader inputContext
   checkParserMessages messages
-  let commandState := Elab.Command.mkState env
-  let (commands, letBodyParserFacts, commandState) ←
-    try
-      parseModuleCommandsQuiet inputContext state messages commandState
-        updateParserState #[] #[]
-    catch parseError =>
-      if updateParserState then
-        let frontendState ←
-          Elab.IO.processCommandsIncrementally inputContext state commandState none
-        checkFrontendParserMessages frontendState.initialSnap
-        let commands :=
-          frontendState.commands.filter
-            fun command =>
-              !Parser.isTerminalCommand command
-        pure (commands, #[], frontendState.commandState)
-      else
-        throw parseError
+  let initial : ModuleParseState :=
+    { parserState := state, commandState := Elab.Command.mkState env }
+  let parsed ← parseModuleCommandsQuiet inputContext initial updateParserState initial
   let rawSyntax :=
-    (mkNode `Lean.Parser.Module.module #[header, mkListNode commands]).raw.updateLeading
-  let parserContext := parserModuleContext commandState
+    (mkNode `Lean.Parser.Module.module
+      #[header, mkListNode parsed.commands]).raw.updateLeading
+  let parserContext := parserModuleContext parsed.commandState
   let parserLayout :=
     ParserLayout.collect parserContext.env parserContext.options rawSyntax
   pure
     {
       rawSyntax := rawSyntax
-      letBodyParserFacts := letBodyParserFacts
+      letBodyParserFacts := parsed.letBodyParserFacts
       parserLayout
     }
 

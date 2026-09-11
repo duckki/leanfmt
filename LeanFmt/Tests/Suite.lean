@@ -18057,6 +18057,172 @@ def assertLocalElaboratorRegistersCompoundKeyword (env : Lean.Environment) : IO 
     "a syntax-producing command registers its keyword before later parsing"
     commandResult.formatted "def generated := generated% 2"
 
+def assertFrontendReplayPreservesParserFacts (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "namespace ReplayFacts\n"
+    ++ "scoped syntax:lead \"scopeBody%\" : term\n"
+    ++ "open scoped ReplayFacts\n"
+    ++ "def scopedBody := let value := 0\n  scopeBody%\n"
+    ++ "def nested :=\n"
+    ++ "  (let descr := \"first line\nsecond line\"\n"
+    ++ "   let mono := 0\n"
+    ++ "   mono)\n"
+    ++ "inductive Marker where | mk\n"
+    ++ "end ReplayFacts\n"
+  let inputContext := Lean.Parser.mkInputContext source "frontend-replay-facts.lean"
+  let (_, parserState, _) ← Lean.Parser.parseHeader inputContext
+  let initial : SyntaxTree.ModuleParseState :=
+    { parserState, commandState := Lean.Elab.Command.mkState env }
+  let quiet ← SyntaxTree.parseModuleCommandsQuiet inputContext initial true initial
+  let replayed ← SyntaxTree.replayModulePrefix inputContext initial source.rawEndPos
+  assertTrue "quiet parsing produces command-scoped let facts"
+    (quiet.letBodyParserFacts.size == 3)
+  assertEq "frontend replay preserves command-scoped let facts"
+    (reprStr quiet.letBodyParserFacts) (reprStr replayed.letBodyParserFacts)
+  assertTrue "a low-precedence scoped body cannot start an application argument"
+    (quiet.letBodyParserFacts[0]?.any (! ·.bodyCanStartApplicationArgument))
+  assertTrue "the final parser context is not interchangeable with the command context"
+    (SyntaxTree.bodyCanStartApplicationArgument
+      (SyntaxTree.parserModuleContext quiet.commandState) "scopeBody%")
+  let quietTree :=
+    SyntaxTree.extractTree source (Lean.mkListNode quiet.commands)
+      quiet.letBodyParserFacts
+  let replayedTree :=
+    SyntaxTree.extractTree source (Lean.mkListNode replayed.commands)
+      replayed.letBodyParserFacts
+  assertTrue "frontend replay and quiet parsing produce the same syntax and layout facts"
+    (quietTree == replayedTree)
+  let dependency := "open ReplayFacts.Marker\n"
+  let forcedSource := source ++ dependency
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env forcedSource "frontend-replay-facts.lean"
+  assertTrue "frontend replay formatting does not fall back" (!result.fellBack)
+  assertTextContains "frontend replay keeps the nested let attached" result.formatted
+    "(let"
+  assertTextLacks "frontend replay does not add let alignment padding" result.formatted
+    "( let"
+  assertTextContains "frontend replay preserves a multiline string"
+    result.formatted "\"first line\nsecond line\""
+  assertTrue "frontend replay preserves code"
+    (← codePreservedIgnoringWhitespace env forcedSource result.formatted)
+  assertEq "frontend replay formatting is idempotent" result.formatted
+    (← Formatter.formatSourceWithEnv env result.formatted "frontend-replay-facts.lean")
+
+def assertParserReplayStopsAtRequiredPrefix (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "namespace ReplayPrefix\n"
+    ++ "inductive First where | mk\n"
+    ++ "open First\n"
+    ++ "-- Keep the comment across the recovery boundary.\n"
+    ++ "def unrelated := missingName\n"
+    ++ "inductive Second where | mk\n"
+    ++ "open Second\n"
+    ++ "namespace Later\n"
+    ++ "def remainsUnelaborated := 2\n"
+    ++ "end Later\n"
+    ++ "end ReplayPrefix\n"
+    ++ "namespace Int\ndef negative (n : Nat) := -[n+1]\nend Int\n"
+  let inputContext := Lean.Parser.mkInputContext source "bounded-parser-replay.lean"
+  let (_, parserState, _) ← Lean.Parser.parseHeader inputContext
+  let initial : SyntaxTree.ModuleParseState :=
+    { parserState, commandState := Lean.Elab.Command.mkState env }
+  let parsed ← SyntaxTree.parseModuleCommandsQuiet inputContext initial true initial
+  assertTrue "replay elaborates dependencies up to each failed parser-state command"
+    (parsed.commandState.env.contains `ReplayPrefix.First
+      && parsed.commandState.env.contains `ReplayPrefix.Second)
+  assertTrue "replay resumes quiet parsing without elaborating later declarations"
+    (!parsed.commandState.env.contains `ReplayPrefix.Later.remainsUnelaborated)
+  assertTrue "replay preserves namespace exits" (parsed.commandState.scopes.length == 1)
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "bounded-parser-replay.lean"
+  assertTrue "repeated prefix replay does not cause a formatting fallback"
+    (!result.fellBack)
+  assertTextContains "prefix replay retains scoped compound syntax" result.formatted
+    "-[n+1]"
+  assertTextContains "prefix replay retains boundary comments" result.formatted
+    "-- Keep the comment across the recovery boundary."
+  assertTrue "repeated prefix replay preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  assertEq "repeated prefix replay is idempotent" result.formatted
+    (← Formatter.formatSourceWithEnv env result.formatted "bounded-parser-replay.lean")
+  let malformed := source ++ "def broken := (0\n"
+  let rejected ←
+    try
+      discard
+      <| SyntaxTree.parseModuleStringWithEnv env malformed "replay-invalid-tail.lean"
+      pure false
+    catch error =>
+      pure <| textContains error.toString "failed to parse file"
+  assertTrue "parser errors remain fatal after successful prefix recovery" rejected
+
+def assertParserReplayRetainsTheoremBodyDependencies (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "open Lean Elab Command\n"
+    ++ "namespace ReplayTheorem\n"
+    ++ "theorem evidence : True := by exact True.intro\n"
+    ++ "run_cmd do\n"
+    ++ "  let some (.thmInfo info) := (← getEnv).find? `ReplayTheorem.evidence\n"
+    ++ "    | throwError \"missing theorem dependency\"\n"
+    ++ "  unless info.value.isConstOf `True.intro do\n"
+    ++ "    throwError \"missing theorem body\"\n"
+    ++ "  elabCommand (← `(syntax \"theoremDriven%\" num : term))\n"
+    ++ "def generated := theoremDriven% 1\n"
+    ++ "end ReplayTheorem\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "theorem-driven-parser.lean"
+  assertTrue "parser recovery retains theorem bodies needed by command elaborators"
+    (!result.fellBack)
+  assertTextContains "a theorem-dependent command registers its compound token"
+    result.formatted "def generated := theoremDriven% 1"
+  assertTrue "theorem-dependent parser replay preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  assertEq "theorem-dependent parser replay is idempotent" result.formatted
+    (← Formatter.formatSourceWithEnv env result.formatted "theorem-driven-parser.lean")
+
+def assertParserErrorRecoveryReplaysCompleteTail (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "macro \"installRecoveredSyntax\" : command => `(syntax \"recovered@\" num : command)\n"
+    ++ "installRecoveredSyntax\n"
+    ++ "recovered@ 1\n"
+    ++ "def recoveredTail := 2\n"
+  let inputContext := Lean.Parser.mkInputContext source "replay-parser-error.lean"
+  let (_, parserState, _) ← Lean.Parser.parseHeader inputContext
+  let initial : SyntaxTree.ModuleParseState :=
+    { parserState, commandState := Lean.Elab.Command.mkState env }
+  let parsed ← SyntaxTree.parseModuleCommandsQuiet inputContext initial true initial
+  assertTrue "parser-error recovery processes the complete remaining source"
+    (parsed.commandState.env.contains `recoveredTail)
+  let tree :=
+    SyntaxTree.extractTree source (Lean.mkListNode parsed.commands)
+      parsed.letBodyParserFacts
+  assertTrue "parser-error recovery retains the dynamically installed compound keyword"
+    (tree.tokens.any (·.lexeme == "recovered@"))
+  let stoppedSource := source ++ "#exit\ndef ignoredAfterExit := (\n"
+  let stoppedContext :=
+    Lean.Parser.mkInputContext stoppedSource "replay-terminal-command.lean"
+  let stopped ← SyntaxTree.parseModuleCommandsQuiet stoppedContext initial true initial
+  assertTrue "parser-error recovery respects the frontend terminal command"
+    (stopped.commands.size == parsed.commands.size)
+
+def assertPrefixReplayKeepsCompleteFileContext (env : Lean.Environment) : IO Unit := do
+  let commands :=
+    "open Lean Elab Command\n"
+    ++ "run_cmd do\n"
+    ++ "  unless (← getFileMap).source.endsWith \"-- complete source tail\\n\" do\n"
+    ++ "    throwError \"source was truncated\"\n"
+    ++ "  elabCommand (← `(def $(mkIdent `replaySourceTailVisible) := 0))\n"
+  let source := commands ++ "def replayUnvisited := 1\n-- complete source tail\n"
+  let inputContext := Lean.Parser.mkInputContext source "prefix-source-context.lean"
+  let (_, parserState, _) ← Lean.Parser.parseHeader inputContext
+  let initial : SyntaxTree.ModuleParseState :=
+    { parserState, commandState := Lean.Elab.Command.mkState env }
+  let parsed ← SyntaxTree.replayModulePrefix inputContext initial commands.rawEndPos
+  assertTrue "prefix recovery retains the complete file map for elaborators"
+    (parsed.commandState.env.contains `replaySourceTailVisible)
+  assertTrue "a parser end limit does not elaborate the later source"
+    (!parsed.commandState.env.contains `replayUnvisited)
+
 def assertIgnoredChunksCannotChangeWholeFileSyntax (env : Lean.Environment)
     : IO Unit := do
   for source
@@ -20533,6 +20699,11 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertParserStateRestoresScopes env
   assertFrontendFallbackRejectsParserErrors env
   assertLocalElaboratorRegistersCompoundKeyword env
+  assertFrontendReplayPreservesParserFacts env
+  assertParserReplayStopsAtRequiredPrefix env
+  assertParserReplayRetainsTheoremBodyDependencies env
+  assertParserErrorRecoveryReplaysCompleteTail env
+  assertPrefixReplayKeepsCompleteFileContext env
   assertIgnoredChunksCannotChangeWholeFileSyntax env
   assertSyntaxAuthoringDefinitionPreservesCode env
   assertCustomBracedTermSyntaxKeepsNestedSourceLayout env
