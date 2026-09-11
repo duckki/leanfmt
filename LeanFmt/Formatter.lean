@@ -231,8 +231,19 @@ def formatSourceChunksWithEnv
 
 def formatIgnoredRegionChunksWithEnv
     (env : Environment) (source fileName : String) (options : Options := {})
-    : IO FormatResult :=
-  formatSourceChunksWithEnv env (chunkIgnoredRegions source) fileName options
+    : IO FormatResult := do
+  let original ← parseModuleWithEnv env source fileName
+  try
+    let result ←
+      formatSourceChunksWithEnv env (chunkIgnoredRegions source) fileName options
+    let formatted ← parseModuleWithEnv env result.formatted fileName
+    if Diagnostics.preservesCodeIgnoringWhitespace original formatted then
+      return result
+  catch _ =>
+    pure ()
+  warnConvergenceFallback fileName
+    "ignored-region chunks did not preserve the complete source"
+  pure { formatted := source, fellBack := true }
 
 end Internal
 

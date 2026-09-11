@@ -3724,9 +3724,10 @@ def transparentRule : LineBreakRule :=
     name := "transparent"
     inheritBase :=
       fun context segment =>
-        (segment.rawKind? == some `Lean.Parser.Term.fun
-          && (context.usesIndexedInfixRhsBase
-              || spacedApplicationOwnsNestedBase context.ancestors))
+        defaultInheritBase context segment
+        || (segment.rawKind? == some `Lean.Parser.Term.fun
+            && (context.usesIndexedInfixRhsBase
+                || spacedApplicationOwnsNestedBase context.ancestors))
         || segment.rawKind? == some `Lean.Parser.Command.structSimpleBinder
     formatOriginalChildLeadingBoundary :=
       fun _ segment index =>
@@ -4690,7 +4691,6 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.matchExprPat) _ => some defaultRule
   | .node (.raw `Lean.Parser.Term.binderDefault) _ => some binderDefaultRule
   | .node (.raw `Lean.Parser.Term.namedArgument) _ => some namedArgumentRule
-  | .node (.raw `Lean.Parser.Term.dependentParam) _ => some transparentRule
   | .node (.raw `Lean.Parser.Term.strictImplicitBinder) _ => some defaultRule
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _ => some anonymousCtorRule
   | .node (.raw `Lean.Parser.Term.local) _ => some defaultRule
@@ -5151,7 +5151,12 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.doPatDecl) _ => some doPatternDeclRule
   | .node (.raw `Lean.Parser.Term.dbgTrace) _ => some dbgTraceRule
   | .node (.raw `Lean.Parser.Term.idbg) _ => some dbgTraceRule
-  | .node (.raw `group) _ => some groupRule
+  | tree@(.node (.raw `group) _) =>
+      some
+      <| if (declarationEquationBreaks (Segment.ofTree tree)).isEmpty then
+            groupRule
+          else
+            theoremRule
   | .node (.raw `Lean.Parser.Term.matchAltsWhereDecls) _ => some matchAltsWhereDeclsRule
   | .node (.raw `Lean.Parser.Term.matchAlts) _ => some matchAltsRule
   | tree@(.node (.raw _) _) => structuralRawRule? tree

@@ -2,6 +2,28 @@ import Lean
 import Init.Tactics
 
 syntax (name := projectSyntax) "project_syntax" : term
+syntax (name := lemma) (priority := default + 1) declModifiers
+  group("lemma " declId ppIndent(declSig) declVal) : command
+syntax (name := projectTypeStar) "Type*" : term
+syntax "ring1" : tactic
+namespace Batteries.Tactic.Alias
+syntax (name := aliasLR) declModifiers "alias "
+  "⟨" Lean.Parser.Term.binderIdent ", " Lean.Parser.Term.binderIdent "⟩" " := " ident : command
+end Batteries.Tactic.Alias
+namespace Mathlib.Notation3
+open Lean Parser Command
+syntax foldKind := &"foldl" <|> &"foldr"
+syntax bindersItem := atomic("(" "..." ")")
+syntax foldAction := "(" ident ppSpace strLit "*" (precedence)? " => " foldKind
+  " (" ident ppSpace ident " => " term ") " term ")"
+syntax identOptScoped :=
+  ident (notFollowedBy(":" "(" "scoped") precedence)? (":" "(" "scoped " ident " => " term ")")?
+syntax notation3Item := strLit <|> bindersItem <|> identOptScoped <|> foldAction
+syntax prettyPrintOpt := "(" &"prettyPrint" " := " (&"true" <|> &"false") ")"
+syntax (name := notation3) (docComment)? (Term.attributes)? Term.attrKind
+  "notation3" (precedence)? (namedName)? (namedPrio)?
+  (ppSpace prettyPrintOpt)? (ppSpace notation3Item)+ " => " term : command
+end Mathlib.Notation3
 syntax (name := projectBigSum) "psum " ident " in " term ", " term : term
 namespace Mathlib.Tactic.TermCongr
 syntax (name := termCongr) "pcongr(" "$" term ")" : term

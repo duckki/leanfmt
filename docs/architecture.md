@@ -90,6 +90,15 @@ Formatting a file follows this pipeline:
    without putting environment access, parser combinators, or project syntax names in
    line-break rules. Namespace and section entry/exit are elaborated through Lean's
    command state so scoped and local notation follow the source scopes.
+   Local syntax declarations, including `elab` and `run_cmd`, are replayed before
+   parsing subsequent commands. If replay fails or quiet parsing reports an error,
+   parsing restarts from the original header state through Lean's full frontend.
+   That retry rejects header and command-parser diagnostics, including errors that
+   Lean recovered from, while tolerating unrelated elaboration diagnostics. Recovered
+   malformed syntax is never accepted as the original tree or a formatted candidate.
+   The retry currently omits per-command let-body facts; missing facts use conservative
+   start alignment. Restoring metadata parity requires the original command scopes,
+   not probes against the final environment.
    The CLI selects the environment from the source import header before parsing.
    A successful parse with fewer imports cannot establish equivalent syntax: an
    imported keyword can otherwise parse as an identifier and an operator. Only
@@ -1108,7 +1117,9 @@ behavior, first-line breakability, relative-layout retention, pending-indent beh
 anchor choice, leading-boundary ownership, and following-comment ownership. The renderer
 retains that complete plan instead of repeatedly interpreting a classification tag.
 Lemma and theorem commands use the same structural declaration and equation ownership;
-only their proof bodies remain protected. A transparent owner such as `cases`, induction
+parser groups directly owning declaration equations reuse the theorem rule, and
+transparent wrappers retain the enclosing modifier owner's base. Only their proof
+bodies remain protected. A transparent owner such as `cases`, induction
 alternatives, or a regrouped `calc` exposes its governing boundaries while leaf proof
 regions remain protected. An unregrouped calc shape remains an original-layout
 compatibility fallback and cannot justify opening its protected parent.
@@ -1375,6 +1386,12 @@ and generated `stx` helper names are ignored by missing-rule reporting because t
 not stable rule targets. Diagnostic analysis and the exception model live in
 `Formatter.Diagnostics`; trace and profiling APIs live under `Formatter.Debug`;
 convergence and shared pipeline phases live under `Formatter.Internal`.
+
+Ignored-region chunks also pass a whole-file parse and syntax-preservation check.
+Chunks can lose an enclosing namespace or split a declaration; if a chunk cannot be
+parsed or the assembled result differs structurally, formatting retains the complete
+original source and reports a preservation fallback. This conservative guard does not
+try to reconstruct parser context at arbitrary source offsets.
 
 ### Preservation-check limitation: layout-sensitive elaboration
 

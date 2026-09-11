@@ -6,162 +6,46 @@ is release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Frontend parser recovery
+### Parser replay cost
 
-The full-frontend fallback currently accepts recovered syntax after parser errors.
-For example, invalid `-[n + 1]` inside `namespace Int` can lose its closing bracket.
-Reject parser diagnostics separately from elaboration diagnostics, then repair tests
-that currently depend on recovery (including obsolete `match (dependent := true)`
-and quotations parsed without their tactic extensions). This is separate from the
-fixed import-environment selection and namespace/section tracking regressions.
+```lean
+def orthogonal := ...
+@[inherit_doc] scoped postfix:max "⫠" => orthogonal
+```
 
-### Mathlib v4.33.1 build gate
+Quiet parsing skips ordinary definitions. A later syntax declaration can then fail
+to elaborate and require a full frontend retry. Keep that safety fallback: ignoring
+replay errors can silently reinterpret compound keywords as infix expressions.
+Two already-formatted CSLib samples rose from 82/395 ms to 17,178/9,118 ms of formatter
+time; an independent repeat measured 116/663 ms versus 9,249/4,698 ms. Output is unchanged.
+Mathlib batch 15 passed in 403 seconds, with `AlgebraicGeometry/Modules/Tilde.lean`
+as its long-running worker; the full frontend makes formatting sensitive to proof cost.
+Skipping temporary `open ... in` wrappers alone does not recover those timings because
+later standalone `open` and notation commands also depend on skipped declarations.
+Investigate dependency handling separately, without teaching layout rules about it.
 
-Repeat formatting from pristine sources and the changed-module/full builds after
-the parser-context fixes. Earlier formatting diagnostics alone did not detect
-`-[n+1]` or `mk_rpc_widget%` being parsed under the wrong environment.
-The focused width-100 gate passes all 43 files under `Mathlib/Data/Int` and
-`Mathlib/Tactic/Widget`; only the expected token corrections change output, and
-all five changed modules elaborate. CSLib's 200-file light gate is unchanged.
+### Frontend parser-metadata parity
+
+```lean
+    ( let descr := "description"
+      let mono := `mono
+      registerLabelAttr mono descr mono)
+```
+
+Full-frontend recovery drops let-body parser facts. The conservative missing-fact
+default can round an attached `let` to the next indentation level, inserting a space
+after `(` in `Mathlib/Tactic/Monotonicity/Attr.lean`. Restore facts using each command's
+pre-command parser context, not the final environment. Keep the existing alignment
+rules and test quiet/recovery parity, string preservation, and idempotency.
 
 ## Progress
 
-### Checkpoint 1: structural headers and peer continuations
+### Next checkpoint: parser metadata and replay efficiency
 
-Complete macro pattern regrouping, anonymous declaration-header consistency,
-and peer application continuation ownership. The exact Mathlib `v4.33.0` gate
-completed with all formatter diagnostics at zero and both post-format builds
-passing.
-
-### Checkpoint 2: application and suffix consistency
-
-Complete focused coverage for the reviewed application, local declaration,
-conditional, tactic suffix, and low-priority-pipe examples. Shared ownership now
-uses the existing application and suffix mechanisms. The complete local gate,
-GraphQL, quantum, and width-100 Hex validation passed; quantum produced no
-formatting changes, and Hex's previously slow failing batch passed in 126
-seconds. Focused Mathlib probes passed. The Mathlib checkpoint was unavailable
-because this selector has no recorded baseline, so the final full gate will
-establish it.
-
-### Checkpoint 3: delimiters, command boundaries, and release gate
-
-Complete delimiter-closer rebasing, command-sequence spacing, modified
-declaration ownership, compact `match_expr` alternatives, structural `using`
-continuations, and parser-safe `initialize` operands. The complete local gate,
-GraphQL, quantum, and width-100 Hex validation passed; quantum produced no
-formatting changes. The exact Mathlib `v4.33.0` baseline formatted 8,311 files
-with every diagnostic at zero and passed both post-format builds. A subsequent
-width-100 checkpoint covered all 84 formatter batches. After a focused
-`initialize` correction at batch 74, its failing file and batches 74 through 84
-were rerun cleanly.
-
-### Checkpoint 4: large-project tail latency
-
-Cache immutable subtree layout facts across speculative render candidates and
-avoid allocating normalized copies of already-LF source trivia. The isolated Hex
-hot file dropped from about 101 to 32 seconds per formatting pass. The complete
-100-file batch that previously varied from 145 to 326 seconds passed every
-formatter diagnostic in 67 seconds with unchanged formatting behavior.
-
-### Checkpoint 5: parser-owned layout profiles
-
-Move parser and formatter metadata out of `SyntaxTree` and diagnostics into one
-`ParserLayout` adapter. Evaluate each occurring parser description once, retain its
-printing annotations, and pass one profile map through regrouping. Explicit `ppSpace`
-applications now reuse ordinary application ownership even when Lean also generated a
-registered formatter.
-
-### Checkpoint 6: annotation coverage audit
-
-Consolidate raw structural fallback behind one auditable dispatch boundary. Parser-derived
-applications and owned bodies already reach logical rules; generated unary prefixes and
-ordinary matrix delimiters now use generic structural classification instead of project
-syntax names. Keep core parenthesized wrappers, generated collection spellings, and the
-Aesop rule-expression sequence explicit where one parser kind has multiple immediate child
-shapes or changing the entry would alter reviewed layout.
-
-The complete local gate passed. Full GraphQL and quantum validation established clean
-build baselines; exact-tree checkpoints then passed with no changed sources. Width-100 Hex
-passed all 873 owned files in 502 seconds, with its heaviest batch at 120 seconds. Width-100
-Mathlib passed all 8,311 files and its full 8,705-job build, also with no changed sources.
-
-### Checkpoint 7: registered-format experiment
-
-Add an isolated, fail-closed adapter that executes one registered Lean formatter and
-accepts its layout only when the rendered lexemes align exactly with source tokens and
-its indentation maps to whole leanfmt levels. Rewritten or inserted tokens, comments,
-multiline tokens, blank lines, unsupported whitespace, and incomplete source coverage
-are rejected. This makes registered output useful as an audit oracle, but not yet as a
-production layout source: comments require lossless reinsertion, and executing a
-formatter per syntax node would add uncontrolled work to the hot path.
-
-The production formatter does not import the experiment, and external formatting did
-not change. The complete local gate, GraphQL, quantum, width-100 Hex, and width-100
-Mathlib validation passed. Mathlib formatted all 8,311 files with every diagnostic at
-zero and completed its 8,705-job aggregate build.
-
-### Checkpoint 8: symbolic registered-rule deduction
-
-Replace width-specific rendered-output observation with a symbolic `Std.Format` audit.
-The audit now aligns text exactly to source tokens, retains soft and hard breaks, nesting,
-group coupling, and source tags, and rejects column-relative alignment. It normalizes
-transparent parser wrappers and recursive same-kind spines into logical children before
-proposing an existing rule family with child-boundary breaks and indentation.
-
-At least two samples must produce the same generalized operand/atom shape, rule family,
-boundaries, indentation, and group paths before a candidate is called stable. Registered
-formatters remain a development-time oracle; no production formatter module imports or
-executes this deduction path.
-
-The complete local gate passed with no fixture or self-formatting changes. External
-baselines were not repeated because the formatter, parser, regrouping, rules, renderer,
-diagnostics, and CLI dependency graph is unchanged.
-
-### Checkpoint 9: registered ruleset audit
-
-Add a development-only corpus tool that samples registered syntax, deduces stable
-symbolic candidates, and compares their normalized direct-child boundaries with the
-current production tree. Production breaks may be owned by regrouped descendants, but
-nested breaks inside one logical child and leading boundaries are excluded.
-
-The representative audit parsed 20 files each from Lean Core, Std, and Mathlib without
-failure. It inspected 58,116 registered-syntax occurrences in 499 normalized groups; 115
-groups produced stable candidates. Manual review classified broad application,
-prefix-indentation, infix-side, balanced-delimiter, import, attribute, and source-island
-differences as intentional. It found two actionable general gaps: registered peer
-applications outside ordinary terms and command peer sequences. See
-`docs/ruleset-audit.md`.
-
-### Checkpoint 10: registered atomic peer ownership
-
-Flatten a conservative registered parser shape after dedicated regrouping: one
-word-like head followed by a final anonymous container of two or more simple,
-source-separated peers. The original raw owner and rule remain intact. This gives
-`match_expr` patterns, level `max`, `universe`, `include`, and `omit` complete flowing
-boundaries while leaving generated applications, structured binders, and nested command
-owners unchanged. Focused tests cover exact layout, code preservation, overflow,
-idempotency, tree shape, and every exposed boundary.
-
-### Checkpoint 11: rule inventory closure
-
-Review the atomic-looking audit candidates against their real Core, Std, and Mathlib tree
-shapes. Keep explicit policy for multi-child atomic syntax and contextual default ownership.
-Remove the sole exact duplicate, `Lean.Parser.Syntax.atom`, whose one content child is already
-covered by the transparent structural fallback used for extension syntax.
-
-### Checkpoint 12: 0.4 release gate
-
-Complete the local gate and fresh external validation with automatic worker counts. GraphQL
-and quantum passed their clean and post-format builds; quantum was unchanged, and GraphQL
-only removed one duplicated space. Width-100 Hex passed all 873 owned files, every formatter
-diagnostic, and both post-format builds. Its heaviest formatter batch took 145 seconds, within
-the established large-file variance.
-
-The exact width-100 Mathlib `v4.33.0` release gate formatted all 8,311 selected files in 84
-clean batches. The 4,377-target changed-module closure and final 8,705-job aggregate build
-both passed. The complete Mathlib run took 6,713 seconds. This establishes the
-`v4.33.0` baseline; it does not replace the pending `v4.33.1` gate above.
+Restore let-body metadata parity between quiet parsing and frontend recovery. Then
+reduce full-frontend retries for local declaration dependencies without accepting
+partially registered grammar or recovered parser errors. Establish a narrow parser-state
+design first; preserve the CSLib output baseline and remeasure the two slow samples.
 
 ## Validation standard
 
@@ -186,9 +70,34 @@ complete validation because they are comparatively small. Hex and Mathlib use
 width 100 and checkpoint mode during iteration, with complete builds reserved
 for the release gate.
 
-Mathlib validation uses exact `v4.33.0` commit
-`db584cd6d46c92f209a44c0f1c829460d327499d`, formats only `Mathlib`, and uses
+Mathlib validation uses exact `v4.33.1` commit
+`0df444a360eaa60ab8c11dca51a86af692955474`, formats only `Mathlib`, and uses
 the Lake cache. The release gate recreates or resets the validation clone and
 runs the clean, changed-module, and aggregate post-format builds. Later
 formatter-only reviews may reuse that exact baseline when its revision,
 toolchain, selector, and source manifest remain unchanged.
+
+### Current baseline
+
+The parser-safety checkpoint passed the complete local gate with no fixture drift:
+build, tests, development linter, self-formatting, preservation, actionable width,
+and idempotency. Parser recovery errors are rejected; unrelated elaboration errors
+remain tolerated. Local grammar producers and ignored-region chunks have focused
+safety coverage, and grouped equation declarations share existing declaration rules.
+
+Full width-100 CSLib validation passed all 200 files and both post-format builds.
+Its output is byte-identical to the preceding formatted checkpoint. Formatter/check
+batches took 60 and 77 seconds; changed-module and final builds took 70 and 11 seconds.
+
+Full width-100 Mathlib validation passed all 8,311 files in 84 batches, with every
+formatter diagnostic at zero. All 7,843 changed sources passed the required module
+builds, followed by the 8,705-job full build. Formatting/checks took 6,939 seconds,
+changed-module builds 3,220 seconds, and the final build 45 seconds. The complete
+CSLib/Mathlib run took 10,794 seconds. Both checkpoint baselines are recorded under
+`.scratch/external-validation/logs/`.
+
+Mathlib differs from the preceding formatted output in 64 files: compound-token
+repairs, equation-declaration ownership corrections, and the one extra space tracked
+above. Two independent reviewers covered all 81 incremental hunks with no additional
+findings. Build style warnings remain; reviewed warning lines are unchanged from the
+preceding output, and the formatter reported no actionable overflow.
