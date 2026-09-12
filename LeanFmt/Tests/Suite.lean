@@ -18291,6 +18291,148 @@ def assertFrontendElaborates (env : Lean.Environment) (source fileName : String)
   for snapshot in (Lean.Language.toSnapshotTree snapshot.get).getAll do
     SyntaxTree.checkParserMessages snapshot.diagnostics.msgLog
 
+def assertConditionalChainCommentOwnership (env : Lean.Environment) : IO Unit := do
+  let check (label source expected : String) (width : Nat := 100) := do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source label { lineWidth := width }
+    assertTrue s!"{label} does not fall back" (!result.fellBack)
+    assertEq label expected result.formatted
+    assertTrue s!"{label} preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    let before ← SyntaxTree.parseModuleStringWithEnv env source label
+    let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted label
+    assertTrue s!"{label} preserves syntax"
+      (Formatter.Diagnostics.syntaxSignature before.rawSyntax
+        == Formatter.Diagnostics.syntaxSignature after.rawSyntax)
+    assertFrontendElaborates env source label
+    assertFrontendElaborates env result.formatted label
+    let again ←
+      Formatter.formatSourceWithEnvDetailed env result.formatted label
+        { lineWidth := width }
+    assertTrue s!"{label} second pass does not fall back" (!again.fellBack)
+    assertEq s!"{label} is idempotent" result.formatted again.formatted
+  for (kind, first, second, body)
+      in [
+        ("ordinary", "a.isSome", "b.isSome", "2"),
+        ("dependent", "h : a.isSome", "k : b.isSome", "2"),
+        ("pattern", "let some x := a", "let some y := b", "y"),
+        ("mixed", "a.isSome", "let some y := b", "y")
+      ] do
+    for (comment, boundary, detached)
+        in [
+          ("none", " ", false),
+          ("inline", " /- inline -/ ", false),
+          ("line", " -- Retain this boundary.\n    ", true),
+          ("multiline", " /- Retain this\n    boundary. -/\n    ", true)
+        ] do
+      let label := s!"{kind}_{comment}"
+      let base := if detached then "    " else "  "
+      let expected :=
+        s!"def {label} (a b : Option Nat) : Nat :=\n"
+        ++ "  if "
+        ++ first
+        ++ " then\n    1\n"
+        ++ "  else"
+        ++ boundary
+        ++ "if "
+        ++ second
+        ++ " then\n"
+        ++ base
+        ++ "  "
+        ++ body
+        ++ "\n"
+        ++ base
+        ++ "else\n"
+        ++ base
+        ++ "  3\n"
+      for width in [60, 100] do
+        check label expected expected width
+      let parsed ← SyntaxTree.parseModuleStringWithEnv env expected label
+      let some owner :=
+        findTreeNode?
+          (.ifThenElseChain
+            (if kind == "pattern" then
+                `termIfLet
+              else if kind == "dependent" then
+                `termDepIfThenElse
+              else
+                `termIfThenElse))
+          parsed.tree
+      | throw <| IO.userError s!"{label}: missing conditional owner"
+      assertTrue s!"{label} keeps the continuation nested in syntax"
+        (match owner with
+          | .node _ children => children.size == 4
+          | _ => false)
+      let layout := Formatter.LayoutTree.prepare expected owner
+      assertTrue s!"{label} layout preparation preserves every token in order"
+        (layout.tokens == owner.tokens)
+      assertTrue s!"{label} joins only an uninterrupted layout run"
+        (match layout with
+          | .node _ children => children.size == if detached then 4 else 6
+          | _ => false)
+      if comment == "line" then
+        let source := expected.replace "else --" "else\n    --"
+        check s!"{label}-standalone-comment" source source
+  for (label, source)
+      in [
+        (
+          "attached-proof",
+          "def attachedProof (a b : Bool) : Nat :=\n"
+          ++ "  if a then\n    1\n"
+          ++ "  else -- Retain this boundary.\n"
+          ++ "    if b then by\n      exact 2\n"
+          ++ "    else\n      3\n"
+        ),
+        (
+          "condition-comment",
+          "def conditionComment (a b : Bool) : Nat :=\n"
+          ++ "  if a then\n    1\n"
+          ++ "  else if -- Only the condition moves.\n"
+          ++ "    b then\n    2\n  else\n    3\n"
+        ),
+        (
+          "parenthesized-comment",
+          "def parenthesizedComment (a b : Bool) : Option Nat :=\n"
+          ++ "  some\n    (if a then\n        1\n"
+          ++ "      else -- Retain this boundary.\n"
+          ++ "        if b then\n          2\n        else\n          3)\n"
+        ),
+        (
+          "do-comment",
+          "def doComment (a b : Bool) : Id Nat := do\n"
+          ++ "  if a then\n    return 1\n"
+          ++ "  else -- Retain this boundary.\n"
+          ++ "    if b then\n      return 2\n    else\n      return 3\n"
+        ),
+        (
+          "joined-tail",
+          "def joinedTail (a b c : Option Nat) : Nat :=\n"
+          ++ "  if a.isSome then\n    1\n"
+          ++ "  else -- Only this link breaks.\n"
+          ++ "    if let some y := b then\n      y\n"
+          ++ "    else if c.isSome then\n      2\n"
+          ++ "    else\n      3\n"
+        ),
+        (
+          "broken-tail",
+          "def brokenTail (a b c : Option Nat) : Nat :=\n"
+          ++ "  if a.isSome then\n    1\n"
+          ++ "  else if let some y := b then\n    y\n"
+          ++ "  else -- Only this link breaks.\n"
+          ++ "    if c.isSome then\n      2\n    else\n      3\n"
+        ),
+        (
+          "flat-chain",
+          "def flatChain (a b : Bool) := if a then 1 else if b then 2 else 3\n"
+        ),
+        (
+          "flat-pattern",
+          "def flatPattern (a b : Option Nat) :=\n"
+          ++ "  if let some x := a then x else if let some y := b then y else 3\n"
+        )
+      ] do
+    check label source source
+
 def assertParserCommandActions (env : Lean.Environment) : IO Unit := do
   let cases : List (String × SyntaxTree.CommandParseAction) :=
     [
@@ -21018,6 +21160,7 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertReviewedMathlibContinuationAndSuffixes env
   assertElseIfContinuesOnElseLine env
   assertElseIfChainBreaksThenBranchesTogether env
+  assertConditionalChainCommentOwnership env
   assertTermMatchAlternativesStayOnOwnLines env
   assertLetMatchAlternativesAlign env
   assertMatchArmPreservesSourceBreakBeforeShortRhs env

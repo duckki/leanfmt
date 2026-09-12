@@ -1,5 +1,6 @@
 import LeanFmt.Formatter.LineBreakRules
 import LeanFmt.Formatter.LayoutPlan
+import LeanFmt.Formatter.LayoutTree
 import LeanFmt.Formatter.OriginalTree
 import LeanFmt.Formatter.Rebase
 import LeanFmt.Formatter.SourceBoundary
@@ -3038,20 +3039,22 @@ def RenderState.finalTrivia (state : RenderState) : String :=
 def renderModuleTree (moduleTree : SyntaxTree.Module) (options : Options := {})
     : String :=
   let sourceMap := SyntaxTree.SourcePositionMap.ofString moduleTree.source
-  let layoutFacts := TreeLayoutFacts.ofTree moduleTree.source moduleTree.tree
+  let tree := LayoutTree.prepare moduleTree.source moduleTree.tree
+  let layoutFacts := TreeLayoutFacts.ofTree moduleTree.source tree
   let state :=
     renderSegment
       {
         options, source := moduleTree.source, sourceMap, layoutFacts? := some layoutFacts
       }
-      (LineBreakRules.Segment.ofTree moduleTree.tree)
+      (LineBreakRules.Segment.ofTree tree)
   SpaceRules.normalizeFinalNewline
   <| SpaceRules.stripTrailingWhitespace (state.output ++ state.finalTrivia)
 
 def renderModuleTreeWithTrace (moduleTree : SyntaxTree.Module) (options : Options := {})
     : String × String :=
   let sourceMap := SyntaxTree.SourcePositionMap.ofString moduleTree.source
-  let layoutFacts := TreeLayoutFacts.ofTree moduleTree.source moduleTree.tree
+  let tree := LayoutTree.prepare moduleTree.source moduleTree.tree
+  let layoutFacts := TreeLayoutFacts.ofTree moduleTree.source tree
   let state :=
     renderSegment
       {
@@ -3061,7 +3064,7 @@ def renderModuleTreeWithTrace (moduleTree : SyntaxTree.Module) (options : Option
         layoutFacts? := some layoutFacts
         trace := { enabled := true }
       }
-      (LineBreakRules.Segment.ofTree moduleTree.tree)
+      (LineBreakRules.Segment.ofTree tree)
   let formatted :=
     SpaceRules.normalizeFinalNewline
     <| SpaceRules.stripTrailingWhitespace (state.output ++ state.finalTrivia)

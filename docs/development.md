@@ -337,6 +337,16 @@ Use traces to answer questions like "which rule introduced this break?" or "what
 indentation did this child receive?" Keep renderer fixes state-based; avoid adding token
 or node-kind special cases in renderer code.
 
+Use `Formatter.LayoutTree.prepare` when inspecting the child indexes of a
+renderer trace: the lossless syntax tree retains continuations that the rendering
+view can flatten. Source-boundary decisions belong in layout preparation, not in
+syntax regrouping or line-break rules. `assertConditionalChainCommentOwnership`
+in the control-flow suite checks this ownership, token order, exact layout,
+elaboration, preservation, and idempotency. Coverage includes ordinary, dependent,
+pattern, and mixed chains at widths 60 and 100; comment boundaries and comments
+inside conditions; attached proofs; parentheses; nested `do`; and joined/broken
+tails. Existing conditional and suffix tests remain enabled.
+
 ## Profiling
 
 The test executable can print formatter phase timings. Add `--check` when

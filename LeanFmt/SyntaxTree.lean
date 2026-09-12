@@ -878,13 +878,12 @@ private def annotateTacticNode
         let children :=
           if let some declaration := regroupOptionalTacticAssignment? children then
             #[declaration]
+          else if isSpacedApplication then
+            match groupSimpleTrailingProofArgument? (.node (.raw `null) children) with
+            | some (.node _ grouped) => grouped
+            | _ => children
           else
-            if isSpacedApplication then
-              match groupSimpleTrailingProofArgument? (.node (.raw `null) children) with
-              | some (.node _ grouped) => grouped
-              | _ => children
-            else
-              children
+            children
         .node
           (.tactic kind summary.containsSequence false summary.containsOwner
             isSpacedApplication)
@@ -3026,7 +3025,10 @@ def regroupDoDeclarationFallbackChildren (children : Array Tree) : Array Tree :=
     #[]
 
 def isIfThenElseKind (kind : SyntaxNodeKind) : Bool :=
-  kind == `termIfThenElse || kind == `termDepIfThenElse || kind == `boolIfThenElse
+  kind == `termIfThenElse
+  || kind == `termDepIfThenElse
+  || kind == `boolIfThenElse
+  || kind == `termIfLet
 
 def ifThenElseClause (children : Array Tree) : Tree :=
   if children.size < 2 then
@@ -3066,14 +3068,15 @@ def doIfAttachedBody (body : Tree) : Bool :=
 
 def ifThenElseChainParts? : Tree → Option (Array Tree)
   | .node (.raw kind) children => do
-      if !isIfThenElseKind kind || children.size != 6 then
+      let headerSize := if kind == `termIfLet then 6 else 3
+      if !isIfThenElseKind kind || children.size != headerSize + 3 then
         none
-      let thenBranch ← children[3]?
-      let elseKeyword ← children[4]?
-      let elseBranch ← children[5]?
+      let thenBranch ← children[headerSize]?
+      let elseKeyword ← children[headerSize + 1]?
+      let elseBranch ← children[headerSize + 2]?
       let (clause, thenBranch) :=
         attachIfThenElseClauseBody termIfAttachedBody
-          (ifThenElseClause (childrenRange children 0 3)) thenBranch
+          (ifThenElseClause (childrenRange children 0 headerSize)) thenBranch
       some
         #[
           clause,
@@ -3082,14 +3085,6 @@ def ifThenElseChainParts? : Tree → Option (Array Tree)
           elseBranch
         ]
   | .node (.ifThenElseChain _) children => some children
-  | _ => none
-
-def prependElseToIfThenElseClause (elseKeyword : Tree) (parts : Array Tree)
-    : Option (Array Tree) := do
-  let first ← parts[0]?
-  match first with
-  | .node .ifThenElseClause children =>
-      some <| parts.set! 0 (.node .ifThenElseClause (#[elseKeyword] ++ children))
   | _ => none
 
 def attachFinalElseBodySuffixWhere (accepts : Tree → Bool) (parts : Array Tree)
@@ -3106,24 +3101,39 @@ def attachFinalElseBodySuffixWhere (accepts : Tree → Bool) (parts : Array Tree
     | _, _ => parts
 
 def regroupIfThenElseChain (kind : SyntaxNodeKind) (children : Array Tree) : Tree :=
-  if children.size != 6 then
-    .node (.raw kind) children
-  else
-    let thenBranch := children[3]!
-    let elseKeyword := children[4]!
-    let elseBranch := children[5]!
-    let continuation? := do
-      let continuation ← ifThenElseChainParts? elseBranch
-      prependElseToIfThenElseClause elseKeyword continuation
-    match continuation? with
-    | some continuation =>
-        let (clause, thenBranch) :=
-          attachIfThenElseClauseBody termIfAttachedBody
-            (ifThenElseClause (childrenRange children 0 3)) thenBranch
-        let parts := #[clause, thenBranch] ++ continuation
-        .node (.ifThenElseChain kind)
-          (attachFinalElseBodySuffixWhere termIfAttachedBody parts)
-    | none => .node (.raw kind) children
+  let original : Tree := .node (.raw kind) children
+  let regrouped? : Option Tree := do
+    let parts ← ifThenElseChainParts? original
+    let continuation ← parts[3]?
+    let continuationParts ← ifThenElseChainParts? continuation
+    let continuationKind ←
+      match continuation with
+      | .node (.raw kind) _ | .node (.ifThenElseChain kind) _ => some kind
+      | _ => none
+    let continuation : Tree :=
+      .node (.ifThenElseChain continuationKind)
+        (attachFinalElseBodySuffixWhere termIfAttachedBody continuationParts)
+    some <| .node (.ifThenElseChain kind) (parts.set! 3 continuation)
+  regrouped?.getD original
+
+private partial def nestIfThenElseChainParts
+    (kind : SyntaxNodeKind) (parts : Array Tree) (index : Nat := 0)
+    : Tree :=
+  match parts[index + 2]? with
+  | some (.node .ifThenElseClause continuation) =>
+      let nested := nestIfThenElseChainParts kind parts (index + 2)
+      match continuation[0]?, nested with
+      | some elseKeyword, .node nestedKind nestedParts =>
+          let header := .node .ifThenElseClause (continuation.extract 1 continuation.size)
+          .node (.ifThenElseChain kind)
+            #[
+              parts[index]!,
+              parts[index + 1]!,
+              elseKeyword,
+              .node nestedKind (nestedParts.set! 0 header)
+            ]
+      | _, _ => .node (.ifThenElseChain kind) (parts.extract index parts.size)
+  | _ => .node (.ifThenElseChain kind) (parts.extract index parts.size)
 
 private partial def doIfContinuationParts? : Tree → Option (Array Tree)
   | .node (.raw `null) children =>
@@ -3192,7 +3202,7 @@ def regroupDoIfThenElseChain? (children : Array Tree) : Option Tree := do
     none
   else
     some
-    <| .node (.ifThenElseChain `Lean.Parser.Term.doIf)
+    <| nestIfThenElseChainParts `Lean.Parser.Term.doIf
     <| attachFinalElseBodySuffixWhere doIfAttachedBody parts
 
 def proofBodyTree (children : Array Tree) : Tree :=
@@ -4015,64 +4025,62 @@ def regroupRawNode
       (flattenRegisteredAtomicPeerTail? parserLayout kind children).getD children
     if let some policy := parserLayout.ownedBody? kind then
       (regroupParserOwnedBody? kind policy children).getD <| .node (.raw kind) children
+    else if let some declaration := regroupPrefixedDeclaration? children then
+      declaration
     else
-      if let some declaration := regroupPrefixedDeclaration? children then
-        declaration
-      else
-        let spacedApplication? :=
-          if regroupSpacedApplications then
-            regroupSpacedApplication? parserLayout kind children
-          else
-            none
-        if let some application := spacedApplication? then
-          application
+      let spacedApplication? :=
+        if regroupSpacedApplications then
+          regroupSpacedApplication? parserLayout kind children
         else
-          let grouped? :=
-            regroupGeneratedPostfix? parserLayout kind children
-            <|> regroupGeneratedSuffixApplication? kind children
-          if let some grouped := grouped? then
-            grouped
-          else
-            if isIndexedInfixRawNode kind children then
-              .node (.indexedInfix kind) children
-            else if isBinaryInfixRawNode kind children then
-              match children[0]?, children[1]?, children[2]? with
-              | some left, some operator, some right =>
-                  let parts := appendInfixParts parserLayout kind #[] left
-                  let parts := parts.push operator
-                  let parts := appendInfixParts parserLayout kind parts right
-                  let parts :=
-                    if kind == `«term_<|_» then
-                      regroupLowPriorityInfixRhs parts
-                    else
-                      parts
-                  .node (.infixChain kind) parts
-              | _, _, _ =>
-                  .node (.raw kind) children
-            else if kind == `Lean.Parser.Command.classAbbrev then
-              .node .definition children
-            else if kind == `Lean.Parser.Command.definition
-                    || kind == `Lean.Parser.Command.abbrev
-                    || kind == `Lean.Parser.Command.opaque then
-              let children :=
-                if kind == `Lean.Parser.Command.opaque then
-                  regroupSeparatedDeclarationSignatureChildren children
+          none
+      if let some application := spacedApplication? then
+        application
+      else
+        let grouped? :=
+          regroupGeneratedPostfix? parserLayout kind children
+          <|> regroupGeneratedSuffixApplication? kind children
+        if let some grouped := grouped? then
+          grouped
+        else if isIndexedInfixRawNode kind children then
+          .node (.indexedInfix kind) children
+        else if isBinaryInfixRawNode kind children then
+          match children[0]?, children[1]?, children[2]? with
+          | some left, some operator, some right =>
+              let parts := appendInfixParts parserLayout kind #[] left
+              let parts := parts.push operator
+              let parts := appendInfixParts parserLayout kind parts right
+              let parts :=
+                if kind == `«term_<|_» then
+                  regroupLowPriorityInfixRhs parts
                 else
-                  children
-              let children := regroupEquationTrailingClauseChildren children
-              match regroupDefinitionChildren children with
-              | some definitionChildren => .node .definition definitionChildren
-              | none => .node (.raw kind) children
-            else if declarationValueCommandKind kind then
-              regroupDeclarationValueCommand kind children
+                  parts
+              .node (.infixChain kind) parts
+          | _, _, _ =>
+              .node (.raw kind) children
+        else if kind == `Lean.Parser.Command.classAbbrev then
+          .node .definition children
+        else if kind == `Lean.Parser.Command.definition
+                || kind == `Lean.Parser.Command.abbrev
+                || kind == `Lean.Parser.Command.opaque then
+          let children :=
+            if kind == `Lean.Parser.Command.opaque then
+              regroupSeparatedDeclarationSignatureChildren children
             else
-              match regroupDefinitionChildren children with
-              | some definitionChildren => .node .definition definitionChildren
-              | none =>
-                  (regroupSignatureOnlyDeclarationChildren? children).map
-                      (.node (.raw kind) ·)
-                    |>.getD
-                  <| regroupOtherRawNode kind children
+              children
+          let children := regroupEquationTrailingClauseChildren children
+          match regroupDefinitionChildren children with
+          | some definitionChildren => .node .definition definitionChildren
+          | none => .node (.raw kind) children
+        else if declarationValueCommandKind kind then
+          regroupDeclarationValueCommand kind children
+        else
+          match regroupDefinitionChildren children with
+          | some definitionChildren => .node .definition definitionChildren
+          | none =>
+              (regroupSignatureOnlyDeclarationChildren? children).map
+                  (.node (.raw kind) ·)
+                |>.getD
+              <| regroupOtherRawNode kind children
 
 private partial def regroupTreeWithPrecedencesInContext
     (parserLayout : ParserLayout.Facts)

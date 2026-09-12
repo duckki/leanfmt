@@ -1603,9 +1603,10 @@ else
 ```
 
 An `else if` keeps the nested `if` on the `else` line rather than adding an
-extra branch indentation. The complete chain is one balanced structure: if one
-branch boundary breaks, every `then` branch and the final `else` branch break
-together.
+extra branch indentation. Each uninterrupted chain is one balanced structure:
+if one branch boundary breaks, every `then` branch and the final `else` branch
+in that chain break together. Ordinary, dependent, and pattern (`if let`)
+conditions can share a chain.
 
 ```lean
 if firstCondition then
@@ -1628,6 +1629,39 @@ else if hright : cut = n then
   right
 else
   middle
+```
+
+A line comment or a block comment containing a newline between `else` and `if`
+ends the current chain. The complete continuation becomes the nested `else`
+body; its branches indent from its own base. Later uninterrupted clauses still
+chain at that deeper base:
+
+```lean
+if firstCondition then
+  firstResult
+else -- This boundary cannot be flattened.
+  if let some value := optionalValue then
+    value
+  else if finalCondition then
+    lastResult
+  else
+    fallback
+```
+
+A fitting single-line block comment does not split a chain. Neither does an
+ordinary source newline between `else` and `if`. A comment after `if`, inside its
+condition, can break that condition without changing the owner of its branches.
+Comments keep their existing attachment and reindentation rules; a standalone
+comment need not move onto the `else` line.
+
+```lean
+if firstCondition then
+  firstResult
+else if -- Only the condition moves.
+  secondCondition then
+  secondResult
+else
+  fallback
 ```
 
 The final condition line keeps `then`. A long infix condition wraps by its own

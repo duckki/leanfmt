@@ -11,6 +11,9 @@ linked below remains the source of truth when this summary and the code diverge.
   syntax regrouping.
 - `LeanFmt/Formatter.lean` exposes the formatting API and drives convergence.
 - `LeanFmt/Formatter/SpaceRules.lean` owns horizontal token spacing.
+- `LeanFmt/Formatter/LayoutTree.lean` prepares the rendering view from source-boundary
+  facts while leaving the lossless syntax tree unchanged. Keep comment-dependent
+  chain joining here, not in syntax regrouping or line-break rules.
 - `LeanFmt/Formatter/LineBreakRules.lean` owns syntax-specific break rules and
   the complete rule dispatch table.
 - `LeanFmt/Formatter/OriginalTree.lean` classifies protected source-layout islands
