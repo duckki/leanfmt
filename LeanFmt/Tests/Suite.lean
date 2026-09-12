@@ -18247,7 +18247,15 @@ def assertParserCommandActions (env : Lean.Environment) : IO Unit := do
       ("@[simp] theorem value : True := by trivial", .frontend),
       ("structure Example where\n  value : Nat\nderiving Repr", .frontend),
       ("set_option maxRecDepth 2048 in\nrun_cmd pure ()", .frontend),
-      ("attribute [simp] value", .frontend)
+      ("attribute [simp] value", .frontend),
+      ("mutual\n  def first := 0\n  theorem second : True := by trivial\nend", .postpone),
+      ("mutual\n  def Example.first := 0\n  def Example.second := 1\nend", .postpone),
+      ("mutual\n  @[simp] theorem value : True := by trivial\nend", .frontend),
+      ("mutual\n  inductive Example where | mk\n  deriving Repr\nend", .frontend),
+      ("mutual\n  variable (n : Nat)\n  def value := n\nend", .frontend),
+      ("mutual\n  open Nat\n  def value := 0\nend", .frontend),
+      ("mutual\n  set_option pp.universes true\n  def value := 0\nend", .frontend),
+      ("set_option maxRecDepth 2048 in\nmutual\n  def value := 0\nend", .frontend)
     ]
   for (source, expected) in cases do
     let command ← IO.ofExcept <| Lean.Parser.runParserCategory env `command source
@@ -18270,6 +18278,16 @@ def assertParserCommandsObserveCompletePrefix (env : Lean.Environment) : IO Unit
     [
       ("direct", declaration ++ observer),
       ("wrapped", declaration ++ "set_option maxRecDepth 2048 in\n" ++ observer),
+      ("mutual dependency", "mutual\n" ++ declaration ++ "end\n" ++ observer),
+      (
+        "overridden mutual",
+        "elab_rules : command\n"
+        ++ "  | `(mutual def observedTarget := $_value end) => do\n"
+        ++ "    if (← getEnv).contains `parserSwitch then\n"
+        ++ "      elabCommand (← `(notation:max \"branch%\" n:arg => Nat.succ n))\n"
+        ++ declaration
+        ++ "mutual\ndef observedTarget := 0\nend\n"
+      ),
       (
         "generated",
         "macro \"installObservedSyntax\" : command => `(\n"
@@ -18330,6 +18348,101 @@ def assertParserCommandsObserveCompletePrefix (env : Lean.Environment) : IO Unit
       (← codePreservedIgnoringWhitespace env source result.formatted)
     assertEq s!"{label}: complete parser state is idempotent" result.formatted
       (← Formatter.formatSourceWithEnv env result.formatted fileName)
+
+def assertMutualParserReplayIsDeferred (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "namespace DeferredMutual\n"
+    ++ "mutual\n"
+    ++ "  def first : Nat → Nat\n"
+    ++ "    | 0 => 0\n"
+    ++ "    | n + 1 => second n\n"
+    ++ "  def second : Nat → Nat\n"
+    ++ "    | 0 => 0\n"
+    ++ "    | n + 1 => first n\n"
+    ++ "end\n"
+    ++ "mutual\n"
+    ++ "  theorem Named.evidence : True := by exact True.intro\n"
+    ++ "end\n"
+    ++ "end DeferredMutual\n"
+  let fileName := "deferred-mutual-parser.lean"
+  assertFrontendElaborates env source fileName
+  let input := Lean.Parser.mkInputContext source fileName
+  let (_, parserState, _) ← Lean.Parser.parseHeader input
+  let initial : SyntaxTree.ModuleParseState :=
+    { parserState, commandState := Lean.Elab.Command.mkState env }
+  let parsed ← SyntaxTree.parseModuleCommandsQuiet input initial true initial
+  for name
+      in [
+        `DeferredMutual.first,
+        `DeferredMutual.second,
+        `DeferredMutual.Named.evidence
+      ] do
+    assertTrue "ordinary mutual declarations remain unelaborated during parsing"
+      (!parsed.commandState.env.contains name)
+  let reference ← SyntaxTree.replayModulePrefix input initial source.rawEndPos
+  assertTrue "deferred mutual syntax agrees with the complete frontend"
+    (Formatter.Diagnostics.syntaxSignature (Lean.mkListNode parsed.commands)
+      == Formatter.Diagnostics.syntaxSignature (Lean.mkListNode reference.commands))
+  assertTrue "deferred mutual parsing preserves the surrounding scope"
+    (parsed.commandState.scopes.length == 1)
+  let observer :=
+    "open Lean Elab Command\n"
+    ++ "run_cmd do\n"
+    ++ "  let some (.thmInfo info) := (← getEnv).find? `DeferredMutual.Named.evidence\n"
+    ++ "    | throwError \"missing mutual theorem\"\n"
+    ++ "  unless info.value.isConstOf `True.intro do\n"
+    ++ "    throwError \"missing mutual theorem body\"\n"
+    ++ "  elabCommand (← `(notation:max \"mutualResult%\" n:arg => Nat.succ n))\n"
+    ++ "def generated := mutualResult% 1\n"
+  let source := source ++ observer
+  assertFrontendElaborates env source fileName
+  let result ← Formatter.formatSourceWithEnvDetailed env source fileName
+  assertTrue "deferred mutual formatting does not fall back" (!result.fellBack)
+  assertTextContains "observers receive deferred mutual declaration bodies"
+    result.formatted "def generated := mutualResult% 1"
+  assertFrontendElaborates env result.formatted fileName
+  assertTrue "deferred mutual formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  assertEq "deferred mutual formatting is idempotent" result.formatted
+    (← Formatter.formatSourceWithEnv env result.formatted fileName)
+
+def assertMutualParserReplayRejectsCustomHandlers (env : Lean.Environment) : IO Unit := do
+  let block := "mutual\n  def observedTarget := 0\nend\n"
+  let cases :=
+    [
+      (
+        "nested declaration handler",
+        "elab_rules : command\n" ++ "  | `(def observedTarget := $_value) => pure ()\n",
+        block
+      ),
+      (
+        "namespace handler",
+        "elab_rules : command\n" ++ "  | `(namespace $_name) => throwUnsupportedSyntax\n",
+        block
+      ),
+      (
+        "end handler",
+        "elab_rules : command\n" ++ "  | `(end) => throwUnsupportedSyntax\n",
+        block
+      ),
+      (
+        "nested macro",
+        "macro \"customMutualMember\" : command => `(def observedTarget := 0)\n",
+        "mutual\n  customMutualMember\nend\n"
+      )
+    ]
+  for (label, setup, block) in cases do
+    let source := "open Lean Elab Command\n" ++ setup
+    let input := Lean.Parser.mkInputContext source "custom-mutual-handlers.lean"
+    let (_, parserState, _) ← Lean.Parser.parseHeader input
+    let initial : SyntaxTree.ModuleParseState :=
+      { parserState, commandState := Lean.Elab.Command.mkState env }
+    let parsed ← SyntaxTree.parseModuleCommandsQuiet input initial true initial
+    let command ←
+      IO.ofExcept <| Lean.Parser.runParserCategory parsed.commandState.env `command block
+    assertTrue s!"{label}: mutual parsing uses the complete frontend"
+      (SyntaxTree.commandParseAction parsed.commandState.env command == .frontend)
+    assertFrontendElaborates env (source ++ block) "custom-mutual-handlers.lean"
 
 def assertParserCommandsObserveOnlyPrecedingState (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -20911,6 +21024,8 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertParserReplayStopsAtRequiredPrefix env
   assertParserCommandActions env
   assertParserCommandsObserveCompletePrefix env
+  assertMutualParserReplayIsDeferred env
+  assertMutualParserReplayRejectsCustomHandlers env
   assertParserCommandsObserveOnlyPrecedingState env
   assertParserReplayRetainsTheoremBodyDependencies env
   assertCustomCommandReplayIsBounded env

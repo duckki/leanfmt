@@ -4343,19 +4343,50 @@ partial def syntaxHasElaborationHooks : Syntax → Bool
       || children.any syntaxHasElaborationHooks
   | _ => false
 
-def commandParseAction (env : Environment) (command : Syntax) : CommandParseAction :=
-  let handlers :=
-    (Elab.Command.commandElabAttribute.getEntries env command.getKind).map (·.declName)
-    ++ (Elab.macroAttribute.getEntries env command.getKind).map (·.declName)
-  match handlers with
+def commandHandlers (env : Environment) (kind : SyntaxNodeKind) : List Name :=
+  (Elab.Command.commandElabAttribute.getEntries env kind).map (·.declName)
+  ++ (Elab.macroAttribute.getEntries env kind).map (·.declName)
+
+def commandKindParseAction (env : Environment) (kind : SyntaxNodeKind)
+    : CommandParseAction :=
+  match commandHandlers env kind with
   | [] => .frontend
   | first :: rest =>
       let action := commandHandlerParseAction first
-      if rest.any (fun handler => commandHandlerParseAction handler != action)
-          || syntaxHasElaborationHooks command then
+      if rest.any (fun handler => commandHandlerParseAction handler != action) then
         .frontend
       else
         action
+
+def isMutualCommandHandler : Name → Bool
+  | `Lean.Elab.Command.elabMutual
+  | `Lean.Elab.Command.expandMutualNamespace
+  | `Lean.Elab.Command.expandMutualElement
+  | `Lean.Elab.Command.expandMutualPreamble => true
+  | _ => false
+
+def commandParseAction (env : Environment) (command : Syntax) : CommandParseAction :=
+  let directAction (command : Syntax) :=
+    let action := commandKindParseAction env command.getKind
+    if action != .frontend && syntaxHasElaborationHooks command then .frontend else action
+  if command.isOfKind `Lean.Parser.Command.mutual then
+    let handlers := commandHandlers env command.getKind
+    let declarations := command[1].getArgs
+    -- The namespace macro can emit scope commands; element and preamble macros must stay inactive.
+    if !handlers.isEmpty
+        && handlers.all isMutualCommandHandler
+        && commandKindParseAction env `Lean.Parser.Command.namespace == .scope
+        && commandKindParseAction env `Lean.Parser.Command.end == .scope
+        && !declarations.isEmpty
+        && declarations.all
+            (fun declaration =>
+              declaration.isOfKind `Lean.Parser.Command.declaration
+              && directAction declaration == .postpone) then
+      .postpone
+    else
+      .frontend
+  else
+    directAction command
 
 def parserStateCommandContext (inputContext : Parser.InputContext)
     : Elab.Command.Context :=

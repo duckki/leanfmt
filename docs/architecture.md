@@ -100,6 +100,16 @@ Formatting a file follows this pipeline:
    not syntax names or Lean's `isBuiltin` flag (which also marks some local entries).
    Missing, replaced, and mixed-policy handlers use the frontend.
 
+   A standard `mutual` block can also be postponed when every member is an ordinary
+   declaration accepted by that same policy. The container's registered elaborator
+   and macros must be the audited Lean implementations. Declaration-only membership
+   leaves its element-expansion and preamble macros inactive; namespace/end handlers
+   must also retain their standard scope policy because qualified names can expand to
+   a namespace wrapper. Attributes, deriving hooks, preambles, custom member macros,
+   and replaced handlers keep the block on the frontend path. Postponement does not
+   discard declarations or their proof bodies: the next environment-observing command
+   still replays the complete pending prefix.
+
    Standard namespace, section, and end commands update the quiet parser scope. Every
    other command, including local syntax declarations, `run_cmd`, wrappers, attributes,
    and custom commands, runs through Lean's frontend with the complete preceding

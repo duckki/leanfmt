@@ -373,6 +373,11 @@ frontend; `assertFrontendElaborates` waits for all elaboration snapshots and che
 original and formatted input. Preservation and idempotency alone can agree on the same
 incomplete environment. Extending the quiet path requires auditing the actual command
 and macro implementations, including replacements, attributes, and scoped wrappers.
+`assertMutualParserReplayIsDeferred` checks that eligible declaration blocks remain
+unelaborated until an observer needs them, then verifies actual theorem bodies and
+complete-frontend syntax parity. The custom-handler tests keep block, member, and
+scope overrides on the authoritative replay path. These state assertions test the
+optimization independently of machine-dependent timing thresholds.
 
 The repository also includes a stable local workload that covers regrouping,
 original-layout emission, layout search, and convergence. Record a baseline before an
