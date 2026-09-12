@@ -421,6 +421,12 @@ An alternative must retain its owner's token range and external layout role;
 only internal grouping changes, so the parent's incoming context remains valid.
 Plain chains need no retry descriptor.
 
+Preparation caches physical comment facts at visited continuation boundaries,
+keyed by both UTF-8 source endpoints. The prepared view, its retry descriptors,
+and layout-fact construction share this immutable, module-local cache. It stores
+no width, placement, indentation, or fit decisions and is never reused for a
+different source. Boundaries outside the cache retain direct classification.
+
 When a complete owner reports a newly split join, rendering retries that owner
 from its unchanged incoming state and original tree, with the join disabled.
 The accepted prefix, enclosing layout context, and other owners are not replayed.
@@ -429,6 +435,14 @@ Partial segments cannot retry an owner: their sibling indexes describe only the
 existing view. Flat probes that bypass owner rendering still report feedback to
 the bounded module-level fallback. Earlier feedback survives local retries, but
 feedback and trace from rejected owner candidates do not leak into accepted output.
+
+The first owner attempt finishes to collect simultaneous join failures. When
+retrying with disabled joins, a balanced attempt may stop after its first newly
+broken join, since its remaining output would be discarded. This early exit
+returns directly to the owner retry boundary. Child rendering, flow alternatives,
+and fit probes remain complete before any width comparison; an incomplete attempt
+cannot be selected as a fitting candidate. This avoids rendering a doomed tail
+without caching or resuming partially accepted render state.
 
 Disabled joins accumulate in each retry lineage, so every retry removes at least
 one active join. Later joins are reconsidered at their actual deeper base; fitting

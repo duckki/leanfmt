@@ -2039,6 +2039,71 @@ def assertDelimitedCollectionsFlattenOnlySeparatedItems : IO Unit := do
                       fun child =>
                         child.firstToken?.any (·.lexeme == "second"))
 
+def assertNearestContentLookups : IO Unit := do
+  let empty := SyntaxTree.Tree.leaf (syntheticAtomToken "")
+  let content := SyntaxTree.Tree.leaf (syntheticAtomToken "value")
+  let children :=
+    #[
+      .missing,
+      empty,
+      content,
+      .node (.raw `null) #[],
+      .node (.raw `null) #[.missing, content],
+      .missing,
+      content,
+      empty
+    ]
+  for parent in [SyntaxTree.Tree.node (.raw `null) children, content, .missing] do
+    for start in List.range 11 do
+      for stop in List.range 11 do
+        let segment : Formatter.LineBreakRules.Segment := { parent, start, stop }
+        for index in List.range 13 do
+          let contentIndexes :=
+            segment.indexes.filter
+              fun candidate =>
+                (segment.child? candidate).any Formatter.LineBreakRules.treeHasContent
+          assertTrue "previous content lookup respects empty children and segment bounds"
+            (Formatter.LineBreakRules.previousContentIndex? segment index
+              == (contentIndexes.filter (· < index)).getLast?)
+          assertTrue "following content lookup respects empty children and segment bounds"
+            (Formatter.LayoutPlan.contentChildIndexAtOrAfter? segment index
+              == contentIndexes.find? (index <= ·))
+
+def assertSourceBoundaryCache : IO Unit := do
+  for trivia
+      in [
+        " ",
+        "\n",
+        "\r\n",
+        " -- note\n",
+        " /- note -/ ",
+        " /- first\nsecond -/ ",
+        " /- outer /- inner -/ end -/ ",
+        " /- λ -/\r\n-- next\r\n"
+      ] do
+    let source := "a" ++ trivia ++ "b"
+    let left := syntheticAtomTokenAt "a" 0 1
+    let right := syntheticAtomTokenAt "b" (source.utf8ByteSize - 1) source.utf8ByteSize
+    let boundary := Formatter.SourceBoundary.betweenTokens source left right
+    let (facts, cache) := Formatter.SourceBoundary.cachedFacts source left right {}
+    assertTrue "cached boundary facts match direct classification"
+      (facts.hasComment == boundary.hasComment
+        && facts.commentForcesBreak == boundary.commentForcesBreak
+        && facts.lineCommentForcesBreak
+            == (boundary.commentForcesBreak && boundary.hasLineComment))
+    let (again, reused) := Formatter.SourceBoundary.cachedFacts source left right cache
+    assertTrue "repeated boundary classification reuses one cache entry"
+      (again == facts && cache.size == 1 && reused.size == 1)
+    assertTrue "read-only boundary lookup matches cached and uncached facts"
+      (Formatter.SourceBoundary.factsBetween source left right {} == facts
+        && Formatter.SourceBoundary.factsBetween source left right reused == facts)
+    let adjacent :=
+      syntheticAtomTokenAt "" right.span.start.byteIdx right.span.start.byteIdx
+    let (emptyFacts, separate) :=
+      Formatter.SourceBoundary.cachedFacts source adjacent right reused
+    assertTrue "both source endpoints identify a boundary"
+      (!emptyFacts.hasComment && !emptyFacts.commentForcesBreak && separate.size == 2)
+
 def assertHardWhitespaceFormatting (env : Lean.Environment) : IO Unit := do
   let source :=
     "def  f  (x  : Nat)  :=\r\n"
@@ -18550,6 +18615,54 @@ def assertConditionalJoinFeedback (env : Lean.Environment) : IO Unit := do
   assertEq "traced rendering resolves the same layout alternatives" cascadeExpected traced
   let view := Formatter.LayoutTree.prepare cascadeSource parsed.tree
   assertTrue "only the joined owner receives retry metadata" (view.retryOwners.size == 1)
+  assertTrue "preparation caches both guarded source boundaries"
+    (view.boundaries.size == 2)
+  for (_, owner) in view.retryOwners do
+    assertTrue "retry descriptors share the prepared boundary facts"
+      (owner.boundaries.size == view.boundaries.size)
+  let refreshed :=
+    Formatter.LayoutTree.prepare cascadeSource parsed.tree disabled view.boundaries
+  let uncached := Formatter.LayoutTree.prepare cascadeSource parsed.tree disabled
+  assertTrue "cached source facts do not change disabled-join preparation"
+    (refreshed.tree == uncached.tree
+      && refreshed.guardedJoins.size == uncached.guardedJoins.size)
+  let some (path, _) := view.retryOwners[0]? | throw <| IO.userError "missing retry owner"
+  let ownerTree :=
+    path.foldl
+      (fun tree index =>
+        match tree with
+        | .node _ children => children[index]!
+        | _ => .missing)
+      view.tree
+  let ownerState : Formatter.RenderState :=
+    {
+      source := cascadeSource,
+      sourceMap := SyntaxTree.SourcePositionMap.ofString cascadeSource
+      options := { lineWidth := 100 }
+      guardedJoins := view.guardedJoins
+      layoutFacts? :=
+        some (Formatter.TreeLayoutFacts.ofTree cascadeSource ownerTree view.boundaries)
+      brokenJoins := ({} : Std.HashSet Nat).insert 0
+    }
+  let ownerState := ownerState.withPendingIndent 2
+  let ownerSegment := Formatter.LineBreakRules.Segment.ofTree ownerTree
+  let complete := Formatter.renderSegmentCore ownerState ownerSegment
+  let interrupted :=
+    Formatter.renderSegmentCore ownerState ownerSegment (stopAfterBrokenJoin := true)
+  assertTrue "invalid owner attempts stop before their remaining tail"
+    (interrupted.brokenJoins.size > 1
+      && interrupted.output.length < complete.output.length
+      && complete.output.startsWith interrupted.output)
+  assertTrue "interrupted owner attempts retain incoming feedback"
+    (interrupted.brokenJoins.contains 0)
+  let wideState := { ownerState with options := { lineWidth := 160 } }
+  let wideComplete := Formatter.renderSegmentCore wideState ownerSegment
+  let wideRetry :=
+    Formatter.renderSegmentCore wideState ownerSegment (stopAfterBrokenJoin := true)
+  assertEq "earlier feedback does not interrupt a valid owner attempt"
+    wideComplete.output wideRetry.output
+  assertTrue "fitting owner attempts retain complete output and feedback"
+    (wideRetry.brokenJoins.size == 1 && wideRetry.lastToken? == ownerTree.lastToken?)
   let state : Formatter.RenderState :=
     {
       source := cascadeSource,
@@ -21620,6 +21733,8 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertRendererTraceIncludesPathAndState env
   assertCliFixtureUpdate env
   assertFormatterArchitecture
+  assertNearestContentLookups
+  assertSourceBoundaryCache
   assertDeclarationRuleTransparent
   assertRecursiveCommandArgumentsShareBase
   assertRegisteredAtomicPeerTailsFlow env

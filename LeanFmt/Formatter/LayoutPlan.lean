@@ -73,12 +73,15 @@ deriving Repr
 
 def contentChildIndexAtOrAfter? (segment : LineBreakRules.Segment) (index : Nat)
     : Option Nat :=
-  segment.indexes.find?
-    fun candidate =>
-      index <= candidate
-      && match segment.child? candidate with
-          | some child => LineBreakRules.treeHasContent child
-          | none => false
+  let rec loop (candidate : Nat) : Nat → Option Nat
+    | 0 => none
+    | remaining + 1 =>
+        if (segment.child? candidate).any LineBreakRules.treeHasContent then
+          some candidate
+        else
+          loop (candidate + 1) remaining
+  let start := max segment.start index
+  loop start (segment.stop - start)
 
 def tokenBoundaryAt? (segment : LineBreakRules.Segment) (index : Nat)
     : Option (SyntaxTree.Token × SyntaxTree.Token) := do

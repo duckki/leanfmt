@@ -17,13 +17,14 @@ release-blocking only for Lean's standard library and Mathlib.
 
 When restoring one nested base makes the next comment join overflow, overlapping
 continuation tails still require repeated rendering. Owner-local retries avoid
-replaying the complete module, but do not establish linear scaling. Keep the
-32/64/128-clause stress sample alongside routine performance measurements. This
-still takes 9.54s at 128 clauses and width 512. It is a worst-case retry cost,
-not a known formatting failure. Do not hide it by
-guessing columns or splitting fitting later joins. Further prefix reuse needs a
-separate, reviewed renderer contract; preparation caching alone does not address
-the measured rendering cost.
+replaying the complete module. The current checkpoint stops invalid retry tails,
+reuses source-boundary facts, and removes full-list scans from nearest-content
+lookups. These reduce repeated work but do not establish linear scaling. Keep
+the 32/64/128-clause stress sample alongside routine performance measurements.
+The 128-clause case now takes 1.945s rather than 9.739s at width 512. This is a
+worst-case retry cost, not a known formatting failure. Do not hide it by guessing
+columns or splitting fitting later joins. Reusing accepted pieces inside an
+owner still needs a separate, reviewed renderer contract.
 
 ### Required prefix elaboration cost
 
@@ -60,58 +61,66 @@ protected-proof policy decision, not tactic-specific indentation exceptions.
 
 ## Progress
 
-### Current checkpoint: retry efficiency
+### Current checkpoint: cascading retry cost
 
-The width-aware ownership change is committed as `b0a3fa4`. The current candidate
-adds sparse original-owner descriptors to the prepared view and cached layout
-facts. A complete owner retries from the same incoming render state, retaining
-accepted earlier output. Nested owners resolve their own joins; partial segments
-cannot change topology. The bounded module retry remains the fallback for flat
-probes that bypass complete-owner rendering. No formatting rule, syntax node,
-rule API, or diagnostic policy changed.
+The owner-local retry checkpoint is committed as `68f8516`. This candidate keeps
+its initial attempt complete to collect simultaneous failures. A later balanced
+retry may stop at the first newly broken join; its incomplete output returns only
+to the retry boundary and cannot enter a fit comparison. Children, flow candidates,
+and fit probes still finish normally. No formatting rule, syntax node, rule API,
+or diagnostic policy changed.
+
+A module-local cache shares physical comment facts between layout preparation
+and layout-fact rebuilding. Keys contain both UTF-8 source endpoints; no column,
+indentation, or fit decision is cached. Nearest-content queries scan directly
+toward the requested neighbor without allocating and scanning every child index.
 
 The complete local gate passed: build, full unit suite, linter, fixture checks,
 self-format checks, preservation, actionable overflow, and idempotency. Fixtures
-are unchanged, and self-formatting touched only new code. New tests check local
-cascade resolution, retained earlier feedback, restored guard scopes, sibling
-owners, and the absence of retry descriptors on plain chains. Existing exact
-output, elaboration, preservation, trace, and probe-rollback tests remain intact.
+are unchanged, and self-formatting touched only new code. New coverage checks
+neighbor lookup equivalence across segment bounds and empty children, cached
+comment classification, early retry exit, retained feedback, and complete fitting
+attempts. Existing ownership, elaboration, trace, and probe-rollback coverage remains.
 
 All 3,240 generated placement comparisons and 120 protected-proof comparisons
-match the previous whole-tree retry algorithm exactly. The independent 84-case
-output-lexing oracle also agrees with production; all cases elaborate, preserve
-code and syntax signatures, and are idempotent without fallback.
+match the whole-tree retry reference exactly. The independent 84-case output-lexing
+oracle agrees with production; all cases elaborate, preserve code and syntax
+signatures, and converge idempotently without fallback.
 
-External validation passed from pristine sources, with previous formatted output
-retained for comparison. There were zero new output differences, exceptions,
-preservation fallbacks, actionable overflows, or idempotency failures. Mathlib
-missing-rule checks passed. Target-project builds and the complete Mathlib sweep
-were omitted at this lightweight gate; no output changed against the recorded
+Lightweight external validation passed from pristine sources. There were zero
+new output differences, exceptions, preservation fallbacks, actionable overflows,
+or idempotency failures. Mathlib missing-rule checks passed. Target-project builds
+and the complete Mathlib sweep were omitted. No output changed against the recorded
 build baselines, so there were no newly changed modules to build.
 
 | Project | Scope | Formatter/check time | Changed output files |
 | --- | --- | --- | --- |
-| GraphQL | 280 files, width 90 | 42s | 0 |
-| quantum | 20 owned files; 1 unowned skipped, width 90 | 37s | 0 |
-| CSLib | 200 files, width 100 | 103s | 0 |
-| Mathlib | 36 pristine files, width 100 | 90.16s | 0 |
+| GraphQL | 280 files, width 90 | 45s | 0 |
+| quantum | 20 owned files; 1 unowned skipped, width 90 | 41s | 0 |
+| CSLib | 200 files, width 100 | 115s | 0 |
+| Mathlib | 36 pristine files, width 100 | 98.30s | 0 |
 
-Serial ABBA comparison against the saved `b0a3fa4` executable used 13 identical
-Mathlib inputs with no concurrent validation workload. Mean user CPU was 64.935s
-before and 64.72s after (-0.3%, with overlapping sample ranges): no meaningful
-routine regression. At 128 clauses, plain-chain format/check time stayed 28ms and
-fitting-comment chains stayed 30ms.
+Serial ABBA comparison against `68f8516` used 13 identical Mathlib inputs with no
+concurrent validation workload. Mean user CPU was 69.245s before and 69.43s after
+(+0.27%); mean wall time was 29.995s before and 29.96s after. These samples show no
+meaningful routine regression. At 128 clauses, plain-chain format/check time
+improved from 29ms to 19ms and fitting-comment chains from 30ms to 21ms.
 
 | Cascading clauses, width 512 | Before | After |
 | --- | --- | --- |
-| 32 | 1.398s | 0.612s |
-| 64 | 5.603s | 2.241s |
-| 128 | 25.077s | 9.542s |
+| 32 | 0.620s | 0.309s |
+| 64 | 2.269s | 0.714s |
+| 128 | 9.739s | 1.945s |
 
 All nine stress inputs passed preservation, width, fallback, and idempotency
 checks before and after, with byte-identical output. The largest case improved
-by 2.6 times, but overlapping tails remain an open scaling issue. This checkpoint
-is validated; it does not replace the full release gate.
+by 5 times, but scaling is not linear. A separate simultaneous-failure negative
+control also retained exact output and did not slow down. Its deliberately
+oversized comments make it a performance/idempotency check, not a width gate.
+
+This checkpoint is validated. The next implementation needs
+review of the protected-proof policy; required prefix elaboration remains an
+upstream API limitation. This checkpoint does not replace the full release gate.
 
 ### Next checkpoint: protected-proof width policy
 
@@ -163,17 +172,21 @@ physical line fits width 100.
 
 ## Evidence
 
-Current artifacts use `.scratch/retry-efficiency-*`. Source snapshots, changed-file
-lists, patches, and formatter logs are under `.scratch/retry-efficiency-validation/`.
+Current artifacts use `.scratch/join-scaling-*`. Source snapshots, changed-file
+lists, patches, and formatter logs are under `.scratch/join-scaling-validation/`.
 The independent 84-case oracle is `.scratch/WidthConditionalOwnership.lean`;
-its latest production comparison is `.scratch/retry-efficiency-oracle-final.log`.
+its latest production comparison is `.scratch/join-scaling-oracle-final.log`.
 `.scratch/RetryEfficiencyExperiment.lean` compares local and whole-tree retries
 with identical rendering rules, including protected-proof contexts. Performance
-compares the candidate with the saved `b0a3fa4` executable. Stress outputs and
-before/after logs are under `.scratch/retry-efficiency-performance/`;
-`.scratch/ProfileRetryEfficiencyStress.sh` checks exact output parity as well as
-preservation, width, fallback, and idempotency. The previous width-aware checkpoint
-artifacts remain available under `.scratch/width-aware-*`.
+compares the candidate with the saved `68f8516` executable. Stress outputs and
+before/after logs are under `.scratch/join-scaling-performance/`;
+`.scratch/ProfileJoinScalingStress.sh` checks exact output parity as well as
+preservation, width, fallback, and idempotency. The previous checkpoint artifacts
+remain available under `.scratch/retry-efficiency-*`.
+The complete run is recorded in `.scratch/join-scaling-gate.log`, with local gate
+output in `.scratch/join-scaling-check-final.log`. The simultaneous-failure control
+is `.scratch/CheckJoinScalingUniform.mjs`, with output under
+`.scratch/join-scaling-uniform/`.
 
 The recorded full-build baselines and batch logs are under
 `.scratch/external-validation-release/logs/`. They cover 200 CSLib files and

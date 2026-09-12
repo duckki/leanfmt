@@ -168,28 +168,29 @@ private structure BoundaryFold where
   containsLineCommentForcedBreak : Bool := false
 
 private def BoundaryFold.push
-    (source : String) (fold : BoundaryFold) (child : TreeLayoutFacts)
+    (source : String) (boundaries : SourceBoundary.Cache)
+    (fold : BoundaryFold) (child : TreeLayoutFacts)
     : BoundaryFold :=
   let childSummary := child.summary
+  let containsCommentForcedBreak :=
+    fold.containsCommentForcedBreak || childSummary.containsCommentForcedBreak
+  let containsLineCommentForcedBreak :=
+    fold.containsLineCommentForcedBreak || childSummary.containsLineCommentForcedBreak
   let boundary? := do
+    if containsCommentForcedBreak && containsLineCommentForcedBreak then none
     let left ← fold.lastSourceToken?
     let right ← childSummary.firstSourceToken?
-    some <| SourceBoundary.betweenTokens source left right
+    some <| SourceBoundary.factsBetween source left right boundaries
   {
     firstSourceToken? :=
       fold.firstSourceToken?.orElse fun _ => childSummary.firstSourceToken?
     lastSourceToken? :=
       childSummary.lastSourceToken?.orElse fun _ => fold.lastSourceToken?
     containsCommentForcedBreak :=
-      fold.containsCommentForcedBreak
-      || childSummary.containsCommentForcedBreak
+      containsCommentForcedBreak
       || boundary?.any fun boundary => boundary.commentForcesBreak
     containsLineCommentForcedBreak :=
-      fold.containsLineCommentForcedBreak
-      || childSummary.containsLineCommentForcedBreak
-      || boundary?.any
-          fun boundary =>
-            boundary.commentForcesBreak && boundary.hasLineComment
+      containsLineCommentForcedBreak || boundary?.any (·.lineCommentForcesBreak)
   }
 
 private def sourceHasLineStructure
@@ -241,7 +242,9 @@ partial def withAlternative
             child.withAlternative source (alternatives[index]?.getD .unchanged)
       .node (resolveSummary source summary none children) children
 
-partial def ofTree (source : String) (tree : SyntaxTree.Tree) : TreeLayoutFacts :=
+partial def ofTree (source : String) (tree : SyntaxTree.Tree)
+    (boundaries : SourceBoundary.Cache := {})
+    : TreeLayoutFacts :=
   match tree with
   | .missing => .node {} #[]
   | .leaf token =>
@@ -257,10 +260,10 @@ partial def ofTree (source : String) (tree : SyntaxTree.Tree) : TreeLayoutFacts 
         }
         #[]
   | .node _ children =>
-      let childFacts := children.map (ofTree source)
+      let childFacts := children.map fun child => ofTree source child boundaries
       let firstToken? := childFacts.findSome? fun child => child.summary.firstToken?
       let lastToken? := childFacts.findSomeRev? fun child => child.summary.lastToken?
-      let boundaries := childFacts.foldl (BoundaryFold.push source) {}
+      let boundaries := childFacts.foldl (BoundaryFold.push source boundaries) {}
       let originalPlan? := OriginalTree.plan? tree
       .node
         (resolveSummary source
@@ -290,7 +293,7 @@ private def withRetryOwner (facts : TreeLayoutFacts) (path : List Nat)
 def ofPrepared (source : String) (view : LayoutTree.Prepared) : TreeLayoutFacts :=
   view.retryOwners.foldl
     (fun facts (path, owner) => facts.withRetryOwner path owner)
-    (ofTree source view.tree)
+    (ofTree source view.tree view.boundaries)
 
 end TreeLayoutFacts
 
@@ -2190,7 +2193,11 @@ mutual
   partial def renderRetryOwner (state : RenderState) (segment : LineBreakRules.Segment)
       (prepared? : Option LayoutPlan.Plan) (owner : LayoutTree.RetryOwner)
       : RenderState :=
-    let rendered := renderSegmentCore state segment prepared?
+    -- First collect simultaneous failures; later attempts may abandon a doomed tail.
+    -- Only this retry boundary receives incomplete attempts, never fit comparisons.
+    let rendered :=
+      renderSegmentCore state segment prepared?
+        (stopAfterBrokenJoin := !owner.disabled.isEmpty)
     let first := owner.tree.firstToken?.map (·.span.start.byteIdx) |>.getD 0
     let last := owner.tree.lastToken?.map (·.span.stop.byteIdx) |>.getD 0
     let broken :=
@@ -2200,7 +2207,7 @@ mutual
       rendered
     else
       let disabled := broken.fold (fun acc key => acc.insert key) owner.disabled
-      let view := LayoutTree.prepare state.source owner.tree disabled
+      let view := LayoutTree.prepare state.source owner.tree disabled owner.boundaries
       let rendered :=
         renderSegment
           {
@@ -2216,6 +2223,7 @@ mutual
 
   partial def renderSegmentCore (state : RenderState) (segment : LineBreakRules.Segment)
       (prepared? : Option LayoutPlan.Plan := none)
+      (stopAfterBrokenJoin : Bool := false)
       : RenderState :=
     let plan := prepared?.getD (LayoutPlan.resolve state.context segment)
     let tailIndentationStop? :=
@@ -2286,12 +2294,13 @@ mutual
           | some islandPlan =>
               state.emitOriginalTree segment.parent (islandPlan? := some islandPlan)
           | none =>
-              renderSegmentByPlan state segment plan
+              renderSegmentByPlan state segment plan stopAfterBrokenJoin
         else
-          renderSegmentByPlan state segment plan
+          renderSegmentByPlan state segment plan stopAfterBrokenJoin
 
   partial def renderSegmentByPlan (state : RenderState) (segment : LineBreakRules.Segment)
       (plan : LayoutPlan.Plan)
+      (stopAfterBrokenJoin : Bool := false)
       : RenderState :=
     let facts :=
       match state.layoutFacts? with
@@ -2309,10 +2318,12 @@ mutual
       renderWithoutRuleBreaks state segment
     else if plan.isMandatory && !plan.breakPoints.isEmpty then
       renderBalancedSegment state segment plan
+        (stopAfterBrokenJoin := stopAfterBrokenJoin)
     else if plan.breakPoints.isEmpty && !plan.isFlow then
       renderBalancedSegment state segment plan
+        (stopAfterBrokenJoin := stopAfterBrokenJoin)
     else if plan.preservesSourceBreaks then
-      renderUsingExistingBreaks state segment plan
+      renderUsingExistingBreaks state segment plan stopAfterBrokenJoin
     else
       let probe := measureLayout state segment false
       let hasRetainedSourceBreak :=
@@ -2333,22 +2344,25 @@ mutual
           && !hasRetainedSourceBreak then
         state.commitLayoutProbe probe
       else
-        renderAfterFlatFailure state segment plan
+        renderAfterFlatFailure state segment plan stopAfterBrokenJoin
 
   partial def renderRuleLayout
       (state : RenderState) (segment : LineBreakRules.Segment)
       (plan : LayoutPlan.Plan)
+      (stopAfterBrokenJoin : Bool := false)
       : RenderState :=
     if plan.isFlow then
       renderFlowSegment state segment plan
     else
       renderBalancedSegment state segment plan
+        (stopAfterBrokenJoin := stopAfterBrokenJoin)
 
   partial def renderAfterFlatFailure
       (state : RenderState) (segment : LineBreakRules.Segment)
       (plan : LayoutPlan.Plan)
+      (stopAfterBrokenJoin : Bool := false)
       : RenderState :=
-    let fallback (_ : Unit) := renderRuleLayout state segment plan
+    let fallback (_ : Unit) := renderRuleLayout state segment plan stopAfterBrokenJoin
     let movesLeadingCommentWithPrefix :=
       segment.indexes.any
         fun index =>
@@ -2376,6 +2390,7 @@ mutual
   partial def renderUsingExistingBreaks
       (state : RenderState) (segment : LineBreakRules.Segment)
       (plan : LayoutPlan.Plan)
+      (stopAfterBrokenJoin : Bool := false)
       : RenderState :=
     let renderFlatOrRuleLayout (_ : Unit) :=
       let probe := measureLayout state segment false
@@ -2384,22 +2399,23 @@ mutual
                 state.layoutFacts? then
         state.commitLayoutProbe probe
       else
-        renderRuleLayout state segment plan
+        renderRuleLayout state segment plan stopAfterBrokenJoin
     match sourceBreaksForRule? state segment plan with
     | some sourceBreaks =>
         if !plan.isFlow then
           renderBalancedSegment state segment plan
+            (stopAfterBrokenJoin := stopAfterBrokenJoin)
         else
           match renderFlowSegmentWithSourceBreaks? state segment sourceBreaks with
           | some rendered =>
               if renderedCandidateFits state rendered then
                 rendered
               else
-                renderRuleLayout state segment plan
+                renderRuleLayout state segment plan stopAfterBrokenJoin
           | none =>
               if segmentContainsMultilineOriginalEmission state.source segment
                   state.layoutFacts? then
-                renderRuleLayout state segment plan
+                renderRuleLayout state segment plan stopAfterBrokenJoin
               else
                 renderFlatOrRuleLayout ()
     | none => renderFlatOrRuleLayout ()
@@ -2975,6 +2991,7 @@ mutual
       (state : RenderState) (segment : LineBreakRules.Segment)
       (plan : LayoutPlan.Plan)
       (resolvePartialSegments : Bool := true)
+      (stopAfterBrokenJoin : Bool := false)
       : RenderState :=
     if plan.breakPoints.isEmpty then
       segment.indexes.foldl
@@ -3029,14 +3046,18 @@ mutual
         let base :=
           ruleBreakBase rendered segment plan entryBaseColumn entryIndentation breakPoint
         rendered.withRuleBreakIndent base.column base.indentation breakPoint
+      let entryBrokenCount := state.brokenJoins.size
       let rec renderOrdinaryPieces (state : RenderState) (start : Nat) (firstPiece : Bool)
           : List LineBreakRules.BreakPoint → RenderState
         | [] => renderPiece state start segment.stop firstPiece true
         | breakPoint :: rest =>
             let rendered := renderPiece state start breakPoint.index firstPiece
             let rest := rest.dropWhile fun next => next.index == breakPoint.index
-            renderOrdinaryPieces (stateAfterBreak rendered breakPoint)
-              breakPoint.index false rest
+            if stopAfterBrokenJoin && rendered.brokenJoins.size > entryBrokenCount then
+              rendered
+            else
+              renderOrdinaryPieces (stateAfterBreak rendered breakPoint)
+                breakPoint.index false rest
       let rec renderCommandPieces
           (state : RenderState) (start : Nat) (firstPiece : Bool)
           (sequenceKind : LineBreakRules.CommandSequenceKind)
@@ -3129,7 +3150,9 @@ private def renderModuleState (moduleTree : SyntaxTree.Module) (options : Option
       | 0 => state
       | remaining + 1 =>
           let disabled := state.brokenJoins.fold (fun acc key => acc.insert key) disabled
-          render remaining (LayoutTree.prepare moduleTree.source moduleTree.tree disabled)
+          render remaining
+            (LayoutTree.prepare moduleTree.source moduleTree.tree disabled
+              view.boundaries)
             disabled
   -- Only committed output can disable a join; each retry removes at least one.
   render initial.guardedJoins.size initial {}

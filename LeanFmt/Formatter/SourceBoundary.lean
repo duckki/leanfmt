@@ -34,6 +34,38 @@ def Boundary.hasLineComment (boundary : Boundary) : Bool :=
   boundary.normalized.splitOn "\n"
   |>.any fun line => (SpaceRules.stripLeadingHorizontalWhitespace line).startsWith "--"
 
+structure Facts where
+  hasComment : Bool
+  commentForcesBreak : Bool
+  lineCommentForcesBreak : Bool
+deriving BEq, Repr
+
+def Boundary.facts (boundary : Boundary) : Facts :=
+  let commentForcesBreak := boundary.commentForcesBreak
+  {
+    hasComment := boundary.hasComment,
+    commentForcesBreak,
+    lineCommentForcesBreak := commentForcesBreak && boundary.hasLineComment
+  }
+
+/-- Module-local source facts, independent of rendered placement and tree grouping. -/
+abbrev Cache := Std.HashMap (Nat × Nat) Facts
+
+def cachedFacts (source : String) (left right : SyntaxTree.Token) (cache : Cache)
+    : Facts × Cache :=
+  let key := (left.span.stop.byteIdx, right.span.start.byteIdx)
+  match cache[key]? with
+  | some facts => (facts, cache)
+  | none =>
+      let facts := (betweenTokens source left right).facts
+      (facts, cache.insert key facts)
+
+def factsBetween (source : String) (left right : SyntaxTree.Token) (cache : Cache)
+    : Facts :=
+  match cache[(left.span.stop.byteIdx, right.span.start.byteIdx)]? with
+  | some facts => facts
+  | none => (betweenTokens source left right).facts
+
 def Boundary.startsOnNewLine (boundary : Boundary) : Bool :=
   match boundary.normalized.toList.dropWhile SpaceRules.isHorizontalWhitespace with
   | '\n' :: _ => true

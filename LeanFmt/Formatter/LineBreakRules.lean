@@ -373,15 +373,16 @@ def wrappedByDoLetFallbackSequence (context : RuleContext) : Bool :=
   | _ => false
 
 def previousContentIndex? (segment : Segment) (index : Nat) : Option Nat :=
-  segment.indexes.foldl
-    (fun found candidate =>
-      if candidate < index then
-        match segment.child? candidate with
-        | some child => if treeHasContent child then some candidate else found
-        | none => found
-      else
-        found)
-    none
+  let rec loop : Nat → Option Nat
+    | 0 => none
+    | candidate + 1 =>
+        if candidate < segment.start then
+          none
+        else if (segment.child? candidate).any treeHasContent then
+          some candidate
+        else
+          loop candidate
+  loop (min index segment.stop)
 
 def tokenChildIndexes (segment : Segment) : List Nat :=
   segment.indexes.filter
