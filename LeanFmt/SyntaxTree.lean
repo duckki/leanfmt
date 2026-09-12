@@ -4315,33 +4315,47 @@ def importEnvironment
 def importLeanEnvironment : IO Environment := do
   importEnvironment #[{ module := `Lean }]
 
-def parserStateCommandKind : SyntaxNodeKind → Bool
-  | `Lean.Parser.Command.open
-  | `Lean.Parser.Command.namespace
-  | `Lean.Parser.Command.syntax
-  | `Lean.Parser.Command.macro
-  | `Lean.Parser.Command.elab
-  | `Lean.runCmd
-  | `Lean.Parser.Command.notation
-  | `Lean.Parser.Command.mixfix
-  | `Lean.Parser.Command.infix
-  | `Lean.Parser.Command.infixl
-  | `Lean.Parser.Command.infixr
-  | `Lean.Parser.Command.prefix
-  | `Lean.Parser.Command.postfix
-  | `Mathlib.Notation3.notation3
-  | `Mathlib.Tactic.scopedNS => true
-  | _ => false
+inductive CommandParseAction where
+  | postpone
+  | scope
+  | frontend
+deriving BEq
 
-partial def syntaxContainsParserStateCommandKind : Syntax → Bool
+def commandHandlerParseAction : Name → CommandParseAction
+  | `Lean.Elab.Command.elabNamespace
+  | `Lean.Elab.Command.elabSection
+  | `Lean.Elab.Command.elabEnd => .scope
+  | `Lean.Elab.Command.elabDeclaration
+  | `Lean.Elab.Command.expandNamespacedDeclaration
+  | `expandLemma
+  | `Batteries.Tactic.Lemma.elabLemma
+  | `Lean.Elab.Command.elabVariable
+  | `Lean.Elab.Command.elabUniverse
+  | `Lean.Elab.Command.elabInclude
+  | `Lean.Elab.Command.elabOmit
+  | `Lean.Elab.Command.elabModuleDoc => .postpone
+  | _ => .frontend
+
+partial def syntaxHasElaborationHooks : Syntax → Bool
   | Syntax.node _ kind children =>
-      parserStateCommandKind kind || children.any syntaxContainsParserStateCommandKind
+      kind == `Lean.Parser.Term.attributes
+      || kind == `Lean.Parser.Command.derivingClass
+      || children.any syntaxHasElaborationHooks
   | _ => false
 
-def commandUpdatesParserState (command : Syntax) : Bool :=
-  command.isOfKind `Lean.Parser.Command.section
-  || command.isOfKind `Lean.Parser.Command.end
-  || syntaxContainsParserStateCommandKind command
+def commandParseAction (env : Environment) (command : Syntax) : CommandParseAction :=
+  let handlers :=
+    (Elab.Command.commandElabAttribute.getEntries env command.getKind).map (·.declName)
+    ++ (Elab.macroAttribute.getEntries env command.getKind).map (·.declName)
+  match handlers with
+  | [] => .frontend
+  | first :: rest =>
+      let action := commandHandlerParseAction first
+      if rest.any (fun handler => commandHandlerParseAction handler != action)
+          || syntaxHasElaborationHooks command then
+        .frontend
+      else
+        action
 
 def parserStateCommandContext (inputContext : Parser.InputContext)
     : Elab.Command.Context :=
@@ -4467,10 +4481,13 @@ partial def replayModulePrefix
         endPos := min stop inputContext.endPos
         endPos_valid := Std.le_trans Std.min_le_right inputContext.endPos_valid
     }
-  let snapshot ←
-    Language.Lean.processCommands prefixContext checkpoint.parserState
-      checkpoint.commandState
-  collect checkpoint snapshot.get
+  let (_, parsed) ←
+    IO.FS.withIsolatedStreams (isolateStderr := true) do
+      let snapshot ←
+        Language.Lean.processCommands prefixContext checkpoint.parserState
+          checkpoint.commandState
+      collect checkpoint snapshot.get
+  pure parsed
 where
   collect (parsed : ModuleParseState) (snapshot : Language.Lean.CommandParsedSnapshot)
       : IO ModuleParseState := do
@@ -4493,11 +4510,19 @@ partial def parseModuleCommandsQuiet
   let (command, parserState, messages) :=
     Parser.parseCommand inputContext (parserModuleContext parsed.commandState)
       parsed.parserState {}
+  let action := commandParseAction parsed.commandState.env command
+  if updateParserState
+      && !messages.hasErrors
+      && !Parser.isTerminalCommand command
+      && action == .frontend then
+    -- Environment-observing commands need the complete prefix even when they could succeed without it.
+    let recovered ← replayModulePrefix inputContext checkpoint parserState.pos
+    return ← parseModuleCommandsQuiet inputContext recovered updateParserState recovered
   let commandState? ←
     try
       checkParserMessages messages
       let commandState ←
-        if updateParserState && commandUpdatesParserState command then
+        if updateParserState && action == .scope then
           elaborateParserStateCommand inputContext parsed.commandState command
         else
           pure parsed.commandState
@@ -4509,8 +4534,14 @@ partial def parseModuleCommandsQuiet
   if let some commandState := commandState? then
     if Parser.isTerminalCommand command then
       return { parsed with parserState, commandState }
+    let wasCheckpoint := parsed.parserState.pos == checkpoint.parserState.pos
     let parsed :=
       parsed.recordCommand inputContext.inputString command parserState commandState
+    let checkpoint :=
+      if updateParserState && wasCheckpoint && action == .scope then
+        parsed
+      else
+        checkpoint
     parseModuleCommandsQuiet inputContext parsed updateParserState checkpoint
   else
     -- A recovered parse has no reliable command boundary. Replay the remaining file in that case.

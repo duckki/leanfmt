@@ -362,6 +362,18 @@ idempotency still starts a fresh formatting operation when the source changed.
 `assertDiagnosticChecksReusePerFileModules` checks replay counts with an isolated
 `run_cmd` counter rather than a wall-clock threshold.
 
+Compile both comparison executables with the target project's Lean version. Enter the
+formatter copy before running Lake: `lake -d` selects a package directory but does not
+change the toolchain Elan selected when launching Lake. Use alternating before/after
+samples without concurrent builds or validation, and retain both wall and CPU timings.
+
+Parser-state changes also need an independent semantic check. The
+`assertParserCommandsObserveCompletePrefix` tests compare syntax with Lean's complete
+frontend; `assertFrontendElaborates` waits for all elaboration snapshots and checks both
+original and formatted input. Preservation and idempotency alone can agree on the same
+incomplete environment. Extending the quiet path requires auditing the actual command
+and macro implementations, including replacements, attributes, and scoped wrappers.
+
 The repository also includes a stable local workload that covers regrouping,
 original-layout emission, layout search, and convergence. Record a baseline before an
 optimization and compare the new implementation on the same machine:

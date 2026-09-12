@@ -6,31 +6,45 @@ is release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Interleaved parser dependencies
+### Authoritative prefix cost
 
 ```lean
-def orthogonal := ...
-@[inherit_doc] scoped postfix:max "⫠" => orthogonal
+mutual
+  theorem first ... := by ...
+  theorem second ... := by ...
+end
 ```
 
-Quiet parsing skips ordinary definitions; later syntax declarations can need them.
-Bounded frontend recovery preserves these dependencies, but CSLib's
-`PhaseSemantics/Basic.lean` still takes about 4.5 seconds for one parse: ten notation
-declarations require successive dependency windows through line 705. Lean 4.33.1 has
-no audited source-dependency replay API. Parser-generating commands can inspect actual
-theorem bodies, as covered by `assertParserReplayRetainsTheoremBodyDependencies`.
-Selective elaboration needs a separate design, not skipped proofs, ignored errors,
-or attribute exceptions. This is a performance issue, not a known formatting failure.
+Environment-observing commands now receive the complete preceding source state even
+when incomplete-state execution would succeed. Attributes, deriving handlers, and
+unclassified commands can therefore require more elaboration than before. The completed
+corpus runs show unchanged output but higher runtime. An isolated GraphQL comparison
+increased from 18.68-20.72 to 73.61-74.03 seconds; aggregate user CPU time increased
+from about 96.2 to 310.5 seconds. This is a real regression, not just validation overlap.
+Mathlib's formatter phases increased from 2,667 to 3,679 seconds across the same
+8,311 files; unlike the GraphQL comparison, these were not alternating isolated runs.
+Do not recover speed by skipping proof bodies, guessing dependencies, or adding
+attribute exceptions. Lean 4.33.1 has no audited source-dependency replay API.
 
 ## Progress
 
-### Next checkpoint: dependency design decision
+### Current checkpoint: authoritative parser-state boundaries
 
-Review a source-dependency model only if the remaining single-parse cost warrants it.
-It must preserve arbitrary command dependencies, declaration bodies, attributes,
-namespace and option scopes, and parser error rejection. Lean's reserved-name actions
-are not a general missing-source-declaration callback. Do not implement a scheduler or
-cross-source cache without approving that design.
+Implementation and the local, GraphQL, quantum, CSLib, and Mathlib formatter gates
+are complete. External output is unchanged, with no preservation failures, actionable
+overflow, fallbacks, or idempotency failures. No renderer or formatting-rule changes
+are part of this checkpoint. This is a correctness checkpoint, not a performance-clean
+release candidate; the measured replay cost remains open.
+
+### Next checkpoint: replay cost review
+
+Profile the measured regression before selecting an optimization. Prefer reducing
+repeated work within a file operation. Declaration-only `mutual` blocks are a promising
+audit target: `VisitedFragments.lean`, which contains two mutual blocks, took about
+55 seconds in the controlled run. Any extension of the quiet path needs an audit
+of the actual registered implementation, frontend-equivalence tests, and explicit
+handling of replacements and wrappers. Preserve full-prefix replay for unknown effects;
+do not add a dependency scheduler or cross-source cache.
 
 ### Release gate
 
@@ -70,40 +84,42 @@ toolchain, selector, and source manifest remain unchanged.
 
 ### Current baseline
 
-The per-file module checkpoint is based on `5cb7b6c`. Diagnostics consume original and
-converged modules from one file operation, without a cross-source cache. Public text
-results, fallback behavior, ignored-region whole-file validation, and independent
-idempotency are unchanged. Inherited overflow is filtered before structural analysis,
-using the existing exemption without bypassing code preservation.
+This checkpoint is based on `b6126ab`. Parser commands are classified by audited
+macro/elaborator implementation names rather than syntax names or `isBuiltin`, which
+also marks some locally registered handlers. Unknown, replaced, and mixed-policy
+handlers use the existing bounded frontend replay. Attributes and deriving hooks also
+force replay. Complete prefixes advance monotonically; original file maps, command-local
+parser facts, independent idempotency, and per-file module reuse are retained.
 
-Build, tests, development linter, fixtures, self-formatting, preservation, actionable
-width, and idempotency passed. Replay-count tests cover unchanged, changed, normalized,
-and ignored-region inputs; diagnostic tests cover inherited and newly introduced overflow.
-Fixture output is unchanged; self-formatting changed only the new implementation and
-test code. Because Apple's command-line tools became unavailable, the commands behind
-`make check` were run directly with the bundled Git and Lean toolchain.
+The conditional-notation reproducer now preserves `branch%`; both original and formatted
+files compile with Lean. Focused tests cover direct, wrapped, generated, attributed,
+and overridden commands, environment absence queries, source order, option scopes,
+theorem-body dependencies, syntax parity with the complete frontend, and replay counts.
 
-An initial matched profile of formatted CSLib `PhaseSemantics/Basic.lean` reduced
-formatting plus diagnostic time from 8,715 to 4,526 ms, with identical output. The
-single-parse dependency replay cost remains; this improvement removes duplicate work.
-
-An alternating before/after comparison over GraphQL's 280 files on Lean 4.33.0 took
-30.65-38.88 seconds before and 18.68-19.04 seconds after. Aggregate CPU user time fell
-from about 162.5 to 95.9 seconds. The large proof-file diagnostic slowdown found during
-development was eliminated by applying the existing inherited-overflow exemption first.
+The complete local gate passed, including the post-self-format rebuild and tests,
+development linter, dry fixtures, preservation, actionable width, and idempotency.
+Fixtures are unchanged. Self-formatting changed only the new implementation and tests.
 
 Full GraphQL (280 files), quantum (20 Lake-owned files; one unowned source skipped),
 and width-100 CSLib (200 files) passed with successful post-format builds and
-byte-identical output. Final batched formatter checks took 37, 52, and 69 seconds
-respectively; the quantum timing overlapped local checks, and its isolated checkpoint
-repeat took 19 seconds. CSLib's full validation took 82 seconds.
+byte-identical output. Final batched formatter checks took 123, 40, and 136 seconds
+respectively; GraphQL and CSLib overlapped local checks. CSLib's full run took 152
+seconds. An alternating before/after GraphQL benchmark used the same 280 files, Lean
+4.33.0, diagnostic flags, and automatic worker counts with no other validation running.
+Both runs produced no changes; wall and CPU timings are recorded in the open issue.
+`VisitedFragments.lean` and `Filter.lean` are prominent replay-cost hotspots. The new
+width-100 Mathlib checkpoint passed all 8,311 files in 84 batches with zero diagnostics,
+including missing-rule checks. Its complete patch is byte-identical to the preceding
+checkpoint, and the validator recorded zero changed sources, so there are no newly
+changed modules to build. Formatter checks took 3,679 seconds and the run took
+3,786 seconds overall. Independent subagent comparisons covered every selected file
+against a separate preserved source baseline: all 8,311 were byte-identical, with
+no missing files, aliases, or new formatting findings.
 
-The width-100 Mathlib checkpoint passed all 8,311 files in 84 batches, with every
-enabled diagnostic at zero and no changed sources. Formatter checks took 2,667 seconds;
-total checkpoint time was 2,781 seconds, compared with 2,988 and 3,093 seconds in the
-previous warm checkpoint. Two reviewers confirmed zero output changes through staged
-comparisons and complete pre/post snapshots, with a fresh checkout diff matching the
-snapshots. All 8,311 outputs are byte-identical to the pre-checkpoint baseline.
+The preceding width-100 Mathlib checkpoint at `b6126ab` passed all 8,311 files in
+84 batches with unchanged output. It took 2,667 seconds for formatter checks and
+2,781 seconds overall. This is the comparison baseline, not validation of the current
+parser change.
 
 Mathlib's recorded full-build baseline is parser-safety commit `a6c4545`: all 7,843
 sources changed from pristine passed the required module builds, followed by the

@@ -18229,6 +18229,138 @@ def assertParserReplayStopsAtRequiredPrefix (env : Lean.Environment) : IO Unit :
       pure <| textContains error.toString "failed to parse file"
   assertTrue "parser errors remain fatal after successful prefix recovery" rejected
 
+def assertFrontendElaborates (env : Lean.Environment) (source fileName : String)
+    : IO Unit := do
+  let input := Lean.Parser.mkInputContext source fileName
+  let (_, parserState, messages) ← Lean.Parser.parseHeader input
+  SyntaxTree.checkParserMessages messages
+  let snapshot ←
+    Lean.Language.Lean.processCommands input parserState (Lean.Elab.Command.mkState env)
+  for snapshot in (Lean.Language.toSnapshotTree snapshot.get).getAll do
+    SyntaxTree.checkParserMessages snapshot.diagnostics.msgLog
+
+def assertParserCommandActions (env : Lean.Environment) : IO Unit := do
+  let cases : List (String × SyntaxTree.CommandParseAction) :=
+    [
+      ("namespace Example", .scope),
+      ("def value := 0", .postpone),
+      ("@[simp] theorem value : True := by trivial", .frontend),
+      ("structure Example where\n  value : Nat\nderiving Repr", .frontend),
+      ("set_option maxRecDepth 2048 in\nrun_cmd pure ()", .frontend),
+      ("attribute [simp] value", .frontend)
+    ]
+  for (source, expected) in cases do
+    let command ← IO.ofExcept <| Lean.Parser.runParserCategory env `command source
+    assertTrue s!"command parser action: {source}"
+      (SyntaxTree.commandParseAction env command == expected)
+
+def assertParserCommandsObserveCompletePrefix (env : Lean.Environment) : IO Unit := do
+  let declaration := "def parserSwitch := 0\n"
+  let observer :=
+    "run_cmd do\n"
+    ++ "  if (← getEnv).contains `parserSwitch then\n"
+    ++ "    elabCommand (← `(notation:max \"branch%\" n:arg => Nat.succ n))\n"
+  let handler :=
+    "def observedHandler : CommandElab := fun _ => do\n"
+    ++ "  if (← getEnv).contains `parserSwitch then\n"
+    ++ "    elabCommand (← `(notation:max \"branch%\" n:arg => Nat.succ n))\n"
+  let customSyntax :=
+    "syntax (name := observedCommand) \"observeParsedPrefix\" : command\n"
+  let cases :=
+    [
+      ("direct", declaration ++ observer),
+      ("wrapped", declaration ++ "set_option maxRecDepth 2048 in\n" ++ observer),
+      (
+        "generated",
+        "macro \"installObservedSyntax\" : command => `(\n"
+        ++ observer
+        ++ ")\n"
+        ++ declaration
+        ++ "installObservedSyntax\n"
+      ),
+      (
+        "attribute command",
+        customSyntax
+        ++ handler
+        ++ "attribute [command_elab observedCommand] observedHandler\n"
+        ++ declaration
+        ++ "observeParsedPrefix\n"
+      ),
+      (
+        "attributed declaration",
+        customSyntax
+        ++ "@[command_elab observedCommand]\n"
+        ++ handler
+        ++ declaration
+        ++ "observeParsedPrefix\n"
+      ),
+      (
+        "overridden declaration",
+        "elab_rules : command\n"
+        ++ "  | `(def observedTarget := $_value) => do\n"
+        ++ "    if (← getEnv).contains `parserSwitch then\n"
+        ++ "      elabCommand (← `(notation:max \"branch%\" n:arg => Nat.succ n))\n"
+        ++ declaration
+        ++ "def observedTarget := 0\n"
+      )
+    ]
+  for (label, commands) in cases do
+    let source :=
+      "import Lean\nopen Lean Elab Command\n"
+      ++ commands
+      ++ "def generated := branch% 1\n"
+    let fileName := s!"parser-prefix-{label}.lean"
+    assertFrontendElaborates env source fileName
+    let input := Lean.Parser.mkInputContext source fileName
+    let (_, parserState, _) ← Lean.Parser.parseHeader input
+    let initial : SyntaxTree.ModuleParseState :=
+      { parserState, commandState := Lean.Elab.Command.mkState env }
+    let parsed ← SyntaxTree.parseModuleCommandsQuiet input initial true initial
+    let reference ← SyntaxTree.replayModulePrefix input initial source.rawEndPos
+    assertTrue s!"{label}: parsed syntax agrees with the complete frontend"
+      (Formatter.Diagnostics.syntaxSignature (Lean.mkListNode parsed.commands)
+        == Formatter.Diagnostics.syntaxSignature (Lean.mkListNode reference.commands))
+    let result ← Formatter.formatSourceWithEnvDetailed env source fileName
+    assertTrue s!"{label}: complete parser state does not require fallback"
+      (!result.fellBack)
+    assertTextContains s!"{label}: an environment query retains the compound keyword"
+      result.formatted "def generated := branch% 1"
+    assertFrontendElaborates env result.formatted fileName
+    assertTrue s!"{label}: complete parser state preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    assertEq s!"{label}: complete parser state is idempotent" result.formatted
+      (← Formatter.formatSourceWithEnv env result.formatted fileName)
+
+def assertParserCommandsObserveOnlyPrecedingState (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "import Lean\nopen Lean Elab Command\n"
+    ++ "namespace ObservedPrefix\n"
+    ++ "set_option pp.universes true\n"
+    ++ "run_cmd do\n"
+    ++ "  if !(← getEnv).contains `ObservedPrefix.later\n"
+    ++ "      && (← getOptions).getBool `pp.universes false then\n"
+    ++ "    elabCommand (← `(notation:max \"before%\" n:arg => Nat.succ n))\n"
+    ++ "def later := before% 1\n"
+    ++ "run_cmd do\n"
+    ++ "  if (← getEnv).contains `ObservedPrefix.later then\n"
+    ++ "    elabCommand (← `(notation:max \"after%\" n:arg => Nat.succ n))\n"
+    ++ "def value := after% 2\n"
+    ++ "end ObservedPrefix\n"
+    ++ "run_cmd do\n"
+    ++ "  if !(← getOptions).getBool `pp.universes false then\n"
+    ++ "    elabCommand (← `(notation:max \"outside%\" n:arg => Nat.succ n))\n"
+    ++ "def outside := outside% 3\n"
+  let fileName := "parser-prefix-observations.lean"
+  assertFrontendElaborates env source fileName
+  let result ← Formatter.formatSourceWithEnvDetailed env source fileName
+  assertTrue "parser observations do not require fallback" (!result.fellBack)
+  for fragment in ["before% 1", "after% 2", "outside% 3"] do
+    assertTextContains "parser observations respect source order and option scopes"
+      result.formatted fragment
+  assertFrontendElaborates env result.formatted fileName
+  assertEq "parser observations are idempotent" result.formatted
+    (← Formatter.formatSourceWithEnv env result.formatted fileName)
+
 def assertParserReplayRetainsTheoremBodyDependencies (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -18254,7 +18386,7 @@ def assertParserReplayRetainsTheoremBodyDependencies (env : Lean.Environment)
   assertEq "theorem-dependent parser replay is idempotent" result.formatted
     (← Formatter.formatSourceWithEnv env result.formatted "theorem-driven-parser.lean")
 
-def assertParserErrorRecoveryReplaysCompleteTail (env : Lean.Environment) : IO Unit := do
+def assertCustomCommandReplayIsBounded (env : Lean.Environment) : IO Unit := do
   let source :=
     "macro \"installRecoveredSyntax\" : command => `(syntax \"recovered@\" num : command)\n"
     ++ "installRecoveredSyntax\n"
@@ -18265,18 +18397,18 @@ def assertParserErrorRecoveryReplaysCompleteTail (env : Lean.Environment) : IO U
   let initial : SyntaxTree.ModuleParseState :=
     { parserState, commandState := Lean.Elab.Command.mkState env }
   let parsed ← SyntaxTree.parseModuleCommandsQuiet inputContext initial true initial
-  assertTrue "parser-error recovery processes the complete remaining source"
-    (parsed.commandState.env.contains `recoveredTail)
+  assertTrue "custom command replay leaves the later declaration unelaborated"
+    (!parsed.commandState.env.contains `recoveredTail)
   let tree :=
     SyntaxTree.extractTree source (Lean.mkListNode parsed.commands)
       parsed.letBodyParserFacts
-  assertTrue "parser-error recovery retains the dynamically installed compound keyword"
+  assertTrue "custom command replay retains the dynamically installed compound keyword"
     (tree.tokens.any (·.lexeme == "recovered@"))
   let stoppedSource := source ++ "#exit\ndef ignoredAfterExit := (\n"
   let stoppedContext :=
     Lean.Parser.mkInputContext stoppedSource "replay-terminal-command.lean"
   let stopped ← SyntaxTree.parseModuleCommandsQuiet stoppedContext initial true initial
-  assertTrue "parser-error recovery respects the frontend terminal command"
+  assertTrue "custom command replay respects the frontend terminal command"
     (stopped.commands.size == parsed.commands.size)
 
 def assertPrefixReplayKeepsCompleteFileContext (env : Lean.Environment) : IO Unit := do
@@ -20777,8 +20909,11 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertLocalElaboratorRegistersCompoundKeyword env
   assertFrontendReplayPreservesParserFacts env
   assertParserReplayStopsAtRequiredPrefix env
+  assertParserCommandActions env
+  assertParserCommandsObserveCompletePrefix env
+  assertParserCommandsObserveOnlyPrecedingState env
   assertParserReplayRetainsTheoremBodyDependencies env
-  assertParserErrorRecoveryReplaysCompleteTail env
+  assertCustomCommandReplayIsBounded env
   assertPrefixReplayKeepsCompleteFileContext env
   assertIgnoredChunksCannotChangeWholeFileSyntax env
   assertSyntaxAuthoringDefinitionPreservesCode env

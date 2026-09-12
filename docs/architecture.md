@@ -90,19 +90,32 @@ Formatting a file follows this pipeline:
    without putting environment access, parser combinators, or project syntax names in
    line-break rules. Namespace and section entry/exit are elaborated through Lean's
    command state so scoped and local notation follow the source scopes.
-   Local syntax declarations, including `elab` and `run_cmd`, are replayed before
-   parsing subsequent commands. `ModuleParseState` keeps the parser position, command
-   state, syntax, and let-body facts together. A fully elaborated checkpoint begins at
-   the header. If quiet replay needs skipped declarations, Lean's frontend processes
-   only the pending prefix through that command; the resulting state becomes the next
-   checkpoint, and quiet parsing resumes. Earlier prefixes are not elaborated again.
+   `ModuleParseState` keeps the parser position, command state, syntax, and let-body
+   facts together. A fully elaborated checkpoint begins at the header. Quiet parsing
+   postpones ordinary declarations, variable/universe declarations, include/omit
+   commands, and module documentation. Declaration attributes and deriving handlers
+   prevent postponement. The standard Mathlib and Batteries `lemma` implementations
+   share the ordinary-declaration policy; unknown command implementations do not.
+   The classifier uses audited macro and command elaborator implementation names,
+   not syntax names or Lean's `isBuiltin` flag (which also marks some local entries).
+   Missing, replaced, and mixed-policy handlers use the frontend.
+
+   Standard namespace, section, and end commands update the quiet parser scope. Every
+   other command, including local syntax declarations, `run_cmd`, wrappers, attributes,
+   and custom commands, runs through Lean's frontend with the complete preceding
+   source state. The frontend processes only the pending prefix through that command;
+   its result becomes the next checkpoint, and quiet parsing resumes. A successful
+   command is not assumed independent of skipped declarations: environment absence
+   queries are observations too. Earlier prefixes are not elaborated again, and the
+   formatter does not try an opaque command speculatively before replaying it.
    Lean's parser end-position limit bounds this work without truncating the source or
    file map visible to command elaborators.
    If parsing itself fails, the command boundary is unreliable, so recovery processes
    the complete remaining source instead, respecting Lean's terminal commands such
    as `#exit`. Header and command-parser errors remain
    fatal, including errors Lean recovered from; unrelated elaboration errors remain
-   tolerated. Each quiet replay checks only its own diagnostics.
+   tolerated. Each quiet scope update checks only its own diagnostics. Frontend replay
+   isolates standard output/error streams, matching quiet scope elaboration.
    Both paths record let-body facts with the pre-command parser context. Frontend
    snapshots supply the state for the following command, keeping scoped syntax and
    namespace transitions equivalent without probing against the final environment.
@@ -113,6 +126,10 @@ Formatting a file follows this pipeline:
    tasks and diagnostics; it is not a selective source-dependency API. Replacing
    declarations with headers, skipping attributes, or guessing dependencies is not
    part of the parser recovery contract.
+   Repeated parsing and idempotency cannot independently detect a shared environment
+   error. Parser-boundary regressions therefore compare with Lean's complete frontend
+   and check elaboration of both original and formatted source. No selective-dependency
+   scheduler or cross-source parser-state cache is implemented.
    The CLI selects the environment from the source import header before parsing.
    A successful parse with fewer imports cannot establish equivalent syntax: an
    imported keyword can otherwise parse as an identifier and an operator. Only
