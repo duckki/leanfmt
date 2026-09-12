@@ -1314,6 +1314,18 @@ barriers to this search. Declaration headers, parser-owned headers, and owners w
 directly attached proof term are eligible. Existing declaration, expression, and proof
 rules supply every new breakpoint; for example, an overflowing `show ... by` can wrap
 its proposition or break after `by` without exposing the proof body's internal layout.
+Applications and delimited arguments are also eligible when a positive indentation
+shift newly overflows a previously fitting physical source line. Eligibility checks
+all argument lines, not only the first, using character columns and the complete
+source line, including trailing comments. A recovered argument and the affected
+arguments enclosing it use consistent structural layout, rather than combining
+reflowed values with stale source indentation for their peer fields or elements.
+Their parser tactic wrappers become structural along with their contents;
+nested proof, quotation, ignored, and other protected islands keep their own plans.
+Header owners on the recovered path also retain ordinary child plans, so their
+proof introducers establish the proof's structural base. Other ancestor paths
+explicitly preserve unaffected siblings. There is no tactic-name dispatch or
+extra rule API for this recovery.
 Optional single-value tactic assignments are regrouped in the syntax tree into a
 definition with a parser-owned header, assignment token, and value. This exposes the
 ordinary value boundary for `obtain`-shaped syntax without a tactic-specific break rule.

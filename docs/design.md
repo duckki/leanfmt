@@ -1531,6 +1531,14 @@ exact Or.inl (by simp [hselected])
 ```
 
 Authored multiline tactic content remains protected.
+If moving that content right makes a previously fitting source line overflow,
+the affected application or delimited argument may use its ordinary structural
+layout. This includes later authored continuation lines. Recovery can open the
+path to that argument, but keeps neighboring tactics and nested protected regions
+in their source layout. Existing rules govern wrapping; tactic-specific recovery
+rules are not used. The alternative must reduce the number of overflowing lines.
+Already-overlong source lines, including their comments, do not trigger this
+argument recovery.
 A detached braced tactic sequence moves as one protected body beneath its
 owning tactic. Its internal relative indentation is retained rather than
 recomputed from the brace's previous source column.

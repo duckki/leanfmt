@@ -804,8 +804,9 @@ inductive OverflowAlternative where
   | unchanged
   | preserve (plan : IslandPlan)
   | structural (children : Array OverflowAlternative)
+deriving Inhabited
 
-private def allowsHeaderRecovery (kind : LayoutIslandKind) : Bool :=
+private def allowsStructuralRecovery (kind : LayoutIslandKind) : Bool :=
   kind == .proof || kind == .proofLayout || kind == .mathlibTactic
 
 private partial def isAttachedHeader : SyntaxTree.Tree → Bool
@@ -842,7 +843,48 @@ private def firstSourceLineOverflows
           sourceMap.lineNumberAt token.span.stop == line
           && limit < sourceMap.columnAt token.span.stop + shift
 
-private partial def headerOverflowAlternative?
+private def isRecoverableArgument : SyntaxTree.Tree → Bool
+  | .node .application _ | .node (.delimitedCollection _) _ => true
+  | .node _ children => (SyntaxTree.outerDelimiterKind? children).isSome
+  | _ => false
+
+private def sourceLineWidth (sourceMap : SyntaxTree.SourcePositionMap) (line : Nat)
+    : Nat :=
+  let start := sourceMap.fileMap.lineStart line
+  let stop := (sourceMap.lineStarts[line]?).getD sourceMap.source.rawEndPos
+  let text :=
+    SpaceRules.normalizeLineEndings (SyntaxTree.sourceText sourceMap.source start stop)
+  text.length - if text.endsWith "\n" then 1 else 0
+
+private def hasNewSourceLineOverflow
+    (sourceMap : SyntaxTree.SourcePositionMap) (shift limit : Nat)
+    (tree : SyntaxTree.Tree)
+    : Bool :=
+  tree.tokens.any
+    fun token =>
+      let width := sourceLineWidth sourceMap (sourceMap.lineNumberAt token.span.stop)
+      width <= limit && limit < width + shift
+
+private partial def argumentAlternative
+    (tree : SyntaxTree.Tree) (selected : OverflowAlternative)
+    : OverflowAlternative :=
+  -- Parser tactic wrappers inside an argument may reflow, but nested proof islands stay opaque.
+  if (plan? tree).any fun plan => plan.kind != .mathlibTactic then
+    selected
+  else
+    match tree with
+    | .node _ children =>
+        let alternatives :=
+          match selected with
+          | .structural alternatives => alternatives
+          | _ => #[]
+        .structural
+          (children.mapIdx
+            fun index child =>
+              argumentAlternative child (alternatives[index]?.getD .unchanged))
+    | _ => .unchanged
+
+private partial def sourceOverflowAlternative?
     (sourceMap : SyntaxTree.SourcePositionMap) (shift limit : Nat)
     (inheritedPlan : IslandPlan) (tree : SyntaxTree.Tree)
     : Option OverflowAlternative :=
@@ -850,32 +892,41 @@ private partial def headerOverflowAlternative?
   | .missing | .leaf _ => none
   | .node _ children =>
       let localPlan? := plan? tree
-      if localPlan?.any fun plan => !allowsHeaderRecovery plan.kind then
+      let ownsHeader := ownsStructuredHeader tree || ownsAttachedProof tree
+      if localPlan?.any fun plan => !allowsStructuralRecovery plan.kind then
         none
-      else if (ownsStructuredHeader tree || ownsAttachedProof tree)
-              && firstSourceLineOverflows sourceMap shift limit tree then
+      else if ownsHeader && firstSourceLineOverflows sourceMap shift limit tree then
         some <| .structural (children.map fun _ => .unchanged)
       else
         let inheritedPlan := localPlan?.getD inheritedPlan
         let alternatives :=
-          children.map (headerOverflowAlternative? sourceMap shift limit inheritedPlan)
-        if !alternatives.any Option.isSome then
-          none
-        else
+          children.map (sourceOverflowAlternative? sourceMap shift limit inheritedPlan)
+        let recoversArgument :=
+          isRecoverableArgument tree
+          && hasNewSourceLineOverflow sourceMap shift limit tree
+        if recoversArgument || alternatives.any Option.isSome then
           some
           <| .structural
           <| children.mapIdx
               fun index child =>
-                (alternatives[index]!).getD (.preserve ((plan? child).getD inheritedPlan))
+                if recoversArgument then
+                  argumentAlternative child ((alternatives[index]!).getD .unchanged)
+                else if ownsHeader then
+                  (alternatives[index]!).getD .unchanged
+                else
+                  (alternatives[index]!).getD
+                    (.preserve ((plan? child).getD inheritedPlan))
+        else
+          none
 
 def overflowAlternative?
     (sourceMap : SyntaxTree.SourcePositionMap) (tree : SyntaxTree.Tree)
     (plan : IslandPlan) (shift limit : Nat)
     : Option OverflowAlternative :=
-  if shift == 0 || !allowsHeaderRecovery plan.kind then
+  if shift == 0 || !allowsStructuralRecovery plan.kind then
     none
   else
-    headerOverflowAlternative? sourceMap shift limit plan tree
+    sourceOverflowAlternative? sourceMap shift limit plan tree
 
 private partial def wrapsBracketedCollection : SyntaxTree.Tree → Bool
   | .node _ children =>

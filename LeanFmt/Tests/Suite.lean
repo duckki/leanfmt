@@ -2559,14 +2559,26 @@ def assertProofIslandUsesStructuralIndent (env : Lean.Environment) : IO Unit := 
     "def shiftedRewriteRules :=\n"
     ++ "  outer\n"
     ++ "    (fun x => by\n"
-    ++ "      rw [map_zero, ← ConcreteCategory.comp_apply, ← NatTrans.naturality, ConcreteCategory.comp_apply]\n"
+    ++ "      rw\n"
+    ++ "        [map_zero,\n"
+    ++ "        ← ConcreteCategory.comp_apply,\n"
+    ++ "        ← NatTrans.naturality,\n"
+    ++ "        ConcreteCategory.comp_apply]\n"
     ++ "        at hk)\n"
   let formatted ←
     Formatter.formatSourceWithEnv env source "fitting-proof-island-indent.lean"
       { lineWidth := 100 }
   assertEq "proof island keeps its structural indentation" expected formatted
-  assertTrue "unbreakable proof lines may overflow from their structural indentation"
-    (!Formatter.linesFit formatted 100)
+  assertTrue "the authored proof line fits before reindentation"
+    (Formatter.linesFit source 100)
+  assertTrue "a moved proof list recovers without escaping its structural indentation"
+    (Formatter.linesFit formatted 100)
+  assertTrue "proof list recovery preserves code"
+    (← codePreservedIgnoringWhitespace env source formatted)
+  let again ←
+    Formatter.formatSourceWithEnv env formatted "proof-island-indent-again.lean"
+      { lineWidth := 100 }
+  assertEq "proof list recovery keeps its indentation on the next pass" formatted again
 
 def assertProofIslandFitIncludesParentSuffix (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -6248,8 +6260,9 @@ def assertProofEquationArmsUseDeclarationBase (env : Lean.Environment) : IO Unit
     "theorem listFindIndex {p : α → β → Bool} (hp : Primrec₂ p)\n"
     ++ "    : ∀ l : List β, Primrec fun a => l.findIdx (p a)\n"
     ++ "  | [] => const 0\n"
-    ++ "  | a :: l => (cond (hp.comp .id (const a)) (const 0) (succ.comp (listFindIndex hp l))).of_eq fun n =>\n"
-    ++ "    by simp [List.findIdx_cons]\n"
+    ++ "  | a :: l =>\n"
+    ++ "      (cond (hp.comp .id (const a)) (const 0) (succ.comp (listFindIndex hp l))).of_eq\n"
+    ++ "        fun n => by simp [List.findIdx_cons]\n"
     ++ "\n"
     ++ "theorem next : True := by\n"
     ++ "  trivial\n"
@@ -18351,6 +18364,143 @@ def assertFrontendElaborates (env : Lean.Environment) (source fileName : String)
   for snapshot in (Lean.Language.toSnapshotTree snapshot.get).getAll do
     SyntaxTree.checkParserMessages snapshot.diagnostics.msgLog
 
+def assertMovedProofCollectionFitsWidth (env : Lean.Environment) : IO Unit := do
+  let check (label source expected : String) (width : Nat) (fits : Bool := true) := do
+    let normalizedSource := Formatter.SpaceRules.normalizeLineEndings source
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source label { lineWidth := width }
+    assertTrue s!"{label} does not fall back" (!result.fellBack)
+    assertEq label expected result.formatted
+    assertTrue s!"{label} has the expected width outcome"
+      (Formatter.linesFit result.formatted width == fits)
+    assertTrue s!"{label} preserves code"
+      (← codePreservedIgnoringWhitespace env normalizedSource result.formatted)
+    assertFrontendElaborates env normalizedSource label
+    assertFrontendElaborates env result.formatted label
+    let again ←
+      Formatter.formatSourceWithEnv env result.formatted label { lineWidth := width }
+    assertEq s!"{label} is idempotent" result.formatted again
+  let source :=
+    "def movedRules (a b : Nat) : {n : Nat // n = a + b} :=\n"
+    ++ "  ⟨a + b, by\n"
+    ++ "    simp only [Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.add_zero, Nat.zero_add,\n"
+    ++ "      Nat.mul_one]⟩\n"
+  assertTrue "the authored multiline proof fits" (Formatter.linesFit source 90)
+  let proofPrefix :=
+    "def movedRules (a b : Nat) : {n : Nat // n = a + b} :=\n"
+    ++ "  ⟨\n"
+    ++ "    a + b,\n"
+    ++ "    by\n"
+  let expected :=
+    proofPrefix
+    ++ "      simp\n"
+    ++ "        only [\n"
+    ++ "          Nat.add_assoc,\n"
+    ++ "          Nat.add_comm,\n"
+    ++ "          Nat.add_left_comm,\n"
+    ++ "          Nat.add_zero,\n"
+    ++ "          Nat.zero_add,\n"
+    ++ "          Nat.mul_one\n"
+    ++ "        ]\n"
+    ++ "  ⟩\n"
+  check "moved proof collection" source expected 90
+  check "CRLF moved proof collection" (source.replace "\n" "\r\n") expected 90
+  let retained :=
+    proofPrefix
+    ++ "      simp only [Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.add_zero, Nat.zero_add,\n"
+    ++ "        Nat.mul_one]\n"
+    ++ "  ⟩\n"
+  check "fitting moved proof collection" source retained 100
+  check "already overlong proof collection" source retained 88 false
+  let laterSource :=
+    "def movedRules (a b : Nat) : {n : Nat // n = a + b} :=\n"
+    ++ "  ⟨a + b, by\n"
+    ++ "    -- Keep this comment.\n"
+    ++ "    skip\n"
+    ++ "    simp only [Nat.mul_one,\n"
+    ++ "      Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.add_zero, Nat.zero_add]⟩\n"
+  let laterExpected :=
+    proofPrefix
+    ++ "      -- Keep this comment.\n"
+    ++ "      skip\n"
+    ++ "      simp\n"
+    ++ "        only [\n"
+    ++ "          Nat.mul_one,\n"
+    ++ "          Nat.add_assoc,\n"
+    ++ "          Nat.add_comm,\n"
+    ++ "          Nat.add_left_comm,\n"
+    ++ "          Nat.add_zero,\n"
+    ++ "          Nat.zero_add\n"
+    ++ "        ]\n"
+    ++ "  ⟩\n"
+  assertTrue "the later authored continuation fits" (Formatter.linesFit laterSource 82)
+  check "later proof continuation" laterSource laterExpected 82
+
+  let recordSource :=
+    "def movedRecord : {n : Nat // n = 0} :=\n"
+    ++ "  ⟨0, by\n"
+    ++ "    have h :\n"
+    ++ "        ({ fst := [1]\n"
+    ++ "           snd := List.map (fun naturalValue : Nat => naturalValue + 0) (List.replicate 10 0) }\n"
+    ++ "          : List Nat × List Nat) =\n"
+    ++ "          { fst := [1]\n"
+    ++ "            snd := List.map (fun naturalValue : Nat => naturalValue + 0) (List.replicate 10 0) } := by\n"
+    ++ "      rfl\n"
+    ++ "    exact rfl⟩\n"
+  let recordExpected :=
+    "def movedRecord : {n : Nat // n = 0} :=\n"
+    ++ "  ⟨\n"
+    ++ "    0,\n"
+    ++ "    by\n"
+    ++ "      have h\n"
+    ++ "          : ({ fst := [1]\n"
+    ++ "               snd := List.map (fun naturalValue : Nat => naturalValue + 0) (List.replicate 10 0) }\n"
+    ++ "              : List Nat × List Nat)\n"
+    ++ "            = {\n"
+    ++ "              fst := [1]\n"
+    ++ "              snd := List.map (fun naturalValue : Nat => naturalValue + 0) (List.replicate 10 0)\n"
+    ++ "            } := by\n"
+    ++ "        rfl\n"
+    ++ "      exact rfl\n"
+    ++ "  ⟩\n"
+  check "recovered record peers and nested proof" recordSource recordExpected 102
+
+  let application :=
+    SyntaxTree.Tree.node .application
+      #[
+        .leaf (syntheticIdentTokenAt "f" 0 1),
+        .leaf (syntheticIdentTokenAt "α" 2 4),
+        .leaf (syntheticIdentTokenAt "β" 5 7)
+      ]
+  let proofPlan := Formatter.OriginalTree.planForKind .proof
+  for ending in ["", "\n", "\r\n"] do
+    let map := SyntaxTree.SourcePositionMap.ofString ("f α β" ++ ending)
+    assertTrue "new argument overflow counts Unicode characters, including EOF and CRLF"
+      (Formatter.OriginalTree.overflowAlternative? map application proofPlan 1 5).isSome
+    assertTrue "an unmoved argument stays protected"
+      (Formatter.OriginalTree.overflowAlternative? map application proofPlan 0 5).isNone
+    assertTrue "a fitting moved argument stays protected"
+      (Formatter.OriginalTree.overflowAlternative? map application proofPlan 1 6).isNone
+    assertTrue "an already overlong argument stays protected"
+      (Formatter.OriginalTree.overflowAlternative? map application proofPlan 1 4).isNone
+    for kind in [Formatter.OriginalTree.LayoutIslandKind.ignored, .quotation, .calc] do
+      assertTrue "opaque island policies block argument recovery"
+        (Formatter.OriginalTree.overflowAlternative? map application
+          (Formatter.OriginalTree.planForKind kind) 1 5).isNone
+  let commentedMap := SyntaxTree.SourcePositionMap.ofString "f α β -- already overlong\n"
+  assertTrue "source width includes comments beyond the argument"
+    (Formatter.OriginalTree.overflowAlternative? commentedMap application proofPlan 1
+      5).isNone
+  let suffixedMap := SyntaxTree.SourcePositionMap.ofString "f α β := x\n"
+  assertTrue "argument recovery includes the enclosing suffix on its source line"
+    (Formatter.OriginalTree.overflowAlternative? suffixedMap application proofPlan 1
+      10).isSome
+  let quoted := SyntaxTree.Tree.node (.raw `Lean.Parser.Term.quot) #[application]
+  let containingQuote := SyntaxTree.Tree.node (.raw `null) #[quoted]
+  let map := SyntaxTree.SourcePositionMap.ofString "f α β\n"
+  assertTrue "recovery does not search inside nested quotations"
+    (Formatter.OriginalTree.overflowAlternative? map containingQuote proofPlan 1 5).isNone
+
 def assertConditionalChainCommentOwnership (env : Lean.Environment) : IO Unit := do
   let check (label source expected : String) (width : Nat := 100) := do
     let result ←
@@ -21518,6 +21668,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertHaveTermFormatting env
   assertResolvedIslandFactsDriveProbes
   assertSourceIslandRecoveryPreservesNeighbors env
+  assertMovedProofCollectionFitsWidth env
   assertHaveProofAfterInfixPreservesLayout env
   assertSingletonDelimitedHaveInheritsCollectionBase env
   assertAbsoluteValueDelimitersStayAttached env
