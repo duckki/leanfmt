@@ -164,8 +164,10 @@ lake exe fmt --check --check-exception --check-idempotent --recursive Some/Direc
 `--check-exception` runs the formatter's safety diagnostics:
 
 - compare the code-token sequence before and after formatting while preserving
-  comment text exactly and requiring the parsed syntax shape, with source positions
-  erased, to remain unchanged;
+  comment contents and requiring the parsed syntax signature to remain unchanged.
+  The signature erases source positions and canonicalizes parser-packed `doIf`
+  continuations outside quotations; other statement ownership stays exact (see
+  [preservation](architecture.md#preservation-check-limitation-layout-sensitive-elaboration));
 - report actionable formatted lines that still exceed the configured width.
 
 `--check-missing-rules` separately reports syntax nodes that have no registered

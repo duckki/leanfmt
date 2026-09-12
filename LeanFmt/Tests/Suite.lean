@@ -18358,7 +18358,7 @@ def assertConditionalChainCommentOwnership (env : Lean.Environment) : IO Unit :=
         (match owner with
           | .node _ children => children.size == 4
           | _ => false)
-      let layout := Formatter.LayoutTree.prepare expected owner
+      let layout := (Formatter.LayoutTree.prepare expected owner).tree
       assertTrue s!"{label} layout preparation preserves every token in order"
         (layout.tokens == owner.tokens)
       assertTrue s!"{label} joins only an uninterrupted layout run"
@@ -18427,6 +18427,210 @@ def assertConditionalChainCommentOwnership (env : Lean.Environment) : IO Unit :=
         )
       ] do
     check label source source
+
+def assertConditionalJoinFeedback (env : Lean.Environment) : IO Unit := do
+  let comment :=
+    "/- This single line block comment occupies nearly all of the available space on this line. -/"
+  let check (source expected : String) (width : Nat := 100) := do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source "comment-join.lean"
+        { lineWidth := width }
+    assertTrue "comment joins do not fall back" (!result.fellBack)
+    assertEq "comment joins retain complete continuation ownership" expected
+      result.formatted
+    assertTrue "comment joins preserve code and parsed ownership"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    assertFrontendElaborates env source "comment-join-source.lean"
+    assertFrontendElaborates env result.formatted "comment-join-output.lean"
+    let again ←
+      Formatter.formatSourceWithEnvDetailed env result.formatted
+        "comment-join-again.lean" { lineWidth := width }
+    assertTrue "comment joins converge without fallback" (!again.fellBack)
+    assertEq "comment joins are idempotent" result.formatted again.formatted
+  for (name, first, second, one, two, three, isDo)
+      in [
+        ("ordinaryJoin", "a.isSome", "b.isSome", "1", "2", "3", false),
+        ("dependentJoin", "h : a.isSome", "k : b.isSome", "1", "2", "3", false),
+        ("patternJoin", "let some x := a", "let some y := b", "x", "y", "3", false),
+        ("doJoin", "a.isSome", "b.isSome", "return 1", "return 2", "return 3", true),
+        (
+          "doDependentJoin",
+          "h : a.isSome",
+          "k : b.isSome",
+          "return 1",
+          "return 2",
+          "return 3",
+          true
+        ),
+        (
+          "doPatternJoin",
+          "let some x := a",
+          "let some y ← pure b",
+          "return x",
+          "return y",
+          "return 3",
+          true
+        )
+      ] do
+    let header :=
+      s!"def {name} (a b : Option Nat) : "
+      ++ (if isDo then "Id Nat := do\n" else "Nat :=\n")
+    let source :=
+      header
+      ++ s!"  if {first} then\n    {one}\n  else {comment} if {second} then\n"
+      ++ s!"    {two}\n  else\n    {three}\n"
+    let expected :=
+      header
+      ++ s!"  if {first} then\n    {one}\n  else {comment}\n"
+      ++ s!"    if {second} then\n      {two}\n    else\n      {three}\n"
+    for width in [60, 100] do
+      check source expected width
+    check source source 160
+    let short := source.replace comment "/- note -/"
+    check short short
+    if isDo then
+      assertFrontendElaborates env
+        (source
+          ++ expected.replace s!"def {name} " s!"def {name}Nested "
+          ++ s!"example : {name} = {name}Nested := rfl\n")
+        "do-join-equivalence.lean"
+  let sequenceSource :=
+    "def mutableJoin (a b : Option Nat) : Id Nat := do\n"
+    ++ "  let mut value := 0\n  if let some x := a then\n    value := x\n"
+    ++ s!"  else {comment} if let some y ← pure b then\n    value := y\n"
+    ++ "  else\n    value := 3\n  return value\n"
+  let sequenceExpected :=
+    "def mutableJoin (a b : Option Nat) : Id Nat := do\n"
+    ++ "  let mut value := 0\n  if let some x := a then\n    value := x\n"
+    ++ s!"  else {comment}\n    if let some y ← pure b then\n      value := y\n"
+    ++ "    else\n      value := 3\n  return value\n"
+  check sequenceSource sequenceExpected
+  assertFrontendElaborates env
+    (sequenceSource
+      ++ sequenceExpected.replace "def mutableJoin " "def mutableJoinNested "
+      ++ "example : mutableJoin = mutableJoinNested := rfl\n")
+    "mutable-join-equivalence.lean"
+  let header := "def selectiveJoin (a b c : Bool) : Nat :=\n  if a then\n    1\n"
+  let selectiveSource :=
+    header
+    ++ s!"  else {comment} if b then\n    2\n"
+    ++ "  else /- note -/ if c then\n    3\n  else\n    4\n"
+  let selectiveExpected :=
+    header
+    ++ s!"  else {comment}\n    if b then\n      2\n"
+    ++ "    else /- note -/ if c then\n      3\n    else\n      4\n"
+  check selectiveSource selectiveExpected
+  let secondComment := "/- " ++ String.ofList (List.replicate 83 'x') ++ " -/"
+  let cascadeSource := selectiveSource.replace "/- note -/" secondComment
+  let cascadeExpected :=
+    header
+    ++ s!"  else {comment}\n    if b then\n      2\n"
+    ++ s!"    else {secondComment}\n      if c then\n        3\n      else\n        4\n"
+  check cascadeSource cascadeExpected
+  let parsed ← SyntaxTree.parseModuleStringWithEnv env cascadeSource "cascade-join.lean"
+  let mut disabled : Std.HashSet Nat := {}
+  for expectedBreaks in [1, 1, 0] do
+    let view := Formatter.LayoutTree.prepare cascadeSource parsed.tree disabled
+    assertTrue "layout alternatives preserve token order"
+      (view.tree.tokens == parsed.tree.tokens)
+    let state :=
+      Formatter.renderSegment
+        {
+          source := cascadeSource,
+          sourceMap := SyntaxTree.SourcePositionMap.ofString cascadeSource
+          options := { lineWidth := 100 },
+          guardedJoins := view.guardedJoins
+          layoutFacts? := some (Formatter.TreeLayoutFacts.ofTree cascadeSource view.tree)
+        }
+        (Formatter.LineBreakRules.Segment.ofTree view.tree)
+    assertTrue "cascading joins retry only after a newly committed split"
+      (state.brokenJoins.size == expectedBreaks)
+    disabled := state.brokenJoins.fold (fun acc key => acc.insert key) disabled
+  let (traced, _) := Formatter.renderModuleTreeWithTrace parsed { lineWidth := 100 }
+  assertEq "traced rendering resolves the same layout alternatives" cascadeExpected traced
+  let parenthesizedSource :=
+    "def parenthesizedJoin (a b : Bool) : Option Nat :=\n"
+    ++ s!"  some (if a then 1 else {comment} if b then 2 else 3)\n"
+  let parenthesizedExpected :=
+    "def parenthesizedJoin (a b : Bool) : Option Nat :=\n"
+    ++ "  some\n    (if a then\n        1\n"
+    ++ s!"      else {comment}\n        if b then\n          2\n        else\n          3)\n"
+  check parenthesizedSource parenthesizedExpected
+  let probeSource := "a /- note -/ b"
+  let first := tokenAt "a" ⟨0⟩ ⟨1⟩
+  let last := tokenAt "b" ⟨probeSource.utf8ByteSize - 1⟩ probeSource.rawEndPos
+  let before : Formatter.RenderState :=
+    {
+      source := probeSource,
+      sourceMap := SyntaxTree.SourcePositionMap.ofString probeSource
+      guardedJoins := ({} : Std.HashSet Nat).insert last.span.start.byteIdx
+    }
+  let before := before.emitToken first
+  let rejected := (before.forFitProbe.withPendingIndent 2).emitToken last
+  assertTrue "a split probe records its own feedback" (!rejected.brokenJoins.isEmpty)
+  let accepted := before.forFitProbe.emitToken last
+  let committed :=
+    before.commitLayoutProbe { fits := true, flat := true, rendered? := some accepted }
+  assertTrue "rejected probe feedback does not leak" committed.brokenJoins.isEmpty
+  let committed :=
+    before.commitLayoutProbe { fits := true, flat := false, rendered? := some rejected }
+  assertTrue "accepted probe feedback is committed" (!committed.brokenJoins.isEmpty)
+  let prior := { before with brokenJoins := ({} : Std.HashSet Nat).insert 0 }
+  let probe := prior.forFitProbe.emitToken last
+  let committed :=
+    prior.commitLayoutProbe { fits := true, flat := true, rendered? := some probe }
+  assertTrue "accepted probes retain earlier committed feedback"
+    (committed.brokenJoins.contains 0)
+
+def assertDoConditionalPreservation (env : Lean.Environment) : IO Unit := do
+  let check (label before after : String) (preserved : Bool) := do
+    let original ← SyntaxTree.parseModuleStringWithEnv env before label
+    let candidate ← SyntaxTree.parseModuleStringWithEnv env after label
+    assertTrue s!"{label} retains lexical fragments"
+      (Formatter.Diagnostics.preservationFragments original
+        == Formatter.Diagnostics.preservationFragments candidate)
+    assertTrue label
+      (Formatter.Diagnostics.preservesCodeIgnoringWhitespace original candidate
+        == preserved)
+  check "do continuation without a final else"
+    ("def continuation (a b : Bool) : Id Nat := do\n"
+      ++ "  if a then return 1 else if b then return 2\n  return 3\n")
+    ("def continuation (a b : Bool) : Id Nat := do\n"
+      ++ "  if a then return 1 else\n    if b then return 2\n  return 3\n") true
+  check "do continuation cannot absorb the following statement"
+    ("def continuation (a b : Bool) : Id Nat := do\n"
+      ++ "  if a then return 1 else if b then return 2\n  return 3\n")
+    ("def continuation (a b : Bool) : Id Nat := do\n"
+      ++ "  if a then return 1 else\n    if b then return 2\n    return 3\n") false
+  check "do branch cannot absorb a following binding"
+    ("def binding (a b : Bool) : Id Nat := do\n"
+      ++ "  if a then pure () else if b then pure ()\n  let n := 3\n  return n\n")
+    ("def binding (a b : Bool) : Id Nat := do\n"
+      ++ "  if a then pure () else\n    if b then pure ()\n"
+      ++ "    let n := 3\n    return n\n")
+    false
+  check "do final branch cannot absorb a following statement"
+    ("def finalBranch (a b : Bool) : Id Nat := do\n"
+      ++ "  if a then return 1 else if b then return 2 else pure ()\n  return 3\n")
+    ("def finalBranch (a b : Bool) : Id Nat := do\n"
+      ++ "  if a then return 1 else\n    if b then return 2 else\n"
+      ++ "      pure ()\n      return 3\n")
+    false
+  check "quoted do syntax retains its exact parser shape"
+    ("def quoted : Lean.MacroM Lean.Syntax :=\n"
+      ++ "  `(doElem| if a then return 1 else if b then return 2 else return 3)\n")
+    ("def quoted : Lean.MacroM Lean.Syntax :=\n"
+      ++ "  `(doElem| if a then return 1 else\n    if b then return 2 else return 3)\n")
+    false
+  check "tactic-sequence quotations retain their exact parser shape"
+    ("def quotedTactics : Lean.MacroM Lean.Syntax :=\n"
+      ++ "  `(tactic| exact (Id.run do\n"
+      ++ "      if a then return 1 else if b then return 2 else return 3\n"
+      ++ "    )\n    skip)\n")
+    ("def quotedTactics : Lean.MacroM Lean.Syntax :=\n"
+      ++ "  `(tactic| exact (Id.run do\n"
+      ++ "      if a then return 1 else\n        if b then return 2 else return 3\n"
+      ++ "    )\n    skip)\n") false
 
 def assertDoConditionalsFitBeforeBreaking (env : Lean.Environment) : IO Unit := do
   let check (label source expected : String) (width : Nat := 100) := do
@@ -21295,6 +21499,8 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertElseIfContinuesOnElseLine env
   assertElseIfChainBreaksThenBranchesTogether env
   assertConditionalChainCommentOwnership env
+  assertConditionalJoinFeedback env
+  assertDoConditionalPreservation env
   assertDoConditionalsFitBeforeBreaking env
   assertTermMatchAlternativesStayOnOwnLines env
   assertLetMatchAlternativesAlign env

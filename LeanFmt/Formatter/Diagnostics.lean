@@ -213,21 +213,76 @@ inductive SyntaxSignature where
   | node (kind : SyntaxNodeKind) (children : Array SyntaxSignature)
 deriving BEq, Inhabited, Repr
 
-/-- Converts Lean syntax into the source-information-free form used by preservation checks. -/
 def SyntaxSignature.isEmptyNull : SyntaxSignature → Bool
   | .node `null children => children.isEmpty
   | _ => false
 
-partial def syntaxSignature : Syntax → SyntaxSignature
+-- Lean's doIf parser packs same-line else-if clauses. Its elaborator nests
+-- them in single-statement else sequences; preserve every other sequence intact.
+private def doIfTailSignature? (fallback : SyntaxSignature)
+    : List SyntaxSignature → Option SyntaxSignature
+  | [] => some fallback
+  | .node `group
+      #[
+        .node `group #[elseToken@(.atom "else"), ifToken@(.atom "if")],
+        condition,
+        thenToken@(.atom "then"),
+        body
+      ]
+    :: rest => do
+      let tail ← doIfTailSignature? fallback rest
+      let nested :=
+        SyntaxSignature.node `Lean.Parser.Term.doIf
+          (#[ifToken, condition, thenToken, body, tail].filter
+            (fun child => !child.isEmptyNull))
+      some
+      <| .node `null
+          #[
+            elseToken,
+            .node `Lean.Parser.Term.doSeqIndent
+              #[
+                .node `null #[.node `Lean.Parser.Term.doSeqItem #[nested]]
+              ]
+          ]
+  | _ => none
+
+private def doIfSignature? (children : Array SyntaxSignature)
+    : Option SyntaxSignature := do
+  let #[
+    ifToken@(.atom "if"),
+    condition,
+    thenToken@(.atom "then"),
+    body,
+    .node `null continuations,
+    fallback
+  ] := children | none
+  let tail ← doIfTailSignature? fallback continuations.toList
+  some
+  <| .node `Lean.Parser.Term.doIf
+      (#[ifToken, condition, thenToken, body, tail].filter
+        (fun child => !child.isEmptyNull))
+
+private partial def syntaxSignatureWith (normalizeDo : Bool) : Syntax → SyntaxSignature
   | .missing => .missing
   | .atom _ value => .atom value
   | .ident _ rawValue value _ => .ident rawValue.toString value
-  | .node _ kind children =>
+  | stx@(.node _ kind children) =>
       if SyntaxTree.isSyntaxCommentKind kind then
         .node kind #[]
       else
-        .node kind
-        <| (children.map syntaxSignature).filter fun child => !child.isEmptyNull
+        let normalizeDo :=
+          normalizeDo && !stx.isQuot && kind != `Lean.Parser.Tactic.quotSeq
+        let children := children.map (syntaxSignatureWith normalizeDo)
+        let conditional? :=
+          if normalizeDo && kind == `Lean.Parser.Term.doIf then
+            doIfSignature? children
+          else
+            none
+        conditional?.getD (.node kind <| children.filter fun child => !child.isEmptyNull)
+
+/-- Erase source metadata and normalize packed do continuations outside quotations. -/
+def syntaxSignature (stx : Syntax) : SyntaxSignature :=
+  syntaxSignatureWith true stx
 
 partial def takeLineCommentAux (reversed : List Char) : List Char → List Char × List Char
   | [] => (reversed.reverse, [])

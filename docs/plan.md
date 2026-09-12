@@ -6,23 +6,23 @@ release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Width-induced inline-comment chain breaks
+### Cascading join retry cost
 
 ```lean
-def longComment (a b : Bool) : Nat :=
-  if a then
-    1
-  else /- This single line block comment occupies nearly all of the available space on this line. -/ if b then
-    2
-  else
-    3
+  else /- A near-width-limit comment. -/ if secondCondition then
+    secondResult
+  else /- Another near-width-limit comment. -/ if thirdCondition then
+    thirdResult
 ```
 
-At width 100, the inline block comment above pushes `if` onto the next line,
-while its branches still use the outer base. Source-forced comment breaks are
-now handled separately; this case needs a width-aware continuation choice, not
-a source-column estimate or an exception for long comments. Keep fitting inline
-block comments joined.
+When restoring one nested base makes the next comment join overflow, complete
+rendering repeats. A 64-clause synthetic case needs 33 attempts; preparation is
+negligible compared with repeatedly emitting the tree. At width 512, 32/64/128
+cascading clauses take 1.39/5.73/25.70s for formatting and diagnostic checks.
+All pass preservation, width, fallback, and idempotency checks. Plain and fitting
+comment chains remain fast, and the external performance sample is unchanged
+within measurement variation. This is a worst-case retry cost, not a formatting
+failure. Do not hide it by guessing columns or splitting fitting later joins.
 
 ### Required prefix elaboration cost
 
@@ -59,71 +59,75 @@ protected-proof policy decision, not tactic-specific indentation exceptions.
 
 ## Progress
 
-### Current checkpoint: fitting do conditionals
+### Current checkpoint: width-aware continuation ownership
 
-Fitting `do` conditionals remain inline unless the source supplies branch breaks.
-Single `if/else` statements now use the same branch-owner representation as
-chains, so width-driven or authored breaks balance both branches together.
-Early returns without `else` also preserve authored breaks without forcing new
-ones. Statement sequences retain their mandatory boundaries. Comment-separated
-chain ownership from `ee92d52` is unchanged. No new rule API or renderer behavior
-is introduced.
+Implemented the reviewed layout-feedback contract. `LayoutTree` marks optional
+comment joins, and the renderer reports only splits in committed output.
+Rendering retries from the original tree with those joins disabled. A disabled
+join stays disabled within that pass, bounding attempts by the original guard
+count plus one. Parsing and import state are reused; no rule API, break rule,
+comment node, or renderer syntax test was added.
 
-The 34 new exact-output checks cover ordinary, dependent, pattern, mixed, and nested
-conditionals; semicolon bodies; following statements; line/block comments;
-manually broken branches and chains; and width-driven balanced layout. Tests
-check exact output, elaboration, syntax ownership, preservation, and idempotency.
+A split now moves the whole continuation, including branches and fallback, to
+its nested base. Fitting comment joins and source-forced boundaries retain their
+existing behavior. Diagnostics normalize parser-packed `doIf` continuations to
+the exact nested sequence shape used by Lean's elaborator, without discarding
+other statement wrappers. Term and tactic quotations remain strict.
 
-The complete local gate passed: build, unit suite, lint, fixture and self-format
-dry checks, preservation, actionable overflow, and idempotency. Fixtures are
-unchanged; self-formatting only adjusted the new test code. Three existing
-expectations now retain fitting inline conditionals. Renderer code is unchanged.
+The complete local gate passed: build, full unit suite, linter, fixture checks,
+self-format checks, preservation, actionable overflow, and idempotency. Fixtures
+are unchanged; self-format changes are confined to the new code. New coverage
+includes 28 exact-output cases, six positive/negative preservation comparisons,
+four elaborated definitional-equality checks, cascading joins, trace parity, and
+probe feedback commit/discard behavior. An independent output-lexing oracle
+agrees with production in all 84 cases at widths 60, 100, 120, and 160; all
+elaborate, preserve code and syntax signatures, and are idempotent without fallback.
 
-External checks started from pristine sources, not previous formatter output:
-otherwise honoring authored breaks would conceal the newly optional boundaries.
-Previous outputs are retained for comparison. All formatter diagnostics passed,
-including missing rules for Mathlib only:
+External validation uses pristine sources, with the previous formatted output
+retained for comparison. All checks passed with zero new output differences,
+exceptions, preservation fallbacks, actionable overflows, or idempotency failures.
+Mathlib missing-rule checks also passed. This is a lightweight checkpoint, not
+the release gate: target-project builds and the full Mathlib sweep were omitted.
+There were no newly changed modules to build against the recorded baselines.
 
 | Project | Scope | Formatter/check time | Changed output files |
 | --- | --- | --- | --- |
-| GraphQL | 280 files | 46s | 0 |
-| quantum | 20 owned files; 1 unowned skipped | 41s | 0 |
-| CSLib | 200 files, width 100 | 117s | 1 |
-| Mathlib | 36 pristine files, width 100 | 99.93s | 9 |
+| GraphQL | 280 files, width 90 | 45s | 0 |
+| quantum | 20 owned files; 1 unowned skipped, width 90 | 41s | 0 |
+| CSLib | 200 files, width 100 | 117s | 0 |
+| Mathlib | 36 pristine files, width 100 | 100.28s | 0 |
 
-CSLib's namespace linter retains two inline early returns. Mathlib changes retain
-short inline branches and two conditional assignments. The longest added line is
-92 characters. All nine changed Mathlib modules built in 20.02s, and the changed
-CSLib module built in 1.24s. Existing protected-line warnings remain. Project-wide
-builds and the full Mathlib sweep were omitted; this is not the release gate.
+A serial ABBA comparison on 13 identical Mathlib inputs measured mean user CPU
+of 69.46s before and 69.685s after (+0.3%, with overlapping sample ranges).
+At 128 clauses, plain-chain format/check time was 28ms before and 29ms after;
+fitting-comment chains were 30ms and 31ms. Cascading joins are the exception:
+the old formatter took 206ms but retained incorrect branch indentation, while
+the corrected output takes 25.70s. The stress result remains an open performance
+follow-up; successful correctness validation does not resolve that cost.
 
-Code and visual reviews found no actionable issues. Review against each clone's
-`HEAD` confirmed that every collapsed branch was already inline in the original
-source; authored branch breaks remain preserved. A serial ABBA comparison against
-`ee92d52` on 13 identical Mathlib inputs measured mean user CPU time of 71.435s
-before and 69.72s after, with no observed performance regression. Pristine-source
-timings above are not directly comparable to checkpoints that reformatted
-previously formatted sources.
+### Next checkpoint: retry efficiency
 
-### Next checkpoint: width-aware continuation review
+Prototype owner-local retry or reuse of accepted output before the affected owner,
+so cascading joins do not repeatedly render the complete tree. Preserve actual
+placement feedback, probe rollback, selective joins, and exact current outputs.
+Do not add syntax-specific renderer tests, predicted-column heuristics, or new
+break rules. Review the ownership/retry contract before implementation. Require
+long-chain scaling measurements and the same local and external checkpoint gate.
 
-Retain complete continuation ownership when a width-driven inline-comment break
-moves `if`. Keep fitting inline block comments joined, and preserve the current
-source-forced chain boundaries. Prototype a layout-time choice using actual
-placement; do not make syntax regrouping or line-break rules read comment text
-or guess rendered columns. Stop for review if this needs a new layout contract.
-
-Require narrow and wide widths, nested parenthesis/application bases, and multiple
-continuations, followed by the local gate and targeted external review. The full
-release gate remains required before declaring the candidate ready.
-
-### Later: protected-proof width policy
+### Following checkpoint: protected-proof width policy
 
 Decide whether authored multiline tactic lists should remain protected after
 reindentation exceeds the requested width. Any policy change must express
 ownership structurally and use general renderer recovery, with preservation,
 indentation, and idempotency coverage. No `rw`/`simp_rw` rules or indentation
 exceptions. Review the policy before implementation.
+
+### Release gate
+
+Rerun complete CSLib and Mathlib validation on the final candidate, including
+changed-module and aggregate builds. Review formatter diagnostics, output changes,
+and performance. Keep acceptable protected-line and too-many-lines warnings
+distinct from actionable formatting failures.
 
 ## Validation Standard
 
@@ -160,18 +164,19 @@ physical line fits width 100.
 
 ## Evidence
 
-The full-build baselines and batch logs are under
-`.scratch/external-validation-release/logs/`. The preceding full gate passed
-200 CSLib files and all 8,311 selected Mathlib files, then changed-module and
-aggregate builds. The retained three-fix follow-up at `1c0d582` passed the local
-gate, GraphQL/quantum/CSLib checkpoints, and a 36-file pristine Mathlib sample
-with five changed-module builds; the full Mathlib sweep was not repeated afterward.
+Current artifacts use `.scratch/width-aware-*`. Source snapshots, changed-file
+lists, patches, and formatter logs are under `.scratch/width-aware-validation/`.
+The independent 84-case oracle is `.scratch/WidthConditionalOwnership.lean`;
+its production comparison is `.scratch/width-aware-oracle.log`.
+Performance compares the candidate with the saved `58dc375` executable.
+The corrected stress inputs and before/after logs are under
+`.scratch/width-aware-performance/`; `.scratch/PrepareWidthAwareStress.mjs`
+generates them. `.scratch/width-aware-join-attempts.log` records the 64-clause
+retry breakdown from `.scratch/ProfileJoinAttempts.lean`.
 
-Current checkpoint artifacts use `.scratch/compact-do-*`. The preceding
-conditional-ownership checkpoint at `ee92d52` passed the local gate,
-GraphQL/quantum/CSLib checkpoints, and a 36-file pristine Mathlib sample with
-three changed-module builds and effectively unchanged performance. Its artifacts
-remain under `.scratch/conditional-chain-*`. Prior parser/layout evidence remains
-under `.scratch/release-gate/consistency/`. Original external clones remain
-available for review. No external formatting change should be used as the
-source of a formatter fix.
+The recorded full-build baselines and batch logs are under
+`.scratch/external-validation-release/logs/`. They cover 200 CSLib files and
+all 8,311 selected Mathlib files, followed by changed-module and aggregate builds.
+They predate this candidate; subsequent lightweight checkpoints do not replace
+the required release gate. Original external clones remain available for review.
+No external formatting change should be used as the source of a formatter fix.

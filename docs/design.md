@@ -1665,6 +1665,13 @@ condition, can break that condition without changing the owner of its branches.
 Comments keep their existing attachment and reindentation rules; a standalone
 comment need not move onto the `else` line.
 
+A single-line block comment that pushes the following `if` onto a new line ends
+the chain in the same way. The entire continuation, including its branches and
+fallback, gains the nested base. This is decided from actual rendered placement,
+not the comment's source column. It also applies to `do` chains; following
+statements remain outside the conditional. Fitting later comment joins still
+chain at the new base.
+
 ```lean
 if firstCondition then
   firstResult

@@ -40,7 +40,7 @@ The implementation is split by responsibility:
 | `LeanFmt.SyntaxTree` | Parse Lean source, keep token/trivia spans, classify delimiter envelopes, build the raw tree, and regroup selected raw syntax into logical nodes. |
 | `LeanFmt.Formatter.SpaceRules` | Perform low-level token spacing and lossless trivia cleanup/reindentation. |
 | `LeanFmt.Formatter.SourceBoundary` | Represent source trivia between tokens and expose comment, forced-break, blank-group, and ownership facts. |
-| `LeanFmt.Formatter.LayoutTree` | Prepare a rendering view once per pass: flatten uninterrupted conditional continuations while retaining nested ownership across source-forced comment breaks. The lossless syntax tree is unchanged. |
+| `LeanFmt.Formatter.LayoutTree` | Prepare a rendering view and guarded token joins: flatten uninterrupted conditional continuations, retaining nested ownership at source-forced or renderer-reported splits. The lossless syntax tree is unchanged. |
 | `LeanFmt.Formatter.LineBreakRules` | Define rule-facing segments, rule context, break points, node-kind dispatch, and syntax-specific rule authoring. |
 | `LeanFmt.Formatter.LayoutPlan` | Resolve one rule into a typed, normalized segment plan before rendering. |
 | `LeanFmt.Formatter.Rebase` | Represent one source/output layout anchor and translate source columns through it. |
@@ -404,9 +404,25 @@ Preparation accumulates each run before visiting its children, without repeatedl
 preparing the remaining tail. Unchanged subtrees remain shared rather than being
 copied; only changed owners and their ancestor paths are rebuilt. The
 [conditional style](design.md#conditionals) defines the boundary contract.
-Width-driven breaks after single-line block comments remain a separate
-[open issue](plan.md#width-induced-inline-comment-chain-breaks): source columns
-cannot predict placement after parent formatting.
+
+Single-line block comments may instead force a split only after parent placement
+and width checks. Preparation marks these joins by the source start of the right
+token, without predicting columns. The renderer records a broken join when the
+emitted whitespace before that token contains a newline. Feedback belongs to
+immutable output state: accepted fit probes commit it, and rejected probes discard
+it. The renderer does not inspect conditional syntax or comment contents for this
+decision.
+
+If committed output splits a guarded join, rendering restarts from the original
+tree with that join disabled. Disabled joins accumulate, so each retry removes at
+least one and the number of attempts is bounded by the initial guard count plus
+one. Later joins are reconsidered at their actual deeper base; fitting ones remain
+joined. Parsing and import state are reused, not reconstructed. Inputs without a
+split use one rendering attempt. Normal and traced rendering share this path and
+retain only the accepted attempt's trace. Protected-island alternatives still
+choose emission policy on a fixed tree; they are not tree-ownership alternatives.
+This bound guarantees termination, not linear work: cascading splits can repeat
+complete rendering. Owner-local retry is an [open performance follow-up](plan.md#cascading-join-retry-cost).
 
 A parser extension whose leading atom ends in `(` and whose final atom is the
 matching `)` uses the same structural parenthesis rule as core syntax. The body
@@ -1505,7 +1521,13 @@ try to reconstruct parser context at arbitrary source offsets.
 The preservation check is necessary but not complete. It compares code-token/comment
 fragments and a source-info-stripped syntax signature. Syntax-owned module and declaration
 comments delegate their contents to comment fragments, which preserve text and relative
-indentation while permitting a uniform column shift. Lean elaboration can still change
+indentation while permitting a uniform column shift. Outside quotations, the signature
+canonicalizes Lean's parser-packed `doIf` continuation clauses into nested `doIf`
+nodes inside single-statement `else` sequences, matching Lean's elaborator expansion.
+This permits `else if` to split across lines without accepting arbitrary scope changes:
+condition and branch signatures, bindings, sequence items, and following statements
+remain intact. No general statement-sequence wrapper is discarded. Quotations retain
+their raw parser shape because macros can inspect it. Lean elaboration can still change
 when formatting changes layout-sensitive source positions that are not represented in
 that signature.
 

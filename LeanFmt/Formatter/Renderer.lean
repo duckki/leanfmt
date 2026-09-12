@@ -296,6 +296,8 @@ structure RenderState where
   source : String
   sourceMap : SyntaxTree.SourcePositionMap
   layoutFacts? : Option TreeLayoutFacts := none
+  guardedJoins : Std.HashSet Nat := {}
+  brokenJoins : Std.HashSet Nat := {}
   output : String := ""
   outputLineBreakCount : Nat := 0
   completedLineOverflowCount : Nat := 0
@@ -783,6 +785,13 @@ def RenderState.emitToken (state : RenderState) (token : SyntaxTree.Token)
     state
   else
     let whitespace := state.defaultWhitespace token preserveLines
+    let state :=
+      if !state.guardedJoins.isEmpty
+          && hasLineBreakChar whitespace
+          && state.guardedJoins.contains token.span.start.byteIdx then
+        { state with brokenJoins := state.brokenJoins.insert token.span.start.byteIdx }
+      else
+        state
     let state := state.appendTriviaOutput whitespace
     let lexeme :=
       if SpaceRules.isCommentLexeme token.lexeme && hasLineBreakChar token.lexeme then
@@ -1739,6 +1748,7 @@ def RenderState.commitLayoutProbe (state : RenderState) (probe : LayoutProbe)
           preserveNextStandaloneCommentIndent :=
             rendered.preserveNextStandaloneCommentIndent
           movePendingCommentAfterToken := rendered.movePendingCommentAfterToken
+          brokenJoins := rendered.brokenJoins
       }
 
 def measureLayout
@@ -3036,35 +3046,46 @@ def RenderState.finalTrivia (state : RenderState) : String :=
   | none =>
       SpaceRules.cleanFinalTrivia state.source
 
+private def renderModuleState (moduleTree : SyntaxTree.Module) (options : Options)
+    (trace : Bool := false)
+    : RenderState :=
+  let sourceMap := SyntaxTree.SourcePositionMap.ofString moduleTree.source
+  let initial := LayoutTree.prepare moduleTree.source moduleTree.tree
+  let rec render (remaining : Nat) (view : LayoutTree.Prepared)
+      (disabled : Std.HashSet Nat)
+      : RenderState :=
+    let state :=
+      renderSegment
+        {
+          options,
+          source := moduleTree.source,
+          sourceMap
+          layoutFacts? := some (TreeLayoutFacts.ofTree moduleTree.source view.tree)
+          guardedJoins := view.guardedJoins
+          trace := { enabled := trace }
+        }
+        (LineBreakRules.Segment.ofTree view.tree)
+    if state.brokenJoins.isEmpty then
+      state
+    else
+      match remaining with
+      | 0 => state
+      | remaining + 1 =>
+          let disabled := state.brokenJoins.fold (fun acc key => acc.insert key) disabled
+          render remaining (LayoutTree.prepare moduleTree.source moduleTree.tree disabled)
+            disabled
+  -- Only committed output can disable a join; each retry removes at least one.
+  render initial.guardedJoins.size initial {}
+
 def renderModuleTree (moduleTree : SyntaxTree.Module) (options : Options := {})
     : String :=
-  let sourceMap := SyntaxTree.SourcePositionMap.ofString moduleTree.source
-  let tree := LayoutTree.prepare moduleTree.source moduleTree.tree
-  let layoutFacts := TreeLayoutFacts.ofTree moduleTree.source tree
-  let state :=
-    renderSegment
-      {
-        options, source := moduleTree.source, sourceMap, layoutFacts? := some layoutFacts
-      }
-      (LineBreakRules.Segment.ofTree tree)
+  let state := renderModuleState moduleTree options
   SpaceRules.normalizeFinalNewline
   <| SpaceRules.stripTrailingWhitespace (state.output ++ state.finalTrivia)
 
 def renderModuleTreeWithTrace (moduleTree : SyntaxTree.Module) (options : Options := {})
     : String × String :=
-  let sourceMap := SyntaxTree.SourcePositionMap.ofString moduleTree.source
-  let tree := LayoutTree.prepare moduleTree.source moduleTree.tree
-  let layoutFacts := TreeLayoutFacts.ofTree moduleTree.source tree
-  let state :=
-    renderSegment
-      {
-        options
-        source := moduleTree.source
-        sourceMap
-        layoutFacts? := some layoutFacts
-        trace := { enabled := true }
-      }
-      (LineBreakRules.Segment.ofTree tree)
+  let state := renderModuleState moduleTree options true
   let formatted :=
     SpaceRules.normalizeFinalNewline
     <| SpaceRules.stripTrailingWhitespace (state.output ++ state.finalTrivia)
