@@ -1592,8 +1592,19 @@ dedicated body indentation.
 
 ## Conditionals
 
-A fitting conditional stays on one line. A multiline conditional breaks as a
-balanced branch structure:
+A fitting conditional without authored branch breaks stays on one line. This
+also applies to `do` conditionals, including early returns without `else`:
+
+```lean
+def choose (condition : Bool) : Id Nat := do
+  if condition then return 1
+  return 0
+```
+
+An authored break after `then` remains a break even when the branch would fit
+inline. Statement sequences retain their required boundaries; a following
+statement does not become part of the preceding branch. A multiline conditional
+breaks as a balanced branch structure:
 
 ```lean
 if responseName == group.fst then

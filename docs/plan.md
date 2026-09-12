@@ -59,48 +59,51 @@ protected-proof policy decision, not tactic-specific indentation exceptions.
 
 ## Progress
 
-### Current checkpoint: conditional ownership revision
+### Current checkpoint: fitting do conditionals
 
-The implementation retains complete conditional continuations in the syntax
-tree. Layout preparation flattens uninterrupted runs, stopping at a line comment
-or a block comment containing a newline between `else` and `if`. Each resulting
-run uses the existing balanced rule and its own base. Ordinary, dependent, and
-pattern clauses can chain together. No rule API, shared balance state, comment
-nodes, or renderer indentation exceptions were added.
+Fitting `do` conditionals remain inline unless the source supplies branch breaks.
+Single `if/else` statements now use the same branch-owner representation as
+chains, so width-driven or authored breaks balance both branches together.
+Early returns without `else` also preserve authored breaks without forcing new
+ones. Statement sequences retain their mandatory boundaries. Comment-separated
+chain ownership from `ee92d52` is unchanged. No new rule API or renderer behavior
+is introduced.
 
-The focused suite adds 44 exact-output checks plus syntax ownership and token-order
-assertions. Original and formatted examples elaborate, preserve code and syntax,
-and converge idempotently. Existing conditional tests pass. Fixture regeneration
-has no changes. Self-formatting joins a few existing pattern-condition chains;
-Driver sources are unchanged.
+The 34 new exact-output checks cover ordinary, dependent, pattern, mixed, and nested
+conditionals; semicolon bodies; following statements; line/block comments;
+manually broken branches and chains; and width-driven balanced layout. Tests
+check exact output, elaboration, syntax ownership, preservation, and idempotency.
 
-The final local gate passed: build, unit suite, development linter, fixture and
-self-format dry checks, preservation, actionable overflow, and idempotency.
-External checks passed on the final implementation:
+The complete local gate passed: build, unit suite, lint, fixture and self-format
+dry checks, preservation, actionable overflow, and idempotency. Fixtures are
+unchanged; self-formatting only adjusted the new test code. Three existing
+expectations now retain fitting inline conditionals. Renderer code is unchanged.
 
-| Project | Scope | Formatter/check time | Output versus preceding checkpoint |
+External checks started from pristine sources, not previous formatter output:
+otherwise honoring authored breaks would conceal the newly optional boundaries.
+Previous outputs are retained for comparison. All formatter diagnostics passed,
+including missing rules for Mathlib only:
+
+| Project | Scope | Formatter/check time | Changed output files |
 | --- | --- | --- | --- |
-| GraphQL | 280 files | 31s | Unchanged |
-| quantum | 20 owned files; 1 unowned skipped | 40s | Unchanged |
-| CSLib | 200 files, width 100 | 83s | Unchanged |
-| Mathlib | 36 pristine files, width 100 | 100.56s | 3 changed, 33 unchanged |
+| GraphQL | 280 files | 46s | 0 |
+| quantum | 20 owned files; 1 unowned skipped | 41s | 0 |
+| CSLib | 200 files, width 100 | 117s | 1 |
+| Mathlib | 36 pristine files, width 100 | 99.93s | 9 |
 
-All formatter diagnostics passed, including missing rules for Mathlib. The three
-Mathlib changes join pattern chains in `Lean/Expr/Basic.lean` and
-`Tactic/ITauto.lean`, and restore comment-separated continuation ownership in
-`Tactic/Translate/Core.lean`. Visual subagent review found no additional
-regressions. All three changed modules built successfully; the final identical
-output rerun reused those artifacts. Existing protected-line warnings remain.
+CSLib's namespace linter retains two inline early returns. Mathlib changes retain
+short inline branches and two conditional assignments. The longest added line is
+92 characters. All nine changed Mathlib modules built in 20.02s, and the changed
+CSLib module built in 1.24s. Existing protected-line warnings remain. Project-wide
+builds and the full Mathlib sweep were omitted; this is not the release gate.
 
-A serial ABBA comparison on 13 identical Mathlib sources measured mean user CPU
-time of 68.975s before and 69.02s after, effectively unchanged. Sharing unchanged
-subtrees removed the first implementation's roughly 4% overhead. Synthetic
-32/64/128/256-clause probes also showed no material slowdown.
-
-GraphQL, quantum, and CSLib used checkpoint mode with target-project builds
-omitted. The full Mathlib sweep and aggregate build were not repeated. Do not
-treat this as a complete CSLib/Mathlib release gate. The comparison baseline is
-`1c0d582`; original full-gate evidence is retained under `.scratch/release-gate/`.
+Code and visual reviews found no actionable issues. Review against each clone's
+`HEAD` confirmed that every collapsed branch was already inline in the original
+source; authored branch breaks remain preserved. A serial ABBA comparison against
+`ee92d52` on 13 identical Mathlib inputs measured mean user CPU time of 71.435s
+before and 69.72s after, with no observed performance regression. Pristine-source
+timings above are not directly comparable to checkpoints that reformatted
+previously formatted sources.
 
 ### Next checkpoint: width-aware continuation review
 
@@ -164,8 +167,11 @@ aggregate builds. The retained three-fix follow-up at `1c0d582` passed the local
 gate, GraphQL/quantum/CSLib checkpoints, and a 36-file pristine Mathlib sample
 with five changed-module builds; the full Mathlib sweep was not repeated afterward.
 
-Current checkpoint artifacts use `.scratch/conditional-chain-*` and
-`.scratch/conditional-chain-validation/`. Prior parser/layout evidence remains
+Current checkpoint artifacts use `.scratch/compact-do-*`. The preceding
+conditional-ownership checkpoint at `ee92d52` passed the local gate,
+GraphQL/quantum/CSLib checkpoints, and a 36-file pristine Mathlib sample with
+three changed-module builds and effectively unchanged performance. Its artifacts
+remain under `.scratch/conditional-chain-*`. Prior parser/layout evidence remains
 under `.scratch/release-gate/consistency/`. Original external clones remain
 available for review. No external formatting change should be used as the
 source of a formatter fix.

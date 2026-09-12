@@ -3639,8 +3639,7 @@ def assertDoLetElseBreaks (env : Lean.Environment) : IO Unit := do
   let multiStatementFallbackExpected :=
     "def multiStatementFallback (candidate : Option Nat) : Option Nat := do\n"
     ++ "  let some value := candidate |\n"
-    ++ "    if candidate.isNone then\n"
-    ++ "      reportFailure; return none\n"
+    ++ "    if candidate.isNone then reportFailure; return none\n"
     ++ "    throwError \"candidate was rejected\"\n"
     ++ "  return value\n"
   let multiStatementFallbackResult ←
@@ -7150,8 +7149,7 @@ def assertAttachedDoInAssignmentInfixUsesDeclarationBase (env : Lean.Environment
     ++ "  <||> isRec declName <||> isMatcher declName\n"
   let expected :=
     "def isBlackListed {m} [Monad m] [MonadEnv m] (declName : Name) : m Bool := do\n"
-    ++ "  if declName == ``sorryAx then\n"
-    ++ "    return true\n"
+    ++ "  if declName == ``sorryAx then return true\n"
     ++ "  let env ← getEnv\n"
     ++ "  pure <| declName.isInternalDetail || isAuxRecursor env declName || isNoConfusion env declName\n"
     ++ "  <||> isRec declName\n"
@@ -8845,15 +8843,12 @@ def assertCliSelfFormattingRegressions (env : Lean.Environment) : IO Unit := do
     ++ "  pure idempotent\n"
   let monadicLetExpected :=
     "def check options := do\n"
-    ++ "  let idempotent ←\n"
-    ++ "    if options.checkIdempotent then\n"
-    ++ "      pure true\n"
-    ++ "    else\n"
-    ++ "      pure false\n"
+    ++ "  let idempotent ← if options.checkIdempotent then pure true else pure false\n"
     ++ "  pure idempotent\n"
   let monadicLetFormatted ←
     Formatter.formatSourceWithEnv env monadicLet "monadic-let-assignment.lean"
-  assertEq "monadic let breaks after assignment" monadicLetExpected monadicLetFormatted
+  assertEq "monadic let keeps a fitting conditional inline" monadicLetExpected
+    monadicLetFormatted
 
   let elseIfChain :=
     "def outcome options formatted source := do\n"
@@ -18433,6 +18428,145 @@ def assertConditionalChainCommentOwnership (env : Lean.Environment) : IO Unit :=
       ] do
     check label source source
 
+def assertDoConditionalsFitBeforeBreaking (env : Lean.Environment) : IO Unit := do
+  let check (label source expected : String) (width : Nat := 100) := do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source label { lineWidth := width }
+    assertTrue s!"{label} does not fall back" (!result.fellBack)
+    assertEq label expected result.formatted
+    assertTrue s!"{label} preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    let before ← SyntaxTree.parseModuleStringWithEnv env source label
+    let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted label
+    assertTrue s!"{label} preserves statement ownership"
+      (Formatter.Diagnostics.syntaxSignature before.rawSyntax
+        == Formatter.Diagnostics.syntaxSignature after.rawSyntax)
+    assertFrontendElaborates env source label
+    assertFrontendElaborates env result.formatted label
+    let again ←
+      Formatter.formatSourceWithEnvDetailed env result.formatted label
+        { lineWidth := width }
+    assertTrue s!"{label} second pass does not fall back" (!again.fellBack)
+    assertEq s!"{label} is idempotent" result.formatted again.formatted
+  for (label, source)
+      in [
+        (
+          "early-return",
+          "def early (a : Bool) : Id Nat := do\n"
+          ++ "  if a then return 1\n"
+          ++ "  return 0\n"
+        ),
+        (
+          "else",
+          "def choose (a : Bool) : Id Nat := do\n" ++ "  if a then pure 1 else pure 2\n"
+        ),
+        (
+          "dependent",
+          "def dependent (n : Nat) : Id Nat := do\n"
+          ++ "  if h : n = 0 then return n\n"
+          ++ "  return n + 1\n"
+        ),
+        (
+          "pattern",
+          "def pattern (n : Option Nat) : Id Nat := do\n"
+          ++ "  if let some x := n then return x\n"
+          ++ "  return 0\n"
+        ),
+        (
+          "pattern-bind",
+          "def patternBind (n : Option Nat) : Id Nat := do\n"
+          ++ "  if let some x ← pure n then return x\n"
+          ++ "  return 0\n"
+        ),
+        (
+          "chain",
+          "def chain (a b : Bool) : Id Nat := do\n"
+          ++ "  if a then return 1 else if b then return 2 else return 3\n"
+        ),
+        (
+          "mixed-chain",
+          "def mixed (a : Bool) (n : Option Nat) : Id Nat := do\n"
+          ++ "  if a then return 1 else if let some x := n then return x\n"
+          ++ "  return 0\n"
+        ),
+        (
+          "nested-early-return",
+          "def nested (a b : Bool) : Id Nat := do\n"
+          ++ "  if a then if b then return 1\n"
+          ++ "  return 0\n"
+        ),
+        (
+          "semicolon-body",
+          "def semicolon (a : Bool) : Id Nat := do\n"
+          ++ "  if a then pure (); return 1\n"
+          ++ "  return 0\n"
+        ),
+        (
+          "following-statement",
+          "def following (a : Bool) : Id Nat := do\n"
+          ++ "  let mut n := 0\n"
+          ++ "  if a then n := 1\n"
+          ++ "  n := n + 2\n"
+          ++ "  return n\n"
+        ),
+        (
+          "inline-comment",
+          "def inlineComment (a : Bool) : Id Nat := do\n"
+          ++ "  if a then /- inline -/ return 1\n"
+          ++ "  return 0\n"
+        ),
+        (
+          "line-comment",
+          "def lineComment (a : Bool) : Id Nat := do\n"
+          ++ "  if a then -- Preserve the body boundary.\n"
+          ++ "    return 1\n"
+          ++ "  return 0\n"
+        ),
+        (
+          "block-comment",
+          "def blockComment (a : Bool) : Id Nat := do\n"
+          ++ "  if a then /- Preserve this\n"
+          ++ "    body boundary. -/\n"
+          ++ "    return 1\n"
+          ++ "  return 0\n"
+        ),
+        (
+          "source-break",
+          "def sourceBreak (a : Bool) : Id Nat := do\n"
+          ++ "  if a then\n"
+          ++ "    return 1\n"
+          ++ "  return 0\n"
+        ),
+        (
+          "source-broken-chain",
+          "def brokenChain (a b : Bool) : Id Nat := do\n"
+          ++ "  if a then\n    return 1\n"
+          ++ "  else if b then\n    return 2\n"
+          ++ "  else\n    return 3\n"
+        )
+      ] do
+    for width in [60, 100] do
+      check label source source width
+  check "balanced-multiline-body"
+    ("def multiline (a : Bool) : Id Nat := do\n"
+      ++ "  if a then\n    let x := 1\n    pure x\n  else pure 2\n")
+    ("def multiline (a : Bool) : Id Nat := do\n"
+      ++ "  if a then\n    let x := 1\n    pure x\n  else\n    pure 2\n")
+  for source
+      in [
+        "  if a then pure 1\n  else pure 2\n",
+        "  if a then pure 1 else\n    pure 2\n"
+      ] do
+    check "balanced-authored-else-break"
+      ("def authoredElse (a : Bool) : Id Nat := do\n" ++ source)
+      ("def authoredElse (a : Bool) : Id Nat := do\n"
+        ++ "  if a then\n    pure 1\n  else\n    pure 2\n")
+  check "balanced-width-break"
+    ("def narrow : Id Nat := do\n"
+      ++ "  if true then return 1111111111 else return 2222222222\n")
+    ("def narrow : Id Nat := do\n"
+      ++ "  if true then\n    return 1111111111\n  else\n    return 2222222222\n") 40
+
 def assertParserCommandActions (env : Lean.Environment) : IO Unit := do
   let cases : List (String × SyntaxTree.CommandParseAction) :=
     [
@@ -21161,6 +21295,7 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertElseIfContinuesOnElseLine env
   assertElseIfChainBreaksThenBranchesTogether env
   assertConditionalChainCommentOwnership env
+  assertDoConditionalsFitBeforeBreaking env
   assertTermMatchAlternativesStayOnOwnLines env
   assertLetMatchAlternativesAlign env
   assertMatchArmPreservesSourceBreakBeforeShortRhs env

@@ -3194,11 +3194,7 @@ def regroupDoIfThenElseChain? (children : Array Tree) : Option Tree := do
         let continuation ← doIfContinuationParts? child
         loop (parts ++ continuation) (index + 1)
   let parts ← loop initial 4
-  let hasContinuationClause :=
-    match parts[2]? with
-    | some (.node .ifThenElseClause _) => true
-    | _ => false
-  if !hasContinuationClause then
+  if parts.size <= 2 then
     none
   else
     some

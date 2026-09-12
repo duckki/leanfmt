@@ -3195,11 +3195,6 @@ def ifThenElseChainBreaks (_context : RuleContext) (segment : Segment)
       let indentLevels := if offset % 2 == 0 then 1 else 0
       boundaryBreak? segment index indentLevels
 
-def ifThenElseChainMandatory (_context : RuleContext) (segment : Segment) : Bool :=
-  match segment.parent with
-  | .node (.ifThenElseChain kind) _ => kind == `Lean.Parser.Term.doIf
-  | _ => false
-
 def firstMatchAlternativesIndex? (segment : Segment) : Option Nat :=
   match firstChildRawKind? segment `Lean.Parser.Term.matchAlts with
   | some index => some index
@@ -4071,7 +4066,6 @@ def ifLetThenElseRule : LineBreakRule :=
 def ifThenElseChainRule : LineBreakRule :=
   {
     name := "ifThenElseChain"
-    mandatory := ifThenElseChainMandatory
     useExistingBreaks := fun _ _ => true
     startAlignment := fun context _ => expressionHeadStartAlignment context
     inheritBase := fun context _ => spacedApplicationOwnsNestedBase context.ancestors
@@ -4298,7 +4292,7 @@ def haveRule : LineBreakRule :=
 def doIfRule : LineBreakRule :=
   {
     name := "doIf"
-    mandatory := fun _ _ => true
+    useExistingBreaks := fun _ _ => true
     inheritBase := fun _ _ => true
     breakPoints := doIfBreaks
   }
