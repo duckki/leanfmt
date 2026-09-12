@@ -18548,6 +18548,38 @@ def assertConditionalJoinFeedback (env : Lean.Environment) : IO Unit := do
     disabled := state.brokenJoins.fold (fun acc key => acc.insert key) disabled
   let (traced, _) := Formatter.renderModuleTreeWithTrace parsed { lineWidth := 100 }
   assertEq "traced rendering resolves the same layout alternatives" cascadeExpected traced
+  let view := Formatter.LayoutTree.prepare cascadeSource parsed.tree
+  assertTrue "only the joined owner receives retry metadata" (view.retryOwners.size == 1)
+  let state : Formatter.RenderState :=
+    {
+      source := cascadeSource,
+      sourceMap := SyntaxTree.SourcePositionMap.ofString cascadeSource
+      options := { lineWidth := 100 }
+      guardedJoins := view.guardedJoins
+      layoutFacts? := some (Formatter.TreeLayoutFacts.ofPrepared cascadeSource view)
+      brokenJoins := ({} : Std.HashSet Nat).insert 0
+    }
+  let rendered :=
+    Formatter.renderSegment state (Formatter.LineBreakRules.Segment.ofTree view.tree)
+  assertEq "local retries resolve cascading joins without restarting the module"
+    cascadeExpected
+    (Formatter.SpaceRules.normalizeFinalNewline (rendered.output ++ rendered.finalTrivia))
+  assertTrue "local retries preserve earlier feedback without leaking resolved joins"
+    (rendered.brokenJoins.size == 1 && rendered.brokenJoins.contains 0)
+  assertTrue "local retries restore the enclosing guard scope"
+    (rendered.guardedJoins.size == view.guardedJoins.size)
+  let shortParsed ←
+    SyntaxTree.parseModuleStringWithEnv env
+      (cascadeSource.replace comment "/- note -/" |>.replace secondComment "/- note -/")
+      "fitting-joins.lean"
+  let shortView := Formatter.LayoutTree.prepare shortParsed.source shortParsed.tree
+  assertTrue "fitting guards still have an owner" (shortView.retryOwners.size == 1)
+  let plainSource := cascadeSource.replace comment "" |>.replace secondComment ""
+  let plainParsed ← SyntaxTree.parseModuleStringWithEnv env plainSource "plain-joins.lean"
+  let plainView := Formatter.LayoutTree.prepare plainSource plainParsed.tree
+  assertTrue "plain chains do not allocate retry owners" plainView.retryOwners.isEmpty
+  check (cascadeSource ++ "\n" ++ selectiveSource.replace "selectiveJoin" "secondJoin")
+    (cascadeExpected ++ "\n" ++ selectiveExpected.replace "selectiveJoin" "secondJoin")
   let parenthesizedSource :=
     "def parenthesizedJoin (a b : Bool) : Option Nat :=\n"
     ++ s!"  some (if a then 1 else {comment} if b then 2 else 3)\n"

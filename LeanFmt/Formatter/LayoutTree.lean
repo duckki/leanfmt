@@ -4,10 +4,21 @@ namespace LeanFmt.Formatter.LayoutTree
 
 open SyntaxTree
 
+structure RetryOwner where
+  tree : Tree
+  disabled : Std.HashSet Nat
+deriving Repr
+
 structure Prepared where
   tree : Tree
   /-- UTF-8 source offsets of tokens joined to the immediately preceding token. -/
   guardedJoins : Std.HashSet Nat := {}
+  /-- Original owners at paths in the prepared view, for subtree-local retries. -/
+  retryOwners : Array (List Nat × RetryOwner) := #[]
+
+private structure PreparationState where
+  guardedJoins : Std.HashSet Nat := {}
+  retryOwners : Array (List Nat × RetryOwner) := #[]
 
 private def prependElseToClause (elseKeyword : Tree) (parts : Array Tree)
     : Option (Array Tree) := do
@@ -33,30 +44,45 @@ private def continuationParts? (source : String) (disabled : Std.HashSet Nat)
 do not repeatedly prepare and copy their complete continuation tails. -/
 private partial def chainParts (source : String) (disabled : Std.HashSet Nat)
     (parts : Array Tree) (acc : Array Tree)
-    : StateM (Std.HashSet Nat) (Array Tree) := do
+    : StateM PreparationState (Array Tree) := do
   match continuationParts? source disabled parts with
   | some (continuation, guard?) =>
-      if let some guard := guard? then modify (·.insert guard)
+      if let some guard := guard? then
+        modify fun state => { state with guardedJoins := state.guardedJoins.insert guard }
       chainParts source disabled continuation (acc.push parts[0]! |>.push parts[1]!)
   | none => pure (acc ++ parts)
 
 private partial def prepare? (source : String) (disabled : Std.HashSet Nat)
-    : Tree → StateM (Std.HashSet Nat) (Option Tree)
+    (path : List Nat)
+    : Tree → StateM PreparationState (Option Tree)
   | .node kind children => do
+      let guardCount := (← get).guardedJoins.size
       let joined? : Option (Array Tree) ←
         match kind with
         | .ifThenElseChain _ => do
             let some (continuation, guard?) := continuationParts? source disabled children
             | pure none
-            if let some guard := guard? then modify (·.insert guard)
+            if let some guard := guard? then
+              modify
+                fun state =>
+                  { state with guardedJoins := state.guardedJoins.insert guard }
             let joined ←
               chainParts source disabled continuation #[children[0]!, children[1]!]
             pure (some joined)
         | _ => pure none
+      if guardCount < (← get).guardedJoins.size then
+        modify
+          fun state =>
+            {
+              state with
+                retryOwners :=
+                  state.retryOwners.push
+                    (path.reverse, { tree := .node kind children, disabled })
+            }
       let mut prepared := joined?.getD children
       let mut changed := joined?.isSome
       for index in [:prepared.size] do
-        if let some child ← prepare? source disabled prepared[index]! then
+        if let some child ← prepare? source disabled (index :: path) prepared[index]! then
           prepared := prepared.set! index child
           changed := true
       return if changed then some (.node kind prepared) else none
@@ -66,7 +92,11 @@ private partial def prepare? (source : String) (disabled : Std.HashSet Nat)
 Only uninterrupted conditional continuations acquire a balanced layout owner. -/
 def prepare (source : String) (tree : Tree) (disabled : Std.HashSet Nat := {})
     : Prepared :=
-  let (prepared?, guardedJoins) := (prepare? source disabled tree).run {}
-  { tree := prepared?.getD tree, guardedJoins }
+  let (prepared?, state) := (prepare? source disabled [] tree).run {}
+  {
+    tree := prepared?.getD tree,
+    guardedJoins := state.guardedJoins,
+    retryOwners := state.retryOwners
+  }
 
 end LeanFmt.Formatter.LayoutTree

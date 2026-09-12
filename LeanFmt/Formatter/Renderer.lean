@@ -131,6 +131,7 @@ def treeFirstSourceLineWidth? (source : String) (tree : SyntaxTree.Tree)
 /-- Cached source-layout facts. This mirrors the immutable syntax tree so speculative
 rendering can reuse classification results without moving syntax policy into the renderer. -/
 structure TreeLayoutSummary where
+  retryOwner? : Option LayoutTree.RetryOwner := none
   originalPlan? : Option OriginalTree.IslandPlan := none
   startsWithOriginalEmission : Bool := false
   startsWithUnbreakableOriginalFirstLine : Bool := false
@@ -273,6 +274,23 @@ partial def ofTree (source : String) (tree : SyntaxTree.Tree) : TreeLayoutFacts 
           }
           originalPlan? childFacts)
         childFacts
+
+private def withRetryOwner (facts : TreeLayoutFacts) (path : List Nat)
+    (owner : LayoutTree.RetryOwner)
+    : TreeLayoutFacts :=
+  match facts, path with
+  | .node summary children, [] =>
+      .node { summary with retryOwner? := some owner } children
+  | .node summary children, index :: rest =>
+      match children[index]? with
+      | none => facts
+      | some child =>
+          .node summary (children.set! index (child.withRetryOwner rest owner))
+
+def ofPrepared (source : String) (view : LayoutTree.Prepared) : TreeLayoutFacts :=
+  view.retryOwners.foldl
+    (fun facts (path, owner) => facts.withRetryOwner path owner)
+    (ofTree source view.tree)
 
 end TreeLayoutFacts
 
@@ -2160,6 +2178,45 @@ mutual
   partial def renderSegment (state : RenderState) (segment : LineBreakRules.Segment)
       (prepared? : Option LayoutPlan.Plan := none)
       : RenderState :=
+    match state.layoutFacts?.bind (·.summary.retryOwner?) with
+    | some owner =>
+        if segment.start == 0
+            && segment.stop == (LineBreakRules.Segment.ofTree segment.parent).stop then
+          renderRetryOwner state segment prepared? owner
+        else
+          renderSegmentCore state segment prepared?
+    | none => renderSegmentCore state segment prepared?
+
+  partial def renderRetryOwner (state : RenderState) (segment : LineBreakRules.Segment)
+      (prepared? : Option LayoutPlan.Plan) (owner : LayoutTree.RetryOwner)
+      : RenderState :=
+    let rendered := renderSegmentCore state segment prepared?
+    let first := owner.tree.firstToken?.map (·.span.start.byteIdx) |>.getD 0
+    let last := owner.tree.lastToken?.map (·.span.stop.byteIdx) |>.getD 0
+    let broken :=
+      rendered.brokenJoins.filter
+        fun key => first <= key && key < last && !state.brokenJoins.contains key
+    if broken.isEmpty then
+      rendered
+    else
+      let disabled := broken.fold (fun acc key => acc.insert key) owner.disabled
+      let view := LayoutTree.prepare state.source owner.tree disabled
+      let rendered :=
+        renderSegment
+          {
+            state with
+              layoutFacts? := some (TreeLayoutFacts.ofPrepared state.source view)
+              guardedJoins := state.guardedJoins.filter fun key => !broken.contains key
+          }
+          (LineBreakRules.Segment.ofTree view.tree)
+      {
+        rendered with
+          guardedJoins := state.guardedJoins, layoutFacts? := state.layoutFacts?
+      }
+
+  partial def renderSegmentCore (state : RenderState) (segment : LineBreakRules.Segment)
+      (prepared? : Option LayoutPlan.Plan := none)
+      : RenderState :=
     let plan := prepared?.getD (LayoutPlan.resolve state.context segment)
     let tailIndentationStop? :=
       match segment.parent with
@@ -3060,7 +3117,7 @@ private def renderModuleState (moduleTree : SyntaxTree.Module) (options : Option
           options,
           source := moduleTree.source,
           sourceMap
-          layoutFacts? := some (TreeLayoutFacts.ofTree moduleTree.source view.tree)
+          layoutFacts? := some (TreeLayoutFacts.ofPrepared moduleTree.source view)
           guardedJoins := view.guardedJoins
           trace := { enabled := trace }
         }

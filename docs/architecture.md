@@ -332,7 +332,8 @@ must be enough to reconstruct the source.
 ### Regrouping
 
 Raw parser shape is sometimes inconvenient for formatting. Regrouping is the only phase
-that changes tree shape, and it remains token-lossless.
+that changes the lossless syntax tree's shape. Layout preparation may derive a separate,
+token-equivalent rendering view without replacing that syntax tree.
 
 Current logical regroupings are:
 
@@ -413,16 +414,29 @@ immutable output state: accepted fit probes commit it, and rejected probes disca
 it. The renderer does not inspect conditional syntax or comment contents for this
 decision.
 
-If committed output splits a guarded join, rendering restarts from the original
-tree with that join disabled. Disabled joins accumulate, so each retry removes at
-least one and the number of attempts is bounded by the initial guard count plus
-one. Later joins are reconsidered at their actual deeper base; fitting ones remain
-joined. Parsing and import state are reused, not reconstructed. Inputs without a
-split use one rendering attempt. Normal and traced rendering share this path and
-retain only the accepted attempt's trace. Protected-island alternatives still
-choose emission policy on a fixed tree; they are not tree-ownership alternatives.
-This bound guarantees termination, not linear work: cascading splits can repeat
-complete rendering. Owner-local retry is an [open performance follow-up](plan.md#cascading-join-retry-cost).
+Preparation also records the original guarded owners at paths in the prepared
+view. These sparse retry descriptors are attached to cached layout facts, not
+syntax nodes. Each descriptor retains the disabled joins used to prepare it.
+An alternative must retain its owner's token range and external layout role;
+only internal grouping changes, so the parent's incoming context remains valid.
+Plain chains need no retry descriptor.
+
+When a complete owner reports a newly split join, rendering retries that owner
+from its unchanged incoming state and original tree, with the join disabled.
+The accepted prefix, enclosing layout context, and other owners are not replayed.
+Nested owners can settle their own joins before their parent commits output.
+Partial segments cannot retry an owner: their sibling indexes describe only the
+existing view. Flat probes that bypass owner rendering still report feedback to
+the bounded module-level fallback. Earlier feedback survives local retries, but
+feedback and trace from rejected owner candidates do not leak into accepted output.
+
+Disabled joins accumulate in each retry lineage, so every retry removes at least
+one active join. Later joins are reconsidered at their actual deeper base; fitting
+ones remain joined. Parsing and import state are reused, not reconstructed. Normal
+and traced rendering share this path. Protected-island alternatives still choose
+emission policy on a fixed tree; they are not tree-ownership alternatives. Local
+retries reduce repeated work, but overlapping continuation tails can still be
+rendered repeatedly; this is not a linear-time guarantee.
 
 A parser extension whose leading atom ends in `(` and whose final atom is the
 matching `)` uses the same structural parenthesis rule as core syntax. The body
