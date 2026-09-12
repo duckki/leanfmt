@@ -158,6 +158,7 @@ def defaultInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   context.parentIsDeclarationPrefixOwner
   || context.parentIsSingletonArrayItemWrapper
   || segment.rawKind? == some `Lean.Parser.Term.letDecl
+  || segment.rawKind? == some `Lean.Parser.Term.sufficesDecl
   || (segment.rawKind? == some `null && context.parentIsStructureFieldDefaultValue)
   || (segment.rawKind? == some `Lean.Parser.Term.binderDefault
       && context.parentWrapsStructureFieldDefaultValue)
@@ -2118,7 +2119,7 @@ def letRecEquationBreaks (_context : RuleContext) (segment : Segment) : List Bre
 def doTryBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   let bodyBreak := [boundaryBreak? segment 1 1].filterMap id
   let suffixBreaks :=
-    segment.indexes.filterMap
+    (nonemptyChildIndexes segment).filterMap
       fun index =>
         if 2 <= index then boundaryBreak? segment index 0 else none
   bodyBreak ++ suffixBreaks

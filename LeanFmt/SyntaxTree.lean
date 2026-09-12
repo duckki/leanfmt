@@ -1530,7 +1530,11 @@ private def regroupSpacedApplication?
 private partial def attachPrefixToDeclarationHeader? (prefixTree : Tree)
     : Tree → Option Tree
   | .node kind children => do
-      let index ← children.findIdx? fun child => child.firstToken?.isSome
+      let index ←
+        children.findIdx?
+          fun
+          | .node .declarationHeader _ => true
+          | child => child.firstToken?.isSome
       let child ← children[index]?
       let child ←
         match child with
@@ -4324,7 +4328,8 @@ deriving BEq
 def commandHandlerParseAction : Name → CommandParseAction
   | `Lean.Elab.Command.elabNamespace
   | `Lean.Elab.Command.elabSection
-  | `Lean.Elab.Command.elabEnd => .scope
+  | `Lean.Elab.Command.elabEnd
+  | `Lean.Elab.Command.elabSetOption => .scope
   | `Lean.Elab.Command.elabDeclaration
   | `Lean.Elab.Command.expandNamespacedDeclaration
   | `expandLemma

@@ -13529,6 +13529,58 @@ def assertInstanceValueInheritsDeclarationBase (env : Lean.Environment) : IO Uni
   let formatted ← Formatter.formatSourceWithEnv env source "nested-let-proof-body.lean"
   assertEq "instance values use the declaration base" source formatted
 
+def assertReviewedHeaderAndContinuationOwnership (env : Lean.Environment) : IO Unit := do
+  let check (name source expected : String) : IO Unit := do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source s!"{name}.lean" { lineWidth := 86 }
+    assertTrue s!"{name} does not fall back" (!result.fellBack)
+    assertEq s!"{name} retains header and continuation ownership" expected
+      result.formatted
+    assertTrue s!"{name} preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    assertEq s!"{name} is idempotent" result.formatted
+      (← Formatter.formatSourceWithEnv env result.formatted s!"{name}.lean"
+          { lineWidth := 86 })
+
+  check "anonymous-assignment-header"
+    ("def anonymousAssignment :=\n"
+      ++ "  outerFunctionWithEnoughCharacters firstArgument secondArgument fun value => by\n"
+      ++ "    have := makeEvidenceWithEnoughCharacters firstArgument secondArgument thirdArgument\n"
+      ++ "    trivial\n")
+    ("def anonymousAssignment :=\n"
+      ++ "  outerFunctionWithEnoughCharacters firstArgument secondArgument\n"
+      ++ "    fun value => by\n"
+      ++ "      have :=\n"
+      ++ "        makeEvidenceWithEnoughCharacters firstArgument secondArgument thirdArgument\n"
+      ++ "      trivial\n")
+
+  check "try-without-finally-condition-suffix"
+    ("def doCondition := do\n"
+      ++ "  if let some (first, second, third) ←\n"
+      ++ "      observing? do\n"
+      ++ "        try\n"
+      ++ "          runAction\n"
+      ++ "        catch e =>\n"
+      ++ "          logError e; throw e then\n"
+      ++ "    pure first\n")
+    ("def doCondition := do\n"
+      ++ "  if let some (first, second, third) ←\n"
+      ++ "      observing? do\n"
+      ++ "        try\n"
+      ++ "          runAction\n"
+      ++ "        catch e =>\n"
+      ++ "          logError e; throw e then\n"
+      ++ "    pure first\n")
+
+  check "quantified-suffices-from-base"
+    ("def sufficesFrom :=\n"
+      ++ "  suffices ∀ (value : ResultType), Property (longFunctionName value) from useProof this\n"
+      ++ "  proofBody\n")
+    ("def sufficesFrom :=\n"
+      ++ "  suffices ∀ (value : ResultType), Property (longFunctionName value)\n"
+      ++ "    from useProof this\n"
+      ++ "  proofBody\n")
+
 def assertSufficesBodyBreaksAfterFromProof (env : Lean.Environment) : IO Unit := do
   let directSource :=
     "def sample : Result :=\n"
@@ -18243,6 +18295,7 @@ def assertParserCommandActions (env : Lean.Environment) : IO Unit := do
   let cases : List (String × SyntaxTree.CommandParseAction) :=
     [
       ("namespace Example", .scope),
+      ("set_option pp.universes true", .scope),
       ("def value := 0", .postpone),
       ("@[simp] theorem value : True := by trivial", .frontend),
       ("structure Example where\n  value : Nat\nderiving Repr", .frontend),
@@ -18279,6 +18332,15 @@ def assertParserCommandsObserveCompletePrefix (env : Lean.Environment) : IO Unit
       ("direct", declaration ++ observer),
       ("wrapped", declaration ++ "set_option maxRecDepth 2048 in\n" ++ observer),
       ("mutual dependency", "mutual\n" ++ declaration ++ "end\n" ++ observer),
+      (
+        "overridden option command",
+        "elab_rules : command\n"
+        ++ "  | `(set_option pp.universes true) => do\n"
+        ++ "    if (← getEnv).contains `parserSwitch then\n"
+        ++ "      elabCommand (← `(notation:max \"branch%\" n:arg => Nat.succ n))\n"
+        ++ declaration
+        ++ "set_option pp.universes true\n"
+      ),
       (
         "overridden mutual",
         "elab_rules : command\n"
@@ -18348,6 +18410,56 @@ def assertParserCommandsObserveCompletePrefix (env : Lean.Environment) : IO Unit
       (← codePreservedIgnoringWhitespace env source result.formatted)
     assertEq s!"{label}: complete parser state is idempotent" result.formatted
       (← Formatter.formatSourceWithEnv env result.formatted fileName)
+
+def assertOptionScopeDoesNotReplayDeclarations (env : Lean.Environment) : IO Unit := do
+  let sourcePrefix :=
+    "namespace OptionScopeReplay\n"
+    ++ "def pending := 0\n"
+    ++ "set_option pp.universes true\n"
+    ++ "set_option maxRecDepth 2048\n"
+  let fileName := "option-scope-parser.lean"
+  let input := Lean.Parser.mkInputContext sourcePrefix fileName
+  let (_, parserState, _) ← Lean.Parser.parseHeader input
+  let initial : SyntaxTree.ModuleParseState :=
+    { parserState, commandState := Lean.Elab.Command.mkState env }
+  let parsed ← SyntaxTree.parseModuleCommandsQuiet input initial true initial
+  assertTrue "plain option commands leave preceding declarations deferred"
+    (!parsed.commandState.env.contains `OptionScopeReplay.pending)
+  let options := (SyntaxTree.parserModuleContext parsed.commandState).options
+  assertTrue "plain option commands immediately update parser options"
+    (options.getBool `pp.universes false && Lean.maxRecDepth.get options == 2048)
+  assertTrue "plain option commands update the cached recursion limit"
+    (parsed.commandState.maxRecDepth == 2048)
+  let source :=
+    sourcePrefix
+    ++ "open Lean Elab Command\n"
+    ++ "run_cmd do\n"
+    ++ "  if (← getEnv).contains `OptionScopeReplay.pending\n"
+    ++ "      && (← getOptions).getBool `pp.universes false\n"
+    ++ "      && maxRecDepth.get (← getOptions) == 2048 then\n"
+    ++ "    elabCommand (← `(notation:max \"optionScope%\" n:arg => Nat.succ n))\n"
+    ++ "def generated := optionScope% 1\n"
+    ++ "end OptionScopeReplay\n"
+  assertFrontendElaborates env source fileName
+  let input := Lean.Parser.mkInputContext source fileName
+  let parsed ← SyntaxTree.parseModuleCommandsQuiet input initial true initial
+  let reference ← SyntaxTree.replayModulePrefix input initial source.rawEndPos
+  assertTrue "option scope parsing agrees with the complete frontend"
+    (Formatter.Diagnostics.syntaxSignature (Lean.mkListNode parsed.commands)
+      == Formatter.Diagnostics.syntaxSignature (Lean.mkListNode reference.commands))
+  assertTrue "namespace exit restores options with frontend-equivalent cached state"
+    ((SyntaxTree.parserModuleContext parsed.commandState).options
+        == (SyntaxTree.parserModuleContext initial.commandState).options
+      && parsed.commandState.maxRecDepth == reference.commandState.maxRecDepth)
+  let result ← Formatter.formatSourceWithEnvDetailed env source fileName
+  assertTrue "option scope formatting does not fall back" (!result.fellBack)
+  assertTextContains "observers receive deferred declarations and updated options"
+    result.formatted "def generated := optionScope% 1"
+  assertFrontendElaborates env result.formatted fileName
+  assertTrue "option scope formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  assertEq "option scope formatting is idempotent" result.formatted
+    (← Formatter.formatSourceWithEnv env result.formatted fileName)
 
 def assertMutualParserReplayIsDeferred (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -21011,6 +21123,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertBinderTacticProofBodyHasNoMissingRules env
   assertInstanceValueInheritsDeclarationBase env
   assertSufficesBodyBreaksAfterFromProof env
+  assertReviewedHeaderAndContinuationOwnership env
   assertSyntaxDeclarationsHaveRules env
   assertElaborationSyntaxHasRules env
   assertMatchExprAlternativesStartOnNewLines env
@@ -21024,6 +21137,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertParserReplayStopsAtRequiredPrefix env
   assertParserCommandActions env
   assertParserCommandsObserveCompletePrefix env
+  assertOptionScopeDoesNotReplayDeclarations env
   assertMutualParserReplayIsDeferred env
   assertMutualParserReplayRejectsCustomHandlers env
   assertParserCommandsObserveOnlyPrecedingState env

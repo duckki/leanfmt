@@ -378,6 +378,12 @@ unelaborated until an observer needs them, then verifies actual theorem bodies a
 complete-frontend syntax parity. The custom-handler tests keep block, member, and
 scope overrides on the authoritative replay path. These state assertions test the
 optimization independently of machine-dependent timing thresholds.
+`assertOptionScopeDoesNotReplayDeclarations` checks immediate option and recursion-limit
+updates without declaration replay, later observer state, and scope-exit parity with
+the frontend. Overridden option handlers and scoped wrappers retain replay coverage.
+`assertReviewedHeaderAndContinuationOwnership` covers empty assignment headers,
+absent `finally` continuations before a suffix, and quantified `suffices` continuations,
+with preservation and idempotency checks.
 
 The repository also includes a stable local workload that covers regrouping,
 original-layout emission, layout search, and convergence. Record a baseline before an

@@ -110,8 +110,12 @@ Formatting a file follows this pipeline:
    discard declarations or their proof bodies: the next environment-observing command
    still replays the complete pending prefix.
 
-   Standard namespace, section, and end commands update the quiet parser scope. Every
-   other command, including local syntax declarations, `run_cmd`, wrappers, attributes,
+   Standard namespace, section, end, and standalone `set_option` commands update the
+   quiet parser scope. The audited option handler uses registered option declarations
+   and literal values, updating scope options and the cached recursion limit without
+   observing pending declarations. `set_option ... in ...` is a separate wrapper and
+   retains frontend replay, as do replaced option handlers. Every other command,
+   including local syntax declarations, `run_cmd`, wrappers, attributes,
    and custom commands, runs through Lean's frontend with the complete preceding
    source state. The frontend processes only the pending prefix through that command;
    its result becomes the next checkpoint, and quiet parsing resumes. A successful
@@ -383,6 +387,13 @@ an owned tactic to expose its final proof, but it cannot absorb sibling tactics
 or a following command into that proof. When a suffix group contains an
 unparenthesized proof with multiple tactic entries, its rule mandates the body
 boundary after the retained `by` introducer so Lean's layout scope is preserved.
+
+Declaration prefix attachment recognizes an empty `.declarationHeader` as an owner,
+not absent content. Thus an anonymous `have :=` keeps its keyword and assignment
+together when its value is recovered structurally. Declaration wrappers, including
+`sufficesDecl`, inherit the surrounding declaration base for their continuations.
+Optional `try` continuations contribute breakpoints only when they contain tokens, so an
+absent `finally` cannot leave a pending break before an enclosing suffix.
 
 Parser-owned lambda, macro, named-argument, and `suffices` categories may hide a
 leading `do` or `by` inside their body wrapper. Regrouping splits that introducer,
