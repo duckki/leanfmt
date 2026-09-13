@@ -38,57 +38,59 @@ independent idempotency pass. No safe general shortcut has been identified.
 
 ## Progress
 
-### Current checkpoint: protected lines and flowing delimiters
+### Current checkpoint: comment processing cost
 
-A retained protected span protects its complete shared physical source line.
-Recovery must not wrap only the final argument of an inline sequence such as
-`obtain result := proof; refine next; rw [h]`. Required indentation may leave
-that line over width; this is accepted protected layout. Semicolon regrouping
-and new separator rules are not planned. Source-preservation planning rejects
-partial recovery while keeping recovery on separate source lines available.
+Keep the committed protected-line and delimiter behavior unchanged. Trivia
+normalization scans ASCII delimiters and retains UTF-8 comment slices, avoiding
+character-list allocation and reconstruction on every probe and retry. It adds
+no cache, rule, renderer state, or parser shortcut. Independent character-based
+tests cover nested and unterminated comments, Unicode, mixed line endings, and
+both preserved-line and inline whitespace normalization.
 
-Focused tests cover protected neighbors on either side, a separate-line control,
-the moved Mathlib-shaped sequence, accepted overflow diagnostics, preservation,
-and idempotency. A protected theorem equation arm also keeps its authored line
-and relative continuation layout. The complete local gate passed after
-self-formatting, with no fixture changes or remaining formatting drift.
+Isolated before/after/after/before runs use `ac5b1db` as the baseline, width 512,
+exception checks, and independent idempotency checks. All 36 outputs match:
 
-The staged probe-placement changes remain intact. The additional rule fix gives
-flowing parser-owned collections the existing closing-delimiter attachment
-contract. Fit probes reserve the closer's width, so the final item wraps with
-`]` instead of leaving it on a separate line. Balanced collections retain their
-existing shape, and line-breaking comments still force a boundary.
-
-Coverage includes a proof moved into a deeper alternative, a closing bracket
-after a line comment, fitting semicolon runs, preservation, and idempotency.
-No renderer change, syntax-specific exception, or rule API is added.
-
-Final light checks passed on pristine inputs with automatic worker counts:
-
-| Project | Scope | Formatter/check time | Changes from delimiter candidate |
+| Cascading clauses | Baseline formatter time | Candidate formatter time | Reduction |
 | --- | --- | --- | --- |
-| GraphQL | 280 files, width 90 | 53s | 0 |
-| quantum | 20 owned files; 1 unowned skipped, width 90 | 41s | 0 |
-| CSLib | 200 files, width 100 | 132s | 0 |
-| Mathlib | 98 files, width 100 | 191.37s | 16 |
+| 32 | 230.5ms | 183.5ms | 20.4% |
+| 64 | 518.5ms | 428ms | 17.5% |
+| 128 | 1,245ms | 1,093ms | 12.2% |
+
+Values are means of two samples per binary, excluding environment startup.
+Ordinary and short-comment controls remain within 2ms of the baseline means.
+The larger chain still grows faster than linearly; this checkpoint does not
+close cascading retry cost. Native prefix replay advances its completed
+checkpoint, but still collects info trees. That flag is observable to command
+elaborators; disabling it is not automatically semantics-preserving. Lean's
+minimal command-line snapshots discard syntax, parser state, and command scope
+needed by our parser, so they are not a compatible bookkeeping shortcut either.
+Required prefix elaboration remains unchanged, not an optimization claimed here.
+
+The complete local gate passed: build, unit suite, linter, fixture regeneration,
+self-formatting, and final dry checks. Generated fixtures are unchanged; reviewed
+self-format edits affect only the new code. The added info-state observer agrees
+with Lean's frontend, preserves code, elaborates, and remains idempotent.
+
+Light validation passed on pristine inputs with automatic worker counts:
+
+| Project | Scope and width | Baseline checks | Candidate checks | Output differences |
+| --- | --- | --- | --- | --- |
+| GraphQL | 280 files, width 90 | 53s | 54s | 0 |
+| quantum | 20 owned files, width 90 | 41s | 42s | 0 |
+| CSLib | 200 files, width 100 | 132s | 116s | 0 |
+| Mathlib | 98 files, width 100 | 191.37s | 174.49s | 0 |
 
 Preservation, actionable-overflow, idempotency, and fallback checks passed;
-Mathlib missing-rule checks also passed. All 16 Mathlib policy-change diffs were
-reviewed: every added line matches an authored source line apart from indentation.
-Protected tactic runs, headers, and continuations retain their source layout.
-`Mathlib/Algebra/Module/PID.lean:199` keeps its complete semicolon line at 102
-characters, with no formatting exception. Its surrounding fitting header also
-stays protected. The earlier flowing-delimiter improvements remain intact.
+Mathlib missing-rule checks also passed. Quantum's one unowned source remains
+skipped. All four comparison patches are empty, including Mathlib's comparison
+against the committed protected-line output. Protected shared lines and flowing
+delimiters retain exactly that baseline's formatting.
 
-An isolated before/after/after/before comparison on pristine `PID.lean` passed
-all checks. Mean user CPU time was 8.33s before and 8.52s after, a 2.3% difference.
-Wall samples were 17.20s/10.84s/10.79s/10.63s; the first baseline run dominates
-the wall average, so these do not establish a speedup or project-wide scaling.
-
-Target-project builds and the complete Mathlib sweep were omitted in this final
-light gate. Mathlib has 40 differences from the older build baseline, rather
-than just the 16 policy-change differences above. Do not treat either
-interrupted full validation attempt as a completed release gate.
+Project times cover formatter/check phases, excluding compatible-formatter builds
+and checkpoint setup. Mathlib user CPU was 929.39s versus 964.81s previously.
+These single project runs show no regression, but are not controlled speedup
+measurements like the alternating stress runs above. Target-project builds and
+the complete Mathlib sweep were omitted; the release gate below remains open.
 
 ### Next checkpoint: complete release gate
 
@@ -138,29 +140,27 @@ Passing does not mean every protected physical line fits width 100.
 
 ## Evidence
 
-The staged snapshot remains `.scratch/release-probe-placement/staged.patch`,
-SHA256 `b84a7cb1e783a26ebbe2456e3c885b6b942b41aead20a5c9cb54cb9b8a4a5001`.
-Its rebuilt formatter under `.scratch/recovery-staged-baseline/` exactly matches
-SHA256 `91928d3987f91bcf8df929f8250ffddd58f30efffd4326725115f163f8979ba3`.
-
-The delimiter-only comparison baseline is `.scratch/bracket-checkpoint-fmt`, SHA256
-`43fe39228410c8561417dc4320bcd82d736e27f1e714e70edb8d08192194b571`.
-The final formatter is frozen as `.scratch/protected-lines-fmt`, SHA256
+The committed baseline is `ac5b1db`, frozen as
+`.scratch/protected-lines-fmt`, SHA256
 `4e20c39fe1ae940d589b5555ccad99a12c946ad2f27c2a7fa4263cafc4ab95fa`.
-The complete local gate is recorded in `.scratch/protected-lines-check-final.log`;
-fixture regeneration and self-format checks are in
-`.scratch/protected-lines-fixtures.log` and `.scratch/protected-lines-self.log`.
-External logs and review patches are under `.scratch/protected-lines-validation/`.
-Its Mathlib `bracket-comparison/review.patch` isolates the shared-line policy
-change from the delimiter-only candidate. Mathlib output remains staged under
-`.scratch/external-validation-release/mathlib/.lake/leanfmt-protected-lines/`.
-Isolated timing logs are under `.scratch/protected-line-performance/`.
+The candidate is `.scratch/trivia-cost-fmt`, SHA256
+`a3a5ab5766d011a9786ff88df06e54403b1a0f2d69e8ec7d59e9941a87c37105`.
 
-Interrupted full-gate logs, output snapshots, and review patches are under
-`.scratch/release-probe-placement/` and `.scratch/release-recovery-consistency/`.
-The latter candidate's semicolon changes were withdrawn; its timings and full
-CSLib build do not by themselves validate the final subset.
-The semicolon reproduction and trace are
-`.scratch/ReviewSemicolonRecovery.lean` and
-`.scratch/release-probe-placement/semicolon-peer-review.log`.
-External formatting output is never the source of a formatter fix.
+The alternating stress runner is `.scratch/ProfileTriviaCost.sh`; its pristine
+inputs, formatted outputs, and phase/wall/CPU logs are retained under
+`.scratch/trivia-cost-performance/`. Local logs are
+`.scratch/trivia-cost-unit.log`, `.scratch/trivia-cost-local.log`, and
+`.scratch/trivia-cost-final.log`.
+
+Light external logs and review patches are under
+`.scratch/trivia-cost-validation/`. Compare Mathlib against
+`.scratch/external-validation-release/mathlib/.lake/leanfmt-protected-lines/`,
+not the older build baseline. The current output remains staged under
+`.scratch/external-validation-release/mathlib/.lake/leanfmt-trivia-cost/`.
+The empty `mathlib/protected-lines-comparison/review.patch` is the checkpoint
+comparison; the default Mathlib review patch still compares against the older
+build baseline and contains its existing 40 differences.
+
+Interrupted full-gate logs remain under `.scratch/release-probe-placement/`
+and `.scratch/release-recovery-consistency/`. Neither is a completed release
+gate for this candidate. External output is never the source of a formatter fix.

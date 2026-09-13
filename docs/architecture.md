@@ -141,6 +141,10 @@ Formatting a file follows this pipeline:
    tasks and diagnostics; it is not a selective source-dependency API. Replacing
    declarations with headers, skipping attributes, or guessing dependencies is not
    part of the parser recovery contract.
+   Info-tree collection is also observable through command state. Disabling it
+   is not an assumed semantics-preserving optimization. Lean's minimal command-line
+   snapshots discard the parsed syntax, parser state, and command scopes that
+   prefix recovery needs; those snapshots cannot replace the complete state here.
    Repeated parsing and idempotency cannot independently detect a shared environment
    error. Parser-boundary regressions therefore compare with Lean's complete frontend
    and check elaboration of both original and formatted source. No selective-dependency
@@ -446,6 +450,13 @@ block depth and stopping at a line comment or a newline inside a block. They do
 not normalize, decode, or reconstruct comment text. CR and LF both force a break
 inside a block; line endings outside comments do not. ASCII delimiter bytes cannot
 occur inside a multibyte UTF-8 character.
+
+Trivia cleanup and inline-comment emission use the same delimiter property to
+retain complete comment slices rather than decode, reverse, and reconstruct their
+characters. One scan locates whitespace and comment runs; nested block depth and
+line-comment termination determine the slice endpoints. Only whitespace outside
+comments is normalized, after the existing CRLF/CR normalization. This changes
+allocation cost, not comment ownership, fit decisions, or retry feedback.
 
 After an owner's first failed attempt, retries also share a bounded cache of
 canonical source-layout facts. It is built from that owner's prepared tree before

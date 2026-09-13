@@ -19035,44 +19035,95 @@ def assertAsciiBoundaryScans : IO Unit := do
       ((text.replace "\r\n" "\n").replace "\r" "\n")
       (Formatter.SpaceRules.normalizeLineEndings text)
 
+private partial def referenceLineComment (reversed : List Char)
+    : List Char → List Char × List Char
+  | [] => (reversed.reverse, [])
+  | chars@('\n' :: _) => (reversed.reverse, chars)
+  | char :: rest => referenceLineComment (char :: reversed) rest
+
+private partial def referenceBlockComment (depth : Nat) (reversed : List Char)
+    : List Char → List Char × List Char
+  | [] => (reversed.reverse, [])
+  | '/' :: '-' :: rest =>
+      referenceBlockComment (depth + 1) ('-' :: '/' :: reversed) rest
+  | '-' :: '/' :: rest =>
+      let reversed := '/' :: '-' :: reversed
+      if depth == 1 then
+        (reversed.reverse, rest)
+      else
+        referenceBlockComment (depth - 1) reversed rest
+  | char :: rest => referenceBlockComment depth (char :: reversed) rest
+
+private partial def referenceNormalizeTrivia
+    (normalizeWhitespace : String → String) (outside : List Char)
+    : List Char → List String
+  | [] => [normalizeWhitespace (String.ofList outside.reverse)]
+  | '-' :: '-' :: rest =>
+      let (comment, rest) := referenceLineComment ['-', '-'] rest
+      normalizeWhitespace (String.ofList outside.reverse)
+      :: String.ofList comment
+      :: referenceNormalizeTrivia normalizeWhitespace [] rest
+  | '/' :: '-' :: rest =>
+      let (comment, rest) := referenceBlockComment 1 ['-', '/'] rest
+      normalizeWhitespace (String.ofList outside.reverse)
+      :: String.ofList comment
+      :: referenceNormalizeTrivia normalizeWhitespace [] rest
+  | char :: rest => referenceNormalizeTrivia normalizeWhitespace (char :: outside) rest
+
 private partial def referenceCommentForcesBreak : List Char → Bool
   | '-' :: '-' :: _ => true
   | '/' :: '-' :: rest =>
-      let (comment, rest) :=
-        Formatter.SpaceRules.takeBlockCommentTriviaAux 1 ['-', '/'] rest
+      let (comment, rest) := referenceBlockComment 1 ['-', '/'] rest
       (String.ofList comment).contains '\n' || referenceCommentForcesBreak rest
   | _ :: rest => referenceCommentForcesBreak rest
   | [] => false
 
+private def commentScanInputs : List String :=
+  Id.run do
+    let mut texts := [""]
+    let mut level := [""]
+    for _ in [:5] do
+      level :=
+        level.flatMap fun stem => [" ", "/", "-", "\n", "\r", "β", "\x00"].map (stem ++ ·)
+      texts := level ++ texts
+    for depth in [:8] do
+      let opening := String.join (List.replicate depth "/-")
+      let closing := String.join (List.replicate depth "-/")
+      for body
+          in [
+            "",
+            "--",
+            "-/-",
+            "\n",
+            "\r",
+            "\r\n",
+            "α∀𐀀",
+            "\u2028",
+            String.ofList (List.replicate 4096 'β')
+          ] do
+        for tail in ["", "\n", " -- note", " /-\rnote-/", "-", "/"] do
+          texts := (opening ++ body ++ closing ++ tail) :: texts
+    return texts
+
 def assertCommentBreakScan : IO Unit := do
-  let mut texts := [""]
-  let mut level := [""]
-  for _ in [:5] do
-    level :=
-      level.flatMap fun stem => [" ", "/", "-", "\n", "\r", "β", "\x00"].map (stem ++ ·)
-    texts := level ++ texts
-  for depth in [:8] do
-    let opening := String.join (List.replicate depth "/-")
-    let closing := String.join (List.replicate depth "-/")
-    for body
-        in [
-          "",
-          "--",
-          "-/-",
-          "\n",
-          "\r",
-          "\r\n",
-          "α∀𐀀",
-          "\u2028",
-          String.ofList (List.replicate 4096 'β')
-        ] do
-      for tail in ["", "\n", " -- note", " /-\rnote-/", "-", "/"] do
-        texts := (opening ++ body ++ closing ++ tail) :: texts
-  for text in texts do
+  for text in commentScanInputs do
     assertTrue "comment-break scan matches normalized nested-comment parsing"
       (Formatter.SpaceRules.commentForcesLineBreak text
         == referenceCommentForcesBreak
             (Formatter.SpaceRules.normalizeLineEndings text).toList)
+
+def assertTriviaNormalization : IO Unit := do
+  for text in commentScanInputs do
+    let normalized := Formatter.SpaceRules.normalizeLineEndings text
+    for normalizeWhitespace
+        in [
+          Formatter.SpaceRules.cleanWhitespaceTrivia,
+          Formatter.SpaceRules.collapseWhitespaceTrivia
+        ] do
+      let expected :=
+        String.join (referenceNormalizeTrivia normalizeWhitespace [] normalized.toList)
+      assertEq "trivia slices match character-based comment normalization"
+        expected (Formatter.SpaceRules.normalizeTrivia normalizeWhitespace text)
 
 def assertDeferredStructuralSpacing : IO Unit := do
   for trivia
@@ -19686,6 +19737,13 @@ def assertParserCommandsObserveCompletePrefix (env : Lean.Environment) : IO Unit
       ("direct", declaration ++ observer),
       ("wrapped", declaration ++ "set_option maxRecDepth 2048 in\n" ++ observer),
       ("mutual dependency", "mutual\n" ++ declaration ++ "end\n" ++ observer),
+      (
+        "info-state observer",
+        declaration
+        ++ "run_cmd do\n"
+        ++ "  if (← getInfoState).enabled then\n"
+        ++ "    elabCommand (← `(notation:max \"branch%\" n:arg => Nat.succ n))\n"
+      ),
       (
         "overridden option command",
         "elab_rules : command\n"
@@ -22411,6 +22469,7 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertConditionalChainCommentOwnership env
   assertAsciiBoundaryScans
   assertCommentBreakScan
+  assertTriviaNormalization
   assertDeferredStructuralSpacing
   assertBoundaryWhitespaceEdges
   assertRuleSourceBreakQueries

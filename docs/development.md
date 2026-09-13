@@ -385,6 +385,9 @@ frontend; `assertFrontendElaborates` waits for all elaboration snapshots and che
 original and formatted input. Preservation and idempotency alone can agree on the same
 incomplete environment. Extending the quiet path requires auditing the actual command
 and macro implementations, including replacements, attributes, and scoped wrappers.
+The info-state observer case also checks syntax registered by a command that reads
+the native info-tree collection flag; treating that flag as invisible bookkeeping
+would change subsequent parsing.
 `assertMutualParserReplayIsDeferred` checks that eligible declaration blocks remain
 unelaborated until an observer needs them, then verifies actual theorem bodies and
 complete-frontend syntax parity. The custom-handler tests keep block, member, and
@@ -418,6 +421,14 @@ time lake exe fmt --check --recursive Some/Directory >/tmp/leanfmt-check.out 2>&
 ```
 
 When optimizing, keep a before/after measurement and validate with the normal checks.
+
+For comment-processing changes, `assertTriviaNormalization` compares slice-based
+cleanup with an independent character-based implementation. It covers exhaustive
+short delimiter combinations, nested and unterminated comments, mixed line endings,
+Unicode, and long comment bodies in both preserved-line and inline modes.
+Keep ordinary, short-comment, and cascading near-width conditional chains in
+32/64/128-clause performance comparisons. Compare identical outputs as well as
+timings: faster comment processing does not establish linear retry scaling.
 Avoid optimizing by moving syntax decisions into the renderer.
 
 ## Adding a formatting rule

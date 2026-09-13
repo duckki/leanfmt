@@ -51,63 +51,64 @@ def collapseNewlineRuns (text : String) : String :=
 def cleanWhitespaceTrivia (text : String) : String :=
   collapseNewlineRuns <| stripWhitespaceBeforeNewlines text
 
-partial def takeLineCommentTriviaAux (reversed : List Char)
-    : List Char → List Char × List Char
-  | [] => (reversed.reverse, [])
-  | chars@('\n' :: _) => (reversed.reverse, chars)
-  | char :: rest => takeLineCommentTriviaAux (char :: reversed) rest
-
-partial def takeBlockCommentTriviaAux (depth : Nat) (reversed : List Char)
-    : List Char → List Char × List Char
-  | [] => (reversed.reverse, [])
-  | '/' :: '-' :: rest =>
-      takeBlockCommentTriviaAux (depth + 1) ('-' :: '/' :: reversed) rest
-  | '-' :: '/' :: rest =>
-      let reversed := '/' :: '-' :: reversed
-      if depth == 1 then
-        (reversed.reverse, rest)
-      else
-        takeBlockCommentTriviaAux (depth - 1) reversed rest
-  | char :: rest => takeBlockCommentTriviaAux depth (char :: reversed) rest
-
-def pushNonemptyString (text : String) (pieces : List String) : List String :=
-  if text.isEmpty then pieces else text :: pieces
-
 def collapseWhitespaceTrivia (text : String) : String :=
   if text.isEmpty then "" else " "
 
-partial def normalizeTriviaAux
-    (normalizeWhitespace : String → String)
-    (outsideReversed : List Char) (piecesReversed : List String)
-    : List Char → List String
-  | [] =>
-      (pushNonemptyString
-        (normalizeWhitespace <| String.ofList outsideReversed.reverse)
-        piecesReversed).reverse
-  | '-' :: '-' :: rest =>
-      let outside := normalizeWhitespace <| String.ofList outsideReversed.reverse
-      let (comment, rest) := takeLineCommentTriviaAux ['-', '-'] rest
-      let piecesReversed :=
-        pushNonemptyString (String.ofList comment)
-        <| pushNonemptyString outside piecesReversed
-      normalizeTriviaAux normalizeWhitespace [] piecesReversed rest
-  | '/' :: '-' :: rest =>
-      let outside := normalizeWhitespace <| String.ofList outsideReversed.reverse
-      let (comment, rest) := takeBlockCommentTriviaAux 1 ['-', '/'] rest
-      let piecesReversed :=
-        pushNonemptyString (String.ofList comment)
-        <| pushNonemptyString outside piecesReversed
-      normalizeTriviaAux normalizeWhitespace [] piecesReversed rest
-  | char :: rest =>
-      normalizeTriviaAux normalizeWhitespace (char :: outsideReversed) piecesReversed rest
+private def blockCommentStop (bytes : ByteArray) (start : Nat) : Nat :=
+  Id.run do
+    let mut cursor := start
+    let mut depth := 1
+    while let some index :=
+            bytes.findIdx? (fun byte => byte == '/'.toUInt8 || byte == '-'.toUInt8)
+              cursor do
+      let byte := bytes[index]!
+      let next := bytes[index + 1]?.getD 0
+      if byte == '/'.toUInt8 && next == '-'.toUInt8 then
+        depth := depth + 1
+        cursor := index + 2
+      else if byte == '-'.toUInt8 && next == '/'.toUInt8 then
+        depth := depth - 1
+        if depth == 0 then return index + 2
+        cursor := index + 2
+      else
+        cursor := index + 1
+    return bytes.size
+
+def normalizeTrivia (normalizeWhitespace : String → String) (text : String) : String :=
+  Id.run do
+    let text := normalizeLineEndings text
+    let bytes := text.toByteArray
+    let mut start := 0
+    let mut cursor := 0
+    let mut pieces := #[]
+    -- ASCII comment delimiters are UTF-8 boundaries; retain comment slices verbatim.
+    while let some index :=
+            bytes.findIdx? (fun byte => byte == '/'.toUInt8 || byte == '-'.toUInt8)
+              cursor do
+      let byte := bytes[index]!
+      let next := bytes[index + 1]?.getD 0
+      if next == '-'.toUInt8 && (byte == '/'.toUInt8 || byte == '-'.toUInt8) then
+        let stop :=
+          if byte == '/'.toUInt8 then
+            blockCommentStop bytes (index + 2)
+          else
+            (bytes.findIdx? (· == '\n'.toUInt8) (index + 2)).getD bytes.size
+        pieces :=
+          pieces.push (normalizeWhitespace (SyntaxTree.sourceText text ⟨start⟩ ⟨index⟩))
+        pieces := pieces.push (SyntaxTree.sourceText text ⟨index⟩ ⟨stop⟩)
+        start := stop
+        cursor := stop
+      else
+        cursor := index + 1
+    pieces :=
+      pieces.push (normalizeWhitespace (SyntaxTree.sourceText text ⟨start⟩ ⟨bytes.size⟩))
+    return String.join pieces.toList
 
 def cleanTrivia (text : String) : String :=
-  String.join
-  <| normalizeTriviaAux cleanWhitespaceTrivia [] [] (normalizeLineEndings text).toList
+  normalizeTrivia cleanWhitespaceTrivia text
 
 def inlineCommentTrivia (text : String) : String :=
-  String.join
-  <| normalizeTriviaAux collapseWhitespaceTrivia [] [] (normalizeLineEndings text).toList
+  normalizeTrivia collapseWhitespaceTrivia text
 
 def commentForcesLineBreak (text : String) : Bool :=
   Id.run do -- Only ASCII delimiters matter; no comment text or normalized copy is needed.
