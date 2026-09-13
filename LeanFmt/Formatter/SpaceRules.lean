@@ -13,7 +13,8 @@ def isHorizontalWhitespace : Char → Bool
   | _ => false
 
 def normalizeLineEndings (text : String) : String :=
-  if text.contains '\r' then
+  -- ASCII delimiter bytes cannot occur inside a multibyte UTF-8 character.
+  if (text.toByteArray.findIdx? (· == '\r'.toUInt8)).isSome then
     (text.replace "\r\n" "\n").replace "\r" "\n"
   else
     text
@@ -458,10 +459,11 @@ def normalizeFinalNewline (text : String) : String :=
     withoutFinalWhitespace ++ "\n"
 
 def hasLineStructure (text : String) : Bool :=
-  text.contains '\n'
+  (text.toByteArray.findIdx? (· == '\n'.toUInt8)).isSome
 
 def hasCommentStart (text : String) : Bool :=
-  text.contains '-' && (containsSubstring text "--" || containsSubstring text "/-")
+  (text.toByteArray.findIdx? (· == '-'.toUInt8)).isSome
+  && (containsSubstring text "--" || containsSubstring text "/-")
 
 def isCommentLexeme (text : String) : Bool :=
   text.startsWith "--" || text.startsWith "/-" || text.endsWith "-/"

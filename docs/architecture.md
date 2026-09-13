@@ -986,6 +986,18 @@ for declarations, bindings, lambdas, and alternatives do not return break points
 `:=`, `←`, or `=>`; they return an RHS break after the separator instead. The renderer
 does not inspect separator spelling. Accepted source breaks and computed rule breaks both
 become `pendingIndent?`; later rendering does not distinguish their origin.
+Rule-specific discovery queries the token boundary at each resolved break point directly,
+without intersecting two complete lists. Missing children do not introduce boundaries.
+The segment's leading boundary still uses the caller's last emitted token. Balanced
+layouts stop at the first retained source break, since that selects all rule breaks;
+only flow candidates calculate the individual retained-break indentations. Both paths
+use the same eligibility predicate, including prefix attachment policy.
+
+ASCII line-ending and comment-marker prechecks use Lean's byte-array search. ASCII
+bytes cannot occur inside multibyte UTF-8 characters; this changes only the search
+implementation, not character-width measurement or comment classification. Line-ending
+helpers still distinguish raw LF checks from checks accepting either CR or LF.
+
 Blank-line trivia at an accepted break point is a source break too: the renderer
 retains one blank line while rebasing the following token to the rule-computed
 indentation instead of preserving its old absolute column.

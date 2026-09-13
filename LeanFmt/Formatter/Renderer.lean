@@ -67,7 +67,8 @@ def leadingWhitespace (line : String) : String :=
   (line.takeWhile SpaceRules.isHorizontalWhitespace).toString
 
 def hasLineBreakChar (text : String) : Bool :=
-  text.contains '\n' || text.contains '\r'
+  (text.toByteArray.findIdx?
+    fun byte => byte == '\n'.toUInt8 || byte == '\r'.toUInt8).isSome
 
 structure AppendedLines where
   lineBreakCount : Nat
@@ -1908,31 +1909,45 @@ def breakPointIndent
   let base := ruleBreakBase state segment plan baseColumn baseIndentation breakPoint
   breakIndent base.column base.indentation breakPoint
 
+def ruleRetainsSourceBreakAt
+    (state : RenderState) (segment : LineBreakRules.Segment)
+    (plan : LayoutPlan.Plan) (index : Nat)
+    : Bool :=
+  if plan.formatsOriginalLeadingBoundary index
+      && plan.keepsPrefixWithChildFirstLine index then
+    false
+  else if index == segment.start then
+    (sourceBreakBeforeSegmentStart? state segment).isSome
+  else if segment.start < index then
+    let boundary? := do
+      let right ← segment.child? index >>= SyntaxTree.Tree.firstToken?
+      let parentSegment := segment.slice 0 segment.stop
+      let leftIndex ← LineBreakRules.previousContentIndex? parentSegment index
+      let left ← segment.parentChild? leftIndex >>= SyntaxTree.Tree.lastToken?
+      some (left, right)
+    boundary?.any fun (left, right) => hasSourceBreakBetweenTokens state.source left right
+  else
+    false
+
 def sourceBreaksForRule?
     (state : RenderState) (segment : LineBreakRules.Segment)
     (plan : LayoutPlan.Plan)
     : Option (List SourceBreak) :=
   let sourceBreaks :=
-    sourceBreaksAllowedByBreakPointsInState state segment plan.breakPoints
-    |>.filter
-        fun sourceBreak =>
-          !(plan.formatsOriginalLeadingBoundary sourceBreak.index
-            && plan.keepsPrefixWithChildFirstLine sourceBreak.index)
+    plan.breakPoints.filterMap
+      fun breakPoint =>
+        if ruleRetainsSourceBreakAt state segment plan breakPoint.index then
+          some
+            {
+              index := breakPoint.index,
+              indent := breakPointIndent state segment plan breakPoint
+            }
+        else
+          none
   if sourceBreaks.isEmpty then
     none
   else
-    some
-    <| plan.breakPoints.filterMap
-        fun breakPoint =>
-          if sourceBreaks.any
-              fun sourceBreak => sourceBreak.index == breakPoint.index then
-            some
-              {
-                index := breakPoint.index,
-                indent := breakPointIndent state segment plan breakPoint
-              }
-          else
-            none
+    some sourceBreaks
 
 /-! ## Flow rendering decisions -/
 
@@ -2400,12 +2415,17 @@ mutual
         state.commitLayoutProbe probe
       else
         renderRuleLayout state segment plan stopAfterBrokenJoin
-    match sourceBreaksForRule? state segment plan with
-    | some sourceBreaks =>
-        if !plan.isFlow then
-          renderBalancedSegment state segment plan
-            (stopAfterBrokenJoin := stopAfterBrokenJoin)
-        else
+    if !plan.isFlow then
+      if plan.breakPoints.any
+          fun breakPoint =>
+            ruleRetainsSourceBreakAt state segment plan breakPoint.index then
+        renderBalancedSegment state segment plan
+          (stopAfterBrokenJoin := stopAfterBrokenJoin)
+      else
+        renderFlatOrRuleLayout ()
+    else
+      match sourceBreaksForRule? state segment plan with
+      | some sourceBreaks =>
           match renderFlowSegmentWithSourceBreaks? state segment sourceBreaks with
           | some rendered =>
               if renderedCandidateFits state rendered then
@@ -2418,7 +2438,7 @@ mutual
                 renderRuleLayout state segment plan stopAfterBrokenJoin
               else
                 renderFlatOrRuleLayout ()
-    | none => renderFlatOrRuleLayout ()
+      | none => renderFlatOrRuleLayout ()
 
   partial def renderNestedSegment
       (state : RenderState) (segment : LineBreakRules.Segment) (index : Nat)

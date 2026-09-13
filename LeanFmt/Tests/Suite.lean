@@ -18643,6 +18643,121 @@ def assertConditionalChainCommentOwnership (env : Lean.Environment) : IO Unit :=
       ] do
     check label source source
 
+def assertAsciiBoundaryScans : IO Unit := do
+  let unicode := "α∀⟨𐀀⟩"
+  for byte in [:256] do
+    let middle := String.singleton (Char.ofNat byte)
+    for text
+        in [
+          middle,
+          unicode ++ middle,
+          middle ++ unicode,
+          unicode ++ "/" ++ middle ++ unicode,
+          unicode ++ middle ++ "-" ++ unicode
+        ] do
+      assertTrue "ASCII line-feed search preserves character semantics"
+        (Formatter.SpaceRules.hasLineStructure text == text.contains '\n')
+      assertTrue "ASCII line-ending search preserves character semantics"
+        (Formatter.hasLineBreakChar text == (text.contains '\n' || text.contains '\r'))
+      assertTrue "ASCII comment search preserves character semantics"
+        (Formatter.SpaceRules.hasCommentStart text
+          == (text.contains "--" || text.contains "/-"))
+      assertEq "ASCII carriage-return search preserves normalization"
+        ((text.replace "\r\n" "\n").replace "\r" "\n")
+        (Formatter.SpaceRules.normalizeLineEndings text)
+  for text
+      in [
+        "",
+        "\r\n",
+        "\r\r\n",
+        "\n\r",
+        unicode ++ "\r\n" ++ unicode,
+        String.ofList (List.replicate 512 'x') ++ "\r\n"
+      ] do
+    assertEq "mixed and trailing line endings normalize identically"
+      ((text.replace "\r\n" "\n").replace "\r" "\n")
+      (Formatter.SpaceRules.normalizeLineEndings text)
+
+def assertRuleSourceBreakQueries : IO Unit := do
+  for trivia
+      in [" ", "\n", "\r", "\r\n", " -- note\n", " /- inline -/ ", " /-\n block -/ "] do
+    let source := "a" ++ trivia ++ "β c\n d"
+    let secondStart := ("a" ++ trivia).utf8ByteSize
+    let first := tokenAt "a" ⟨0⟩ ⟨1⟩
+    let second := tokenAt "β" ⟨secondStart⟩ ⟨secondStart + 2⟩
+    let third := tokenAt "c" ⟨secondStart + 3⟩ ⟨secondStart + 4⟩
+    let fourth := tokenAt "d" ⟨secondStart + 6⟩ ⟨secondStart + 7⟩
+    let tree : SyntaxTree.Tree :=
+      .node .application
+        #[
+          .leaf first,
+          .missing,
+          .node (.raw `null) #[],
+          .node (.raw `null) #[.missing, .leaf second],
+          .missing,
+          .leaf third,
+          .leaf fourth
+        ]
+    let whole := Formatter.LineBreakRules.Segment.ofTree tree
+    for start in [:whole.stop + 1] do
+      for stop in [start:whole.stop + 1] do
+        let segment := whole.slice start stop
+        let indexes := List.range (whole.stop + 2)
+        for order in [indexes, indexes.reverse, indexes ++ indexes] do
+          for (suppressPrefix, lastToken?)
+              in [(false, none), (false, some first), (true, none), (true, some first)] do
+            let plan := Formatter.LayoutPlan.resolve {} segment
+            let plan :=
+              {
+                plan with
+                  breakPoints :=
+                    order.map fun index => { index, indentLevels := index % 3 }
+                  children :=
+                    if suppressPrefix then
+                      [{
+                        index := 3
+                        prefixPolicy := .keepWithChildFirstLine
+                        originalLeading := .formatWithParent
+                      }]
+                    else
+                      []
+              }
+            let state : Formatter.RenderState :=
+              {
+                source,
+                sourceMap := SyntaxTree.SourcePositionMap.ofString source
+                lastToken?,
+                segmentBaseColumn := 3,
+                segmentIndentation := 2
+              }
+            let retained :=
+              Formatter.sourceBreaksAllowedByBreakPointsInState state segment
+                plan.breakPoints
+              |>.filter
+                  fun sourceBreak =>
+                    !(plan.formatsOriginalLeadingBoundary sourceBreak.index
+                      && plan.keepsPrefixWithChildFirstLine sourceBreak.index)
+            let expected :=
+              plan.breakPoints.filterMap
+                fun breakPoint =>
+                  if retained.any (·.index == breakPoint.index) then
+                    some
+                      {
+                        index := breakPoint.index,
+                        indent := Formatter.breakPointIndent state segment plan breakPoint
+                      }
+                  else
+                    none
+            let expected := if retained.isEmpty then none else some expected
+            assertTrue "direct source-break queries match complete discovery"
+              (Formatter.sourceBreaksForRule? state segment plan == expected)
+            assertTrue "balanced source-break existence matches flow discovery"
+              ((plan.breakPoints.any
+                  fun breakPoint =>
+                    Formatter.ruleRetainsSourceBreakAt state segment plan
+                      breakPoint.index)
+                == expected.isSome)
+
 def assertConditionalJoinFeedback (env : Lean.Environment) : IO Unit := do
   let comment :=
     "/- This single line block comment occupies nearly all of the available space on this line. -/"
@@ -21795,6 +21910,8 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertElseIfContinuesOnElseLine env
   assertElseIfChainBreaksThenBranchesTogether env
   assertConditionalChainCommentOwnership env
+  assertAsciiBoundaryScans
+  assertRuleSourceBreakQueries
   assertConditionalJoinFeedback env
   assertDoConditionalPreservation env
   assertDoConditionalsFitBeforeBreaking env
