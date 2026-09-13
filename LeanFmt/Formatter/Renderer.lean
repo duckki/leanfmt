@@ -243,41 +243,78 @@ partial def withAlternative
             child.withAlternative source (alternatives[index]?.getD .unchanged)
       .node (resolveSummary source summary none children) children
 
+/-- Canonical source facts only: no retry descriptors or emission-policy overrides.
+Entries are scoped to one source and checked against the complete tree on lookup. -/
+abbrev Cache := Std.HashMap (Nat × Nat) (Array (SyntaxTree.Tree × TreeLayoutFacts))
+
+private def cached? (cache : Cache) (tree : SyntaxTree.Tree)
+    : Option TreeLayoutFacts := do
+  if cache.isEmpty then none
+  let first ← tree.firstToken?
+  let last ← tree.lastToken?
+  let entries ← cache[(first.span.start.byteIdx, last.span.stop.byteIdx)]?
+  let (_, facts) ← entries.find? fun (original, _) => original == tree
+  some facts
+
 partial def ofTree (source : String) (tree : SyntaxTree.Tree)
     (boundaries : SourceBoundary.Cache := {})
+    (cache : Cache := {})
     : TreeLayoutFacts :=
-  match tree with
-  | .missing => .node {} #[]
-  | .leaf token =>
-      let token? := if token.lexeme.isEmpty then none else some token
-      let sourceToken? :=
-        if SyntaxTree.tokenComesFromSource source token then some token else none
-      .node
-        {
-          firstToken? := token?,
-          lastToken? := token?
-          firstSourceToken? := sourceToken?,
-          lastSourceToken? := sourceToken?
-        }
-        #[]
-  | .node _ children =>
-      let childFacts := children.map fun child => ofTree source child boundaries
-      let firstToken? := childFacts.findSome? fun child => child.summary.firstToken?
-      let lastToken? := childFacts.findSomeRev? fun child => child.summary.lastToken?
-      let boundaries := childFacts.foldl (BoundaryFold.push source boundaries) {}
-      let originalPlan? := OriginalTree.plan? tree
-      .node
-        (resolveSummary source
+  if let some facts := cached? cache tree then
+    facts
+  else
+    match tree with
+    | .missing => .node {} #[]
+    | .leaf token =>
+        let token? := if token.lexeme.isEmpty then none else some token
+        let sourceToken? :=
+          if SyntaxTree.tokenComesFromSource source token then some token else none
+        .node
           {
-            containsCommentForcedBreak := boundaries.containsCommentForcedBreak
-            containsLineCommentForcedBreak := boundaries.containsLineCommentForcedBreak
-            firstToken?
-            lastToken?
-            firstSourceToken? := boundaries.firstSourceToken?
-            lastSourceToken? := boundaries.lastSourceToken?
+            firstToken? := token?,
+            lastToken? := token?
+            firstSourceToken? := sourceToken?,
+            lastSourceToken? := sourceToken?
           }
-          originalPlan? childFacts)
-        childFacts
+          #[]
+    | .node _ children =>
+        let childFacts := children.map fun child => ofTree source child boundaries cache
+        let firstToken? := childFacts.findSome? fun child => child.summary.firstToken?
+        let lastToken? := childFacts.findSomeRev? fun child => child.summary.lastToken?
+        let boundaries := childFacts.foldl (BoundaryFold.push source boundaries) {}
+        let originalPlan? := OriginalTree.plan? tree
+        .node
+          (resolveSummary source
+            {
+              containsCommentForcedBreak := boundaries.containsCommentForcedBreak
+              containsLineCommentForcedBreak := boundaries.containsLineCommentForcedBreak
+              firstToken?
+              lastToken?
+              firstSourceToken? := boundaries.firstSourceToken?
+              lastSourceToken? := boundaries.lastSourceToken?
+            }
+            originalPlan? childFacts)
+          childFacts
+
+/-- Capture a bounded cache before applying any rendering alternatives. New retry
+groupings are never added, so cache size cannot grow with the number of retries. -/
+partial def cacheOfTree (source : String) (tree : SyntaxTree.Tree)
+    (boundaries : SourceBoundary.Cache := {})
+    : Cache :=
+  collect tree (ofTree source tree boundaries) {}
+where
+  collect (tree : SyntaxTree.Tree) (facts : TreeLayoutFacts) (cache : Cache) : Cache :=
+    let cache :=
+      match facts.summary.firstToken?, facts.summary.lastToken? with
+      | some first, some last =>
+          let key := (first.span.start.byteIdx, last.span.stop.byteIdx)
+          cache.insert key ((cache[key]?.getD #[]).push (tree, facts))
+      | _, _ => cache
+    match tree, facts with
+    | .node _ children, .node _ childFacts =>
+        (children.zip childFacts).foldl
+          (fun cache (child, facts) => collect child facts cache) cache
+    | _, _ => cache
 
 private def withRetryOwner (facts : TreeLayoutFacts) (path : List Nat)
     (owner : LayoutTree.RetryOwner)
@@ -291,10 +328,11 @@ private def withRetryOwner (facts : TreeLayoutFacts) (path : List Nat)
       | some child =>
           .node summary (children.set! index (child.withRetryOwner rest owner))
 
-def ofPrepared (source : String) (view : LayoutTree.Prepared) : TreeLayoutFacts :=
+def ofPrepared (source : String) (view : LayoutTree.Prepared) (cache : Cache := {})
+    : TreeLayoutFacts :=
   view.retryOwners.foldl
     (fun facts (path, owner) => facts.withRetryOwner path owner)
-    (ofTree source view.tree view.boundaries)
+    (ofTree source view.tree view.boundaries cache)
 
 end TreeLayoutFacts
 
@@ -318,6 +356,7 @@ structure RenderState where
   source : String
   sourceMap : SyntaxTree.SourcePositionMap
   layoutFacts? : Option TreeLayoutFacts := none
+  retryFacts : TreeLayoutFacts.Cache := {}
   guardedJoins : Std.HashSet Nat := {}
   brokenJoins : Std.HashSet Nat := {}
   output : String := ""
@@ -2223,17 +2262,26 @@ mutual
     else
       let disabled := broken.fold (fun acc key => acc.insert key) owner.disabled
       let view := LayoutTree.prepare state.source owner.tree disabled owner.boundaries
+      let retryFacts :=
+        if state.retryFacts.isEmpty then
+          TreeLayoutFacts.cacheOfTree state.source segment.parent owner.boundaries
+        else
+          state.retryFacts
       let rendered :=
         renderSegment
           {
             state with
-              layoutFacts? := some (TreeLayoutFacts.ofPrepared state.source view)
+              layoutFacts? :=
+                some (TreeLayoutFacts.ofPrepared state.source view retryFacts)
+              retryFacts
               guardedJoins := state.guardedJoins.filter fun key => !broken.contains key
           }
           (LineBreakRules.Segment.ofTree view.tree)
       {
         rendered with
-          guardedJoins := state.guardedJoins, layoutFacts? := state.layoutFacts?
+          guardedJoins := state.guardedJoins,
+          layoutFacts? := state.layoutFacts?
+          retryFacts := state.retryFacts
       }
 
   partial def renderSegmentCore (state : RenderState) (segment : LineBreakRules.Segment)

@@ -145,6 +145,14 @@ Formatting a file follows this pipeline:
    error. Parser-boundary regressions therefore compare with Lean's complete frontend
    and check elaboration of both original and formatted source. No selective-dependency
    scheduler or cross-source parser-state cache is implemented.
+   Lean 4.33.1's optional old command snapshots reuse elaboration only across an
+   unchanged source prefix, comparing syntax with source information and trailing
+   trivia. The first changed command invalidates downstream snapshots. Formatting
+   commonly changes that prefix, and an opaque command can inspect the complete
+   file map, not just its preceding text. Snapshot reuse therefore does not provide
+   a general shortcut for required prefix elaboration. The independent idempotency
+   pass must execute command elaborators again; cached final modules serve the
+   other diagnostics, not that independent parse.
    The CLI selects the environment from the source import header before parsing.
    A successful parse with fewer imports cannot establish equivalent syntax: an
    imported keyword can otherwise parse as an identifier and an operator. Only
@@ -426,6 +434,17 @@ keyed by both UTF-8 source endpoints. The prepared view, its retry descriptors,
 and layout-fact construction share this immutable, module-local cache. It stores
 no width, placement, indentation, or fit decisions and is never reused for a
 different source. Boundaries outside the cache retain direct classification.
+
+After an owner's first failed attempt, retries also share a bounded cache of
+canonical source-layout facts. It is built from that owner's prepared tree before
+retry descriptors or proof-island policy overrides are attached. Source endpoint
+pairs select candidate entries; complete tree equality verifies the kind, grouping,
+tokens, and trivia before reuse. Same-span wrappers are distinct candidates.
+Newly grouped nodes compute fresh summaries, and each prepared view attaches fresh
+retry descriptors. The cache never stores output, placement, fit results, or
+alternative emission policies, and retries do not add entries. Nested retries
+inherit it; returning from the owner restores the enclosing cache. Owners whose
+first attempt succeeds do not allocate this cache.
 
 When a complete owner reports a newly split join, rendering retries that owner
 from its unchanged incoming state and original tree, with the join disabled.

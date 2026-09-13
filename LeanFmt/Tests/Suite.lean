@@ -8183,6 +8183,57 @@ def assertResolvedIslandFactsDriveProbes : IO Unit := do
   assertTrue "fit probes use the same structural alternative as emission"
     (Formatter.probeLayoutWithoutRuleBreaks? structuralState segment).isSome
 
+private partial def layoutFactsSnapshot (facts : Formatter.TreeLayoutFacts) : String :=
+  match facts with
+  | .node summary children =>
+      reprStr summary
+      ++ "["
+      ++ ";".intercalate (children.toList.map layoutFactsSnapshot)
+      ++ "]"
+
+def assertSourceLayoutFactsCache : IO Unit := do
+  let source := "first   second third"
+  let first := SyntaxTree.Tree.leaf (syntheticIdentTokenAt "first" 0 5)
+  let second := SyntaxTree.Tree.leaf (syntheticIdentTokenAt "second" 8 14)
+  let third := SyntaxTree.Tree.leaf (syntheticIdentTokenAt "third" 15 20)
+  let body := SyntaxTree.Tree.node (.raw `null) #[first, second]
+  let proof := SyntaxTree.Tree.node (.proofBody false) #[body]
+  let tree := SyntaxTree.Tree.node (.raw `null) #[proof, .missing, third]
+  let cache := Formatter.TreeLayoutFacts.cacheOfTree source tree
+  assertTrue "same-span wrappers occupy distinct cache entries"
+    ((cache[(0, 14)]?.getD #[]).size == 2)
+  assertTrue "the source-facts cache has at most one entry per nonempty node"
+    (cache.fold (fun count _ entries => count + entries.size) 0 == 6)
+  let variants :=
+    #[
+      tree,
+      proof,
+      body,
+      first,
+      .missing,
+      .node (.raw `null) #[body, .missing, third],
+      .node (.raw `null) #[first, .node (.raw `null) #[second, third]],
+      .node (.raw `null) #[.leaf (syntheticIdentTokenAt "other" 0 5), second]
+    ]
+  for variant in variants do
+    assertEq "cached facts check complete tree shape, kind, and tokens"
+      (layoutFactsSnapshot (Formatter.TreeLayoutFacts.ofTree source variant))
+      (layoutFactsSnapshot (Formatter.TreeLayoutFacts.ofTree source variant {} cache))
+  let canonical := Formatter.TreeLayoutFacts.ofTree source tree {} cache
+  let structural :=
+    canonical.withAlternative source
+      (.structural #[.structural #[.unchanged], .unchanged, .unchanged])
+  assertTrue "the fixture exercises a protected source island"
+    (canonical.summary.startsWithOriginalEmission
+      && !structural.summary.startsWithOriginalEmission)
+  assertEq "a proof-island alternative does not mutate canonical cached facts"
+    (layoutFactsSnapshot canonical)
+    (layoutFactsSnapshot (Formatter.TreeLayoutFacts.ofTree source tree {} cache))
+  for (_, entries) in cache.toList do
+    for (_, facts) in entries do
+      assertTrue "canonical cache entries contain no retry descriptors"
+        facts.summary.retryOwner?.isNone
+
 def assertSourceIslandRecoveryPreservesNeighbors (env : Lean.Environment) : IO Unit := do
   let header :=
     "theorem selectiveRecovery (t : Nat) : True := by\n"
@@ -18891,6 +18942,13 @@ def assertConditionalJoinFeedback (env : Lean.Environment) : IO Unit := do
   assertTrue "cached source facts do not change disabled-join preparation"
     (refreshed.tree == uncached.tree
       && refreshed.guardedJoins.size == uncached.guardedJoins.size)
+  let cache :=
+    Formatter.TreeLayoutFacts.cacheOfTree cascadeSource view.tree view.boundaries
+  for prepared in [view, refreshed] do
+    assertEq "reprepared owners receive fresh retry metadata with cached source facts"
+      (layoutFactsSnapshot (Formatter.TreeLayoutFacts.ofPrepared cascadeSource prepared))
+      (layoutFactsSnapshot
+        (Formatter.TreeLayoutFacts.ofPrepared cascadeSource prepared cache))
   let some (path, _) := view.retryOwners[0]? | throw <| IO.userError "missing retry owner"
   let ownerTree :=
     path.foldl
@@ -18946,6 +19004,15 @@ def assertConditionalJoinFeedback (env : Lean.Environment) : IO Unit := do
     (rendered.brokenJoins.size == 1 && rendered.brokenJoins.contains 0)
   assertTrue "local retries restore the enclosing guard scope"
     (rendered.guardedJoins.size == view.guardedJoins.size)
+  assertTrue "local retries release their owner-scoped source facts"
+    rendered.retryFacts.isEmpty
+  let cached :=
+    Formatter.renderSegment { state with retryFacts := cache }
+      (Formatter.LineBreakRules.Segment.ofTree view.tree)
+  assertEq "nested retries reuse immutable facts without changing output"
+    rendered.output cached.output
+  assertTrue "nested retries do not accumulate facts for alternative groupings"
+    (cached.retryFacts.size == cache.size)
   let shortParsed ←
     SyntaxTree.parseModuleStringWithEnv env
       (cascadeSource.replace comment "/- note -/" |>.replace secondComment "/- note -/")
@@ -21782,6 +21849,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertExplicitLambdaKeepsPrefixMarker env
   assertHaveTermFormatting env
   assertResolvedIslandFactsDriveProbes
+  assertSourceLayoutFactsCache
   assertSourceIslandRecoveryPreservesNeighbors env
   assertMovedProofCollectionFitsWidth env
   assertHaveProofAfterInfixPreservesLayout env

@@ -19,10 +19,10 @@ Overlapping continuation tails still require repeated rendering when restoring
 one nested base makes the next comment join overflow. Owner-local retries,
 early exit from invalid retries, cached source boundaries, and direct neighbor
 lookups reduce the cost but do not establish linear scaling. The current candidate
-removes redundant source-break discovery and speeds up ASCII boundary scans.
-The 128-clause stress case now takes 1.720s at width 512, down from 1.929s on
-`66026ec`. Retain the 32/64/128-clause sample alongside routine measurements.
-Reusing accepted pieces inside an owner requires a separate renderer contract;
+also reuses canonical source-layout facts across owner retries. It does not cache
+accepted render pieces: their indentation and enclosing fit context can change.
+Retain the 32/64/128-clause sample alongside routine measurements. Eliminating the
+remaining repeated rendering requires a separate accepted-piece reuse contract;
 do not guess columns or split fitting later joins.
 This is a worst-case performance issue, not a known formatting failure.
 
@@ -37,70 +37,82 @@ Attributes, deriving handlers, wrappers, and unclassified commands still receive
 the complete preceding source state, including declaration bodies. Required
 replay dominates targeted Mathlib timings. Lean 4.33.1 has no audited
 source-dependency replay API. Do not skip proof bodies, guess dependencies, or
-add attribute exceptions. This cost is not a known formatting failure.
+add attribute exceptions. The audit found no duplicate completed-prefix replay
+within one parse. Native snapshot reuse needs unchanged syntax and source positions;
+it does not bypass the first changed declaration's required elaboration. Commands
+can also inspect the complete file source. Reusing final command state in the
+independent idempotency pass would weaken that check and is not allowed. No safe
+general shortcut was identified. This cost is not a known formatting failure.
 
 ## Progress
 
-### Current checkpoint: source-boundary query cost
+### Current checkpoint: immutable retry facts
 
-Balanced layouts test whether any source break is retained without calculating
-unused indentation for every break. Flow layouts query only their resolved break
-points. Both paths share one boundary predicate. ASCII delimiter prechecks use
-Lean's byte-array search; Unicode widths and comment semantics are unchanged.
-No syntax rules, ownership policy, or partial-render cache are added.
+Source-derived layout facts are cached after an owner's first failed attempt.
+Source spans select candidates, and complete tree equality checks grouping, kind,
+tokens, and trivia. Same-span wrappers remain distinct. The bounded cache contains
+no retry descriptors, alternative proof-island policies, output, or fit decisions.
+Nested retries reuse it without adding entries, and owner exit restores the
+enclosing cache. Fresh views attach fresh retry metadata. No formatting rule or
+ownership policy changes.
 
-Coverage compares direct queries with full source-break discovery across slices,
-missing children, reordered and repeated break points, prefix policies, comments,
-Unicode, and line endings. Byte searches are compared with character searches.
-All 3,024 source-break query combinations passed. The complete local gate passed,
-including both unit-suite runs, development lint, fixture regeneration and dry
-check, self-format and dry check, preservation, overflow, and idempotency. Fixtures
-and existing test expectations are unchanged; self-format touched only new code.
-All 3,360 whole-tree retry comparisons passed. The independent 84-case ownership
-oracle preserved output and syntax, elaborated, and converged idempotently.
+Focused coverage checks regrouped same-span trees, changed tokens, missing nodes,
+proof-island alternatives, fresh retry metadata, cache bounds, nested reuse, and
+scope restoration. The complete local gate passed, including both unit-suite runs,
+lint, fixture regeneration and dry check, self-format and dry check, preservation,
+overflow, and idempotency. Fixtures and existing expectations are unchanged;
+self-format touched only new code. All 3,360 reference-renderer comparisons passed.
+The independent 84-case ownership oracle preserved output and syntax, elaborated,
+and converged idempotently. External review and serial performance checks passed.
 
-Lightweight external validation passed from pristine sources with no diagnostic
-failures, including Mathlib missing-rule checks. Every reviewed output is identical
-to the preceding checkpoint:
+Lightweight external validation passed from pristine inputs with no diagnostic
+failures, including Mathlib missing-rule checks. Every output is identical to
+committed checkpoint `d3f35fd`:
 
 | Project | Scope | Formatter/check time | Changed output files |
 | --- | --- | --- | --- |
 | GraphQL | 280 files, width 90 | 45s | 0 |
-| quantum | 20 owned files; 1 unowned skipped, width 90 | 42s | 0 |
-| CSLib | 200 files, width 100 | 112s | 0 |
-| Mathlib | 38 files, width 100 | 101.39s | 0 |
+| quantum | 20 owned files; 1 unowned skipped, width 90 | 41s | 0 |
+| CSLib | 200 files, width 100 | 115s | 0 |
+| Mathlib | 38 files, width 100 | 101.43s | 0 |
 
 GraphQL and quantum used formatter builds compatible with Lean 4.33.0 and 4.32.0;
 those build times are omitted above. Target-project builds and the complete
 Mathlib sweep were omitted. No changed-module builds were needed because all
-review patches are empty. This is a validated lightweight checkpoint,
-not the release gate.
+review patches are empty. This is a lightweight checkpoint, not the release gate.
 
-Serial ABBA measurements on 13 identical Mathlib inputs compared the candidate
-with `66026ec`. Mean user CPU was 69.54s before and 69.73s after (+0.27%); mean
-wall time was 31.575s before and 30.185s after. No meaningful routine regression
-was observed. Width-512 cascading samples improved as follows:
+The final paired width-512 cascading samples against `d3f35fd` retained exact
+output and passed exception and idempotency checks:
 
 | Clauses | Before | After |
 | --- | --- | --- |
-| 32 | 311ms | 285ms |
-| 64 | 718ms | 635ms |
-| 128 | 1929ms | 1720ms |
+| 32 | 285ms | 261ms |
+| 64 | 649ms | 577ms |
+| 128 | 1760ms | 1427ms |
 
+An earlier paired run also improved the 128-clause case from 1750ms to 1387ms.
 Plain and fitting-comment controls remain at 19-21ms for 128 clauses. Simultaneous
-failure controls also retain exact output and idempotency (128 clauses: 937ms to
-816ms); their deliberately overlong comments make them a performance control,
-not a width gate. All cascading samples passed exception and idempotency checks
-with identical output. The deeper cascading retry issue remains open pending a
-separate reuse contract.
+failure controls retained exact output and idempotency (128 clauses: 824ms before,
+837ms after, +1.6%); their deliberately overlong comments make them performance
+controls, not a width gate.
 
-### Retry reuse design
+Serial ABBA measurements on 13 identical Mathlib inputs compared the candidate
+with `d3f35fd`. Mean user CPU was 69.125s before and 69.355s after (+0.33%); mean
+wall time was 30.295s before and 29.930s after. No meaningful routine performance
+regression was observed. The cache reduces cascading retry cost by about 19% in
+the final 128-clause sample, but does not eliminate repeated tail rendering.
+A separate paired 128-clause resource measurement reported maximum RSS of
+1,393,295,360 bytes before and 1,375,944,704 bytes after. This sample showed no
+peak-memory increase; it is not a general memory bound beyond the cache's
+structural entry-count limit.
 
-Establish which immutable layout facts can be reused when ownership changes,
-before considering accepted-render-piece reuse. Keep alternative proof-island
-policies and retry descriptors scoped correctly; cached facts must not retain
-stale grouping or disabled joins. Require exact output parity, simultaneous-failure
-controls, and cascading stress comparisons before adopting a larger cache.
+### Remaining performance work
+
+The immutable-facts contract is implemented. Do not extend it to partial output
+without specifying how changed grouping, indentation, trailing fit context,
+comments, feedback, and traces invalidate accepted pieces. Required prefix
+elaboration remains an explicit correctness constraint; further work needs an
+audited native dependency API or a separately reviewed parser contract change.
 
 ### Release gate
 
@@ -143,15 +155,16 @@ Successful validation does not mean every protected physical line fits width 100
 
 ## Evidence
 
-Current artifacts use `.scratch/retry-query-*`. External source snapshots,
+Current artifacts use `.scratch/retry-facts-*`. External source snapshots,
 changed-file lists, patches, and logs are under
-`.scratch/retry-query-validation/`. The focused Mathlib sample contains the
+`.scratch/retry-facts-validation/`. The focused Mathlib sample contains the
 36 existing safety-regression files plus both newly recovered proof examples.
-Paired performance runs use the saved `66026ec` executable and 13 identical
+Paired performance runs use the saved `d3f35fd` executable and 13 identical
 Mathlib sources. Final local results are in
-`.scratch/retry-query-check.log`; external results are in
-`.scratch/retry-query-external.log`. Stress evidence is under
-`.scratch/retry-query-stress/` and `.scratch/retry-query-uniform/`.
+`.scratch/retry-facts-check.log`; external results are in
+`.scratch/retry-facts-external.log`. Stress evidence is under
+`.scratch/retry-facts-stress/` and `.scratch/retry-facts-uniform/`; paired resource
+measurements are under `.scratch/retry-facts-memory/`.
 
 The recorded full-build baselines and batch logs are under
 `.scratch/external-validation-release/logs/`. They cover 200 CSLib files and
