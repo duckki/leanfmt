@@ -18,8 +18,9 @@ release-blocking only for Lean's standard library and Mathlib.
 Overlapping continuation tails still require repeated rendering when restoring
 one nested base makes the next comment join overflow. Owner-local retries,
 early exit from invalid retries, cached source boundaries, and direct neighbor
-lookups reduce the cost but do not establish linear scaling. The current candidate
-also reuses canonical source-layout facts across owner retries. It does not cache
+lookups reduce the cost but do not establish linear scaling. Canonical source facts
+are reused across retries. The current candidate also avoids whole-text character
+lists in boundary-edge and line-extent queries. It does not cache
 accepted render pieces: their indentation and enclosing fit context can change.
 Retain the 32/64/128-clause sample alongside routine measurements. Eliminating the
 remaining repeated rendering requires a separate accepted-piece reuse contract;
@@ -46,73 +47,81 @@ general shortcut was identified. This cost is not a known formatting failure.
 
 ## Progress
 
-### Current checkpoint: immutable retry facts
+### Current checkpoint: bounded boundary queries
 
-Source-derived layout facts are cached after an owner's first failed attempt.
-Source spans select candidates, and complete tree equality checks grouping, kind,
-tokens, and trivia. Same-span wrappers remain distinct. The bounded cache contains
-no retry descriptors, alternative proof-island policies, output, or fit decisions.
-Nested retries reuse it without adding entries, and owner exit restores the
-enclosing cache. Fresh views attach fresh retry metadata. No formatting rule or
-ownership policy changes.
+Leading and trailing whitespace queries stop after the one or two newline
+delimiters needed by the query. First-line width and last-line extraction scan
+only the relevant slice instead of constructing complete character lists.
+Unicode character widths, CRLF/CR handling, and horizontal whitespace semantics
+are unchanged. No new cache, syntax rule, or rendering state is added.
 
-Focused coverage checks regrouped same-span trees, changed tokens, missing nodes,
-proof-island alternatives, fresh retry metadata, cache bounds, nested reuse, and
-scope restoration. The complete local gate passed, including both unit-suite runs,
-lint, fixture regeneration and dry check, self-format and dry check, preservation,
-overflow, and idempotency. Fixtures and existing expectations are unchanged;
-self-format touched only new code. All 3,360 reference-renderer comparisons passed.
-The independent 84-case ownership oracle preserved output and syntax, elaborated,
-and converged idempotently. External review and serial performance checks passed.
+Coverage compares the five queries with the previous character-list definitions
+over 9,366 inputs: exhaustive short strings, mixed line endings, Unicode,
+non-horizontal Unicode whitespace, long comments, and comment boundaries.
+All 9,366 inputs passed. The complete local gate passed, including both unit-suite
+runs, lint, fixture regeneration and dry check, self-format and dry check,
+preservation, overflow, and idempotency. Fixtures and existing expectations are
+unchanged; self-format touched only the new test. All 3,360 reference-renderer
+comparisons passed. The independent 84-case ownership oracle preserved output
+and syntax, elaborated, and converged idempotently. Lightweight external checks
+and serial performance comparisons passed. The CSLib timing investigation below
+records a contended outlier separately from the final comparison.
 
 Lightweight external validation passed from pristine inputs with no diagnostic
 failures, including Mathlib missing-rule checks. Every output is identical to
-committed checkpoint `d3f35fd`:
+committed checkpoint `c9a7959`:
 
 | Project | Scope | Formatter/check time | Changed output files |
 | --- | --- | --- | --- |
 | GraphQL | 280 files, width 90 | 45s | 0 |
-| quantum | 20 owned files; 1 unowned skipped, width 90 | 41s | 0 |
-| CSLib | 200 files, width 100 | 115s | 0 |
-| Mathlib | 38 files, width 100 | 101.43s | 0 |
+| quantum | 20 owned files; 1 unowned skipped, width 90 | 43s | 0 |
+| CSLib | 200 files, width 100 | 151s | 0 |
+| Mathlib | 38 files, width 100 | 106.67s | 0 |
 
 GraphQL and quantum used formatter builds compatible with Lean 4.33.0 and 4.32.0;
 those build times are omitted above. Target-project builds and the complete
 Mathlib sweep were omitted. No changed-module builds were needed because all
 review patches are empty. This is a lightweight checkpoint, not the release gate.
 
-The final paired width-512 cascading samples against `d3f35fd` retained exact
-output and passed exception and idempotency checks:
+Final serial measurements compared the candidate with `c9a7959` on identical
+inputs. All width-512 cascading samples retained exact output and passed
+exception and idempotency checks:
 
 | Clauses | Before | After |
 | --- | --- | --- |
-| 32 | 285ms | 261ms |
-| 64 | 649ms | 577ms |
-| 128 | 1760ms | 1427ms |
+| 32 | 261ms | 235ms |
+| 64 | 578ms | 525ms |
+| 128 | 1424ms | 1306ms |
 
-An earlier paired run also improved the 128-clause case from 1750ms to 1387ms.
-Plain and fitting-comment controls remain at 19-21ms for 128 clauses. Simultaneous
-failure controls retained exact output and idempotency (128 clauses: 824ms before,
-837ms after, +1.6%); their deliberately overlong comments make them performance
-controls, not a width gate.
+An earlier run also improved the 128-clause sample from 1423ms to 1298ms.
+Plain and fitting-comment controls were unchanged at 18ms and 20ms for 128 clauses.
+Simultaneous-failure controls retained output and idempotency (128 clauses:
+827ms before, 732ms after). Their deliberately overlong comments make them
+performance controls, not a width gate.
 
-Serial ABBA measurements on 13 identical Mathlib inputs compared the candidate
-with `d3f35fd`. Mean user CPU was 69.125s before and 69.355s after (+0.33%); mean
-wall time was 30.295s before and 29.930s after. No meaningful routine performance
-regression was observed. The cache reduces cascading retry cost by about 19% in
-the final 128-clause sample, but does not eliminate repeated tail rendering.
-A separate paired 128-clause resource measurement reported maximum RSS of
-1,393,295,360 bytes before and 1,375,944,704 bytes after. This sample showed no
-peak-memory increase; it is not a general memory bound beyond the cache's
-structural entry-count limit.
+Serial ABBA measurements on 13 Mathlib inputs reported mean user CPU of 70.750s
+before and 69.995s after (-1.07%), with mean wall time of 32.765s before and
+30.680s after. No routine regression was observed in this sample. A separate
+100-file CSLib batch-2 comparison also passed every diagnostic check. Its first
+candidate sample overlapped high-CPU Lean 4.33.0 compiler processes, so the four-run
+wall-time mean cannot be used as an uncontended performance comparison. That
+sample took 170.59s; a candidate repeat took 91.59s, versus 98.27s for the first
+saved-formatter run.
+The final saved-formatter run took 89.29s. Comparing the final candidate/baseline
+pair, user CPU was 393.18s versus 391.24s (+0.50%), while summed per-file format
+time was 377.047s versus 378.843s (-0.47%). No meaningful routine regression was
+observed; the initial 151s CSLib validation total is retained above rather than
+replaced with a favorable repeat.
 
 ### Remaining performance work
 
-The immutable-facts contract is implemented. Do not extend it to partial output
-without specifying how changed grouping, indentation, trailing fit context,
-comments, feedback, and traces invalidate accepted pieces. Required prefix
-elaboration remains an explicit correctness constraint; further work needs an
-audited native dependency API or a separately reviewed parser contract change.
+The immutable-facts contract is implemented. A prefix can retain its tokens while
+its enclosing ancestor segment changes; current rules can inspect that entire
+segment. Do not reuse partial output without specifying these rule dependencies
+along with indentation, trailing fit context, comments, feedback, and traces.
+Required prefix elaboration remains an explicit correctness constraint; further
+work needs an audited native dependency API or a separately reviewed parser
+contract change.
 
 ### Release gate
 
@@ -155,16 +164,18 @@ Successful validation does not mean every protected physical line fits width 100
 
 ## Evidence
 
-Current artifacts use `.scratch/retry-facts-*`. External source snapshots,
+Current artifacts use `.scratch/retry-tail-*`. External source snapshots,
 changed-file lists, patches, and logs are under
-`.scratch/retry-facts-validation/`. The focused Mathlib sample contains the
+`.scratch/retry-tail-validation/`. The focused Mathlib sample contains the
 36 existing safety-regression files plus both newly recovered proof examples.
-Paired performance runs use the saved `d3f35fd` executable and 13 identical
+Paired performance runs use the saved `c9a7959` executable and 13 identical
 Mathlib sources. Final local results are in
-`.scratch/retry-facts-check.log`; external results are in
-`.scratch/retry-facts-external.log`. Stress evidence is under
-`.scratch/retry-facts-stress/` and `.scratch/retry-facts-uniform/`; paired resource
-measurements are under `.scratch/retry-facts-memory/`.
+`.scratch/retry-tail-check.log`; external results are in
+`.scratch/retry-tail-external.log`. Stress evidence is under
+`.scratch/retry-tail-stress/` and `.scratch/retry-tail-uniform/`. The sampled
+call stacks motivating the bounded scans are in `.scratch/retry-tail-sample.txt`.
+The extra CSLib batch-2 timing logs and identical pristine input list are under
+`.scratch/retry-tail-cslib-performance/`.
 
 The recorded full-build baselines and batch logs are under
 `.scratch/external-validation-release/logs/`. They cover 200 CSLib files and

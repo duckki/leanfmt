@@ -67,21 +67,19 @@ def factsBetween (source : String) (left right : SyntaxTree.Token) (cache : Cach
   | none => (betweenTokens source left right).facts
 
 def Boundary.startsOnNewLine (boundary : Boundary) : Bool :=
-  match boundary.normalized.toList.dropWhile SpaceRules.isHorizontalWhitespace with
-  | '\n' :: _ => true
-  | _ => false
+  (boundary.normalized.dropWhile SpaceRules.isHorizontalWhitespace).startsWith '\n'
 
 def Boundary.startsAfterBlankLine (boundary : Boundary) : Bool :=
-  let leadingWhitespace :=
-    boundary.normalized.toList.takeWhile
-      fun char => char == '\n' || SpaceRules.isHorizontalWhitespace char
-  2 <= leadingWhitespace.count '\n'
+  let leading := boundary.normalized.dropWhile SpaceRules.isHorizontalWhitespace
+  match leading.dropPrefix? '\n' with
+  | some rest => (rest.dropWhile SpaceRules.isHorizontalWhitespace).startsWith '\n'
+  | none => false
 
 def Boundary.endsBeforeBlankLine (boundary : Boundary) : Bool :=
-  let trailingWhitespace :=
-    boundary.normalized.toList.reverse.takeWhile
-      fun char => char == '\n' || SpaceRules.isHorizontalWhitespace char
-  2 <= trailingWhitespace.count '\n'
+  let trailing := boundary.normalized.dropEndWhile SpaceRules.isHorizontalWhitespace
+  match trailing.dropSuffix? '\n' with
+  | some rest => (rest.dropEndWhile SpaceRules.isHorizontalWhitespace).endsWith '\n'
+  | none => false
 
 def Boundary.hasSeparatedCommentGroups (boundary : Boundary) : Bool :=
   SpaceRules.commentTriviaHasSeparatedGroups boundary.normalized

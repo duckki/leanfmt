@@ -435,6 +435,13 @@ and layout-fact construction share this immutable, module-local cache. It stores
 no width, placement, indentation, or fit decisions and is never reused for a
 different source. Boundaries outside the cache retain direct classification.
 
+Physical edge queries scan only leading or trailing horizontal whitespace and
+the one or two newline delimiters needed by the query. First-line width and
+last-line extraction likewise inspect the relevant string slice, without building
+character lists for unrelated comment text. Widths remain Unicode character
+counts; byte lengths only detect whether the first-line slice consumed the input.
+CRLF and CR normalization and the definition of horizontal whitespace are unchanged.
+
 After an owner's first failed attempt, retries also share a bounded cache of
 canonical source-layout facts. It is built from that owner's prepared tree before
 retry descriptors or proof-island policy overrides are attached. Source endpoint
@@ -445,6 +452,13 @@ retry descriptors. The cache never stores output, placement, fit results, or
 alternative emission policies, and retries do not add entries. Nested retries
 inherit it; returning from the owner restores the enclosing cache. Owners whose
 first attempt succeeds do not allocate this cache.
+
+An unchanged token prefix is not a sufficient key for rendered-piece reuse.
+Contextual rules can inspect the entire enclosing segment, and regrouping changes
+that segment even before the first changed token. A future reuse contract must
+resolve those dependencies as well as incoming indentation and whitespace,
+trailing fit context, feedback, and tracing. The source-facts cache does not grant
+that contract.
 
 When a complete owner reports a newly split join, rendering retries that owner
 from its unchanged incoming state and original tree, with the join disabled.

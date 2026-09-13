@@ -18729,6 +18729,40 @@ def assertAsciiBoundaryScans : IO Unit := do
       ((text.replace "\r\n" "\n").replace "\r" "\n")
       (Formatter.SpaceRules.normalizeLineEndings text)
 
+def assertBoundaryWhitespaceEdges : IO Unit := do
+  let mut texts := [""]
+  let mut level := [""]
+  for _ in [:5] do
+    level :=
+      level.flatMap
+        fun stem =>
+          [" ", "\t", "\n", "\r", "x", "β"].map (stem ++ ·)
+    texts := level ++ texts
+  let comment := "/- " ++ String.ofList (List.replicate 4096 'β') ++ " -/"
+  for middle in [comment, "/- first\n  second -/", "-- note\n", "\u00a0", "\u2028"] do
+    for edge in ["", " \t", "\n", " \n\t", "\n\t\n", "\r\n\t\r\n", "\n\n\n"] do
+      texts := (edge ++ middle ++ edge) :: texts
+  for text in texts do
+    let boundary := Formatter.SourceBoundary.ofText text
+    let chars := boundary.normalized.toList
+    let whitespace :=
+      fun char => char == '\n' || Formatter.SpaceRules.isHorizontalWhitespace char
+    let startsOnLine :=
+      (chars.dropWhile Formatter.SpaceRules.isHorizontalWhitespace).head? == some '\n'
+    let startsAfterBlank := 2 <= (chars.takeWhile whitespace).count '\n'
+    let endsBeforeBlank := 2 <= (chars.reverse.takeWhile whitespace).count '\n'
+    assertTrue "bounded edge queries match complete-character scans"
+      (boundary.startsOnNewLine == startsOnLine
+        && boundary.startsAfterBlankLine == startsAfterBlank
+        && boundary.endsBeforeBlankLine == endsBeforeBlank)
+    let first := text.toList.takeWhile fun char => char != '\n' && char != '\r'
+    assertTrue "first-line probes count characters and stop at either line ending"
+      (Formatter.firstLineAppendWidth text
+        == (first.length, decide (first.length < text.length)))
+    let last := chars.reverse.takeWhile (· != '\n')
+    assertEq "last-line probes retain normalized Unicode text"
+      (String.ofList last.reverse) (Formatter.charsAfterLastNewline text)
+
 def assertRuleSourceBreakQueries : IO Unit := do
   for trivia
       in [" ", "\n", "\r", "\r\n", " -- note\n", " /- inline -/ ", " /-\n block -/ "] do
@@ -21979,6 +22013,7 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertElseIfChainBreaksThenBranchesTogether env
   assertConditionalChainCommentOwnership env
   assertAsciiBoundaryScans
+  assertBoundaryWhitespaceEdges
   assertRuleSourceBreakQueries
   assertConditionalJoinFeedback env
   assertDoConditionalPreservation env

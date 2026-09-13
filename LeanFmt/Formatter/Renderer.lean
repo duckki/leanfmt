@@ -26,12 +26,8 @@ def lineWidth (text : String) : Nat :=
   text.length
 
 def firstLineAppendWidth (text : String) : Nat × Bool :=
-  let rec loop : List Char → Nat → Nat × Bool
-    | [], width => (width, false)
-    | '\n' :: _, width
-    | '\r' :: _, width => (width, true)
-    | _ :: rest, width => loop rest (width + 1)
-  loop text.toList 0
+  let first := text.takeWhile fun char => char != '\n' && char != '\r'
+  (first.toString.length, first.utf8ByteSize < text.utf8ByteSize)
 
 def lineFits (text : String) (limit : Nat := maxLineWidth) : Bool :=
   lineWidth text <= limit
@@ -111,11 +107,7 @@ def appendedLines
   loop currentLine.length 0 0 countInitialOverflow [] text.toList
 
 def charsAfterLastNewline (text : String) : String :=
-  let rec loop : List Char → List Char → String
-    | [], current => String.ofList current.reverse
-    | '\n' :: rest, _ => loop rest []
-    | char :: rest, current => loop rest (char :: current)
-  loop (SpaceRules.normalizeLineEndings text).toList []
+  ((SpaceRules.normalizeLineEndings text).takeEndWhile (· != '\n')).toString
 
 def hasBlankLineStructure (text : String) : Bool :=
   hasLineBreakChar text
