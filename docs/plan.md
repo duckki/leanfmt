@@ -19,8 +19,9 @@ Overlapping continuation tails still require repeated rendering when restoring
 one nested base makes the next comment join overflow. Owner-local retries,
 early exit from invalid retries, cached source boundaries, and direct neighbor
 lookups reduce the cost but do not establish linear scaling. Canonical source facts
-are reused across retries. The current candidate also avoids whole-text character
-lists in boundary-edge and line-extent queries. It does not cache
+are reused across retries. Boundary-edge, line-extent, and comment-break queries
+avoid whole-text character lists. Structural spacing context is queried only
+when source-adjacent tokens need it. The renderer does not cache
 accepted render pieces: their indentation and enclosing fit context can change.
 Retain the 32/64/128-clause sample alongside routine measurements. Eliminating the
 remaining repeated rendering requires a separate accepted-piece reuse contract;
@@ -47,83 +48,69 @@ general shortcut was identified. This cost is not a known formatting failure.
 
 ## Progress
 
-### Current checkpoint: bounded boundary queries
+### Current checkpoint: bounded performance pass
 
-Leading and trailing whitespace queries stop after the one or two newline
-delimiters needed by the query. First-line width and last-line extraction scan
-only the relevant slice instead of constructing complete character lists.
-Unicode character widths, CRLF/CR handling, and horizontal whitespace semantics
-are unchanged. No new cache, syntax rule, or rendering state is added.
+Comment-forced-break detection scans ASCII delimiters and nested block depth
+without normalizing or reconstructing comment text. Structural spacing context
+is deferred until an empty source boundary needs it; pending indentation and
+ordinary trivia do not evaluate that query. No new cache, rendering state,
+syntax rule, or layout policy is added.
 
-Coverage compares the five queries with the previous character-list definitions
-over 9,366 inputs: exhaustive short strings, mixed line endings, Unicode,
-non-horizontal Unicode whitespace, long comments, and comment boundaries.
-All 9,366 inputs passed. The complete local gate passed, including both unit-suite
-runs, lint, fixture regeneration and dry check, self-format and dry check,
-preservation, overflow, and idempotency. Fixtures and existing expectations are
-unchanged; self-format touched only the new test. All 3,360 reference-renderer
-comparisons passed. The independent 84-case ownership oracle preserved output
-and syntax, elaborated, and converged idempotently. Lightweight external checks
-and serial performance comparisons passed. The CSLib timing investigation below
-records a contended outlier separately from the final comparison.
+Coverage compares comment detection with the previous implementation on 20,040
+inputs, including nested and unterminated comments, CR/LF/CRLF, long Unicode
+comments, and delimiter-like text inside blocks. Another 32 cases cover deferred
+spacing. The existing 9,366 boundary-edge equivalence cases remain in the suite.
+The complete local gate passed: build, unit tests, lint, fixture regeneration and
+dry check, self-format and dry check, preservation, overflow, and idempotency.
+Fixtures and existing expectations are unchanged; self-format touched only new
+code and tests. All 3,360 reference-renderer comparisons passed. The independent
+84-case ownership oracle retained output and syntax, elaborated, and converged
+idempotently.
 
-Lightweight external validation passed from pristine inputs with no diagnostic
-failures, including Mathlib missing-rule checks. Every output is identical to
-committed checkpoint `c9a7959`:
+Lightweight external validation passed from pristine inputs, including Mathlib
+missing-rule checks. Every output is identical to checkpoint `36c67fc`:
 
 | Project | Scope | Formatter/check time | Changed output files |
 | --- | --- | --- | --- |
-| GraphQL | 280 files, width 90 | 45s | 0 |
-| quantum | 20 owned files; 1 unowned skipped, width 90 | 43s | 0 |
-| CSLib | 200 files, width 100 | 151s | 0 |
-| Mathlib | 38 files, width 100 | 106.67s | 0 |
+| GraphQL | 280 files, width 90 | 46s | 0 |
+| quantum | 20 owned files; 1 unowned skipped, width 90 | 40s | 0 |
+| CSLib | 200 files, width 100 | 119s | 0 |
+| Mathlib | 38 files, width 100 | 101.90s | 0 |
 
-GraphQL and quantum used formatter builds compatible with Lean 4.33.0 and 4.32.0;
-those build times are omitted above. Target-project builds and the complete
-Mathlib sweep were omitted. No changed-module builds were needed because all
-review patches are empty. This is a lightweight checkpoint, not the release gate.
+Compatible formatter builds passed on Lean 4.33.0 and 4.32.0; their build times
+are omitted above. Target-project builds and the complete Mathlib sweep were
+omitted. No changed-module builds were needed because all review patches are
+empty. This is a lightweight checkpoint, not the release gate.
 
-Final serial measurements compared the candidate with `c9a7959` on identical
-inputs. All width-512 cascading samples retained exact output and passed
-exception and idempotency checks:
+Serial ABBA comparisons against `36c67fc` passed exception and idempotency checks
+at width 512. Mean checked-format times improved by 8-14%:
 
 | Clauses | Before | After |
 | --- | --- | --- |
-| 32 | 261ms | 235ms |
-| 64 | 578ms | 525ms |
-| 128 | 1424ms | 1306ms |
+| 32 | 233ms | 203.5ms |
+| 64 | 506.5ms | 464ms |
+| 128 | 1313ms | 1131ms |
 
-An earlier run also improved the 128-clause sample from 1423ms to 1298ms.
-Plain and fitting-comment controls were unchanged at 18ms and 20ms for 128 clauses.
-Simultaneous-failure controls retained output and idempotency (128 clauses:
-827ms before, 732ms after). Their deliberately overlong comments make them
-performance controls, not a width gate.
+Separate paired runs also retained exact output (128 clauses: 1290ms to 1148ms).
+Plain and fitting-comment controls stayed at 18ms and 19-20ms. Simultaneous-failure
+controls retained output and idempotency (128 clauses: 735ms to 674ms); their
+deliberately overlong comments make them performance controls, not a width gate.
+Maximum observed RSS for the 128-clause command was 1312.7 MiB before and
+1311.5 MiB after, with no material increase.
 
-Serial ABBA measurements on 13 Mathlib inputs reported mean user CPU of 70.750s
-before and 69.995s after (-1.07%), with mean wall time of 32.765s before and
-30.680s after. No routine regression was observed in this sample. A separate
-100-file CSLib batch-2 comparison also passed every diagnostic check. Its first
-candidate sample overlapped high-CPU Lean 4.33.0 compiler processes, so the four-run
-wall-time mean cannot be used as an uncontended performance comparison. That
-sample took 170.59s; a candidate repeat took 91.59s, versus 98.27s for the first
-saved-formatter run.
-The final saved-formatter run took 89.29s. Comparing the final candidate/baseline
-pair, user CPU was 393.18s versus 391.24s (+0.50%), while summed per-file format
-time was 377.047s versus 378.843s (-0.47%). No meaningful routine regression was
-observed; the initial 151s CSLib validation total is retained above rather than
-replaced with a favorable repeat.
+On 13 identical Mathlib inputs, serial ABBA means were 69.645s before and 69.605s
+after for user CPU, and 30.36s before and 30.76s after for wall time. Routine cost
+was effectively unchanged in this sample; no meaningful regression was observed.
+A process check during the paired runs found no competing active Lean build.
 
-### Remaining performance work
+This checkpoint completes the low-risk query-overhead pass, not the elimination
+of every repeated render. The two open costs above remain separately scoped
+architectural follow-ups. Accepted-output reuse needs resolved rule dependencies,
+incoming placement, suffix fit, comments, feedback, and trace equivalence. Prefix
+replay needs an audited native dependency API or a reviewed parser contract change.
+Neither belongs in an opportunistic cache or a weakened idempotency check.
 
-The immutable-facts contract is implemented. A prefix can retain its tokens while
-its enclosing ancestor segment changes; current rules can inspect that entire
-segment. Do not reuse partial output without specifying these rule dependencies
-along with indentation, trailing fit context, comments, feedback, and traces.
-Required prefix elaboration remains an explicit correctness constraint; further
-work needs an audited native dependency API or a separately reviewed parser
-contract change.
-
-### Release gate
+### Next checkpoint: release gate
 
 Rerun complete CSLib and Mathlib validation on the final candidate, including
 changed-module and aggregate builds. Review diagnostics, output changes, and
@@ -164,18 +151,21 @@ Successful validation does not mean every protected physical line fits width 100
 
 ## Evidence
 
-Current artifacts use `.scratch/retry-tail-*`. External source snapshots,
+Current artifacts use `.scratch/retry-final-*`. External source snapshots,
 changed-file lists, patches, and logs are under
-`.scratch/retry-tail-validation/`. The focused Mathlib sample contains the
+`.scratch/retry-final-validation/`. The focused Mathlib sample contains the
 36 existing safety-regression files plus both newly recovered proof examples.
-Paired performance runs use the saved `c9a7959` executable and 13 identical
+Paired performance runs use the saved `36c67fc` executable and 13 identical
 Mathlib sources. Final local results are in
-`.scratch/retry-tail-check.log`; external results are in
-`.scratch/retry-tail-external.log`. Stress evidence is under
-`.scratch/retry-tail-stress/` and `.scratch/retry-tail-uniform/`. The sampled
-call stacks motivating the bounded scans are in `.scratch/retry-tail-sample.txt`.
-The extra CSLib batch-2 timing logs and identical pristine input list are under
-`.scratch/retry-tail-cslib-performance/`.
+`.scratch/retry-final-check.log`; external results are in
+`.scratch/retry-final-external.log`. Stress evidence is under
+`.scratch/retry-final-stress/` and `.scratch/retry-final-uniform/`. The sampled
+call stacks are in `.scratch/retry-final-sample.txt`. The discarded byte-by-byte
+prototype's mixed timings are retained under `.scratch/retry-final-initial-stress/`;
+the candidate uses the standard library delimiter search instead.
+The final ABBA stress and peak-RSS records are in
+`.scratch/retry-final-resources/`; routine Mathlib comparisons are in
+`.scratch/retry-final-performance/`.
 
 The recorded full-build baselines and batch logs are under
 `.scratch/external-validation-release/logs/`. They cover 200 CSLib files and

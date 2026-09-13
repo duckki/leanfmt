@@ -756,13 +756,14 @@ def WhitespaceState.defaultWhitespace (state : WhitespaceState) (token : SyntaxT
 def RenderState.defaultWhitespace (state : RenderState) (token : SyntaxTree.Token)
     (preserveLines : Bool := false)
     : String :=
-  let normalizeAdjacent :=
-    state.context.ancestors.any
-      fun frame =>
-        SyntaxTree.Tree.normalizesStructuralBoundary frame.segment.parent frame.childIndex
-          token
   match state.lastToken?, state.pendingIndent? with
   | some left, none =>
+      let normalizeAdjacent :=
+        fun _ =>
+          state.context.ancestors.any
+            fun frame =>
+              SyntaxTree.Tree.normalizesStructuralBoundary frame.segment.parent
+                frame.childIndex token
       SpaceRules.interTokenWhitespace state.source left token preserveLines
         normalizeAdjacent
   | _, _ => state.whitespaceState.defaultWhitespace token preserveLines

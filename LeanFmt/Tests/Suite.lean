@@ -18729,6 +18729,63 @@ def assertAsciiBoundaryScans : IO Unit := do
       ((text.replace "\r\n" "\n").replace "\r" "\n")
       (Formatter.SpaceRules.normalizeLineEndings text)
 
+private partial def referenceCommentForcesBreak : List Char → Bool
+  | '-' :: '-' :: _ => true
+  | '/' :: '-' :: rest =>
+      let (comment, rest) :=
+        Formatter.SpaceRules.takeBlockCommentTriviaAux 1 ['-', '/'] rest
+      (String.ofList comment).contains '\n' || referenceCommentForcesBreak rest
+  | _ :: rest => referenceCommentForcesBreak rest
+  | [] => false
+
+def assertCommentBreakScan : IO Unit := do
+  let mut texts := [""]
+  let mut level := [""]
+  for _ in [:5] do
+    level :=
+      level.flatMap fun stem => [" ", "/", "-", "\n", "\r", "β", "\x00"].map (stem ++ ·)
+    texts := level ++ texts
+  for depth in [:8] do
+    let opening := String.join (List.replicate depth "/-")
+    let closing := String.join (List.replicate depth "-/")
+    for body
+        in [
+          "",
+          "--",
+          "-/-",
+          "\n",
+          "\r",
+          "\r\n",
+          "α∀𐀀",
+          "\u2028",
+          String.ofList (List.replicate 4096 'β')
+        ] do
+      for tail in ["", "\n", " -- note", " /-\rnote-/", "-", "/"] do
+        texts := (opening ++ body ++ closing ++ tail) :: texts
+  for text in texts do
+    assertTrue "comment-break scan matches normalized nested-comment parsing"
+      (Formatter.SpaceRules.commentForcesLineBreak text
+        == referenceCommentForcesBreak
+            (Formatter.SpaceRules.normalizeLineEndings text).toList)
+
+def assertDeferredStructuralSpacing : IO Unit := do
+  for trivia
+      in ["", " ", "\t", "\n", "\r\n", " /- inline -/ ", " -- note\n", " /-\nnote-/ "] do
+    let source := "a" ++ trivia ++ "+"
+    let left := syntheticIdentTokenAt "a" 0 1
+    let start := ("a" ++ trivia).utf8ByteSize
+    let right := syntheticAtomTokenAt "+" start (start + 1)
+    for preserveLines in [false, true] do
+      for normalize in [false, true] do
+        let expected :=
+          if trivia.isEmpty && normalize then
+            Formatter.SpaceRules.spaceBetweenTokens left right
+          else
+            Formatter.SpaceRules.interTokenWhitespace source left right preserveLines
+        assertEq "context spacing changes only source-adjacent tokens" expected
+          (Formatter.SpaceRules.interTokenWhitespace source left right preserveLines
+            (fun _ => normalize))
+
 def assertBoundaryWhitespaceEdges : IO Unit := do
   let mut texts := [""]
   let mut level := [""]
@@ -22013,6 +22070,8 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertElseIfChainBreaksThenBranchesTogether env
   assertConditionalChainCommentOwnership env
   assertAsciiBoundaryScans
+  assertCommentBreakScan
+  assertDeferredStructuralSpacing
   assertBoundaryWhitespaceEdges
   assertRuleSourceBreakQueries
   assertConditionalJoinFeedback env

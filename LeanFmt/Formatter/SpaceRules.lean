@@ -109,16 +109,33 @@ def inlineCommentTrivia (text : String) : String :=
   String.join
   <| normalizeTriviaAux collapseWhitespaceTrivia [] [] (normalizeLineEndings text).toList
 
-partial def commentForcesLineBreakAux : List Char → Bool
-  | '-' :: '-' :: _ => true
-  | '/' :: '-' :: rest =>
-      let (comment, rest) := takeBlockCommentTriviaAux 1 ['-', '/'] rest
-      (String.ofList comment).contains '\n' || commentForcesLineBreakAux rest
-  | _ :: rest => commentForcesLineBreakAux rest
-  | [] => false
-
 def commentForcesLineBreak (text : String) : Bool :=
-  commentForcesLineBreakAux (normalizeLineEndings text).toList
+  Id.run do -- Only ASCII delimiters matter; no comment text or normalized copy is needed.
+    let bytes := text.toByteArray
+    let mut start := 0
+    let mut depth := 0
+    while let some index :=
+            bytes.findIdx?
+              (fun byte =>
+                byte == '/'.toUInt8
+                || byte == '-'.toUInt8
+                || byte == '\n'.toUInt8
+                || byte == '\r'.toUInt8) start do
+      let byte := bytes[index]!
+      let next := bytes[index + 1]?.getD 0
+      if depth > 0 && (byte == '\n'.toUInt8 || byte == '\r'.toUInt8) then
+        return true
+      else if byte == '/'.toUInt8 && next == '-'.toUInt8 then
+        depth := depth + 1
+        start := index + 2
+      else if depth == 0 && byte == '-'.toUInt8 && next == '-'.toUInt8 then
+        return true
+      else if depth > 0 && byte == '-'.toUInt8 && next == '/'.toUInt8 then
+        depth := depth - 1
+        start := index + 2
+      else
+        start := index + 1
+    return false
 
 def stripLeadingHorizontalWhitespace (line : String) : String :=
   (line.dropWhile isHorizontalWhitespace).toString
@@ -558,7 +575,7 @@ def spaceBetweenTokens (left right : SyntaxTree.Token) : String :=
 
 def interTokenWhitespace
     (source : String) (left right : SyntaxTree.Token) (preserveLines : Bool := true)
-    (normalizeAdjacent : Bool := false)
+    (normalizeAdjacent : Unit → Bool := fun _ => false)
     : String :=
   let trivia := SyntaxTree.sourceText source left.span.stop right.span.start
   if hasCommentStart trivia then
@@ -572,7 +589,7 @@ def interTokenWhitespace
   else if preserveLines && hasLineStructure trivia then
     cleanTrivia trivia
   else if trivia.isEmpty then
-    if normalizeAdjacent then spaceBetweenTokens left right else ""
+    if normalizeAdjacent () then spaceBetweenTokens left right else ""
   else if left.lexeme == "." && hasOnlyHorizontalTrivia trivia then
     " "
   else if preservesSourceSpaceBeforeClosingToken left right then

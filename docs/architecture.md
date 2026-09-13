@@ -441,6 +441,11 @@ last-line extraction likewise inspect the relevant string slice, without buildin
 character lists for unrelated comment text. Widths remain Unicode character
 counts; byte lengths only detect whether the first-line slice consumed the input.
 CRLF and CR normalization and the definition of horizontal whitespace are unchanged.
+Comment-forced-break queries scan ASCII delimiter bytes directly, tracking nested
+block depth and stopping at a line comment or a newline inside a block. They do
+not normalize, decode, or reconstruct comment text. CR and LF both force a break
+inside a block; line endings outside comments do not. ASCII delimiter bytes cannot
+occur inside a multibyte UTF-8 character.
 
 After an owner's first failed attempt, retries also share a bounded cache of
 canonical source-layout facts. It is built from that owner's prepared tree before
@@ -682,7 +687,7 @@ Its main entry point is:
 ```lean
 def interTokenWhitespace
     (source : String) (left right : SyntaxTree.Token) (preserveLines : Bool := true)
-    (normalizeAdjacent : Bool := false) :
+    (normalizeAdjacent : Unit → Bool := fun _ => false) :
     String
 ```
 
@@ -696,6 +701,11 @@ Important behavior:
   fully qualified name-quotation prefixes, and compact `!value` when source adjacency
   requires it.
 - Insert a single space between ordinary adjacent code tokens.
+
+The context-dependent adjacent-token query is deferred until the source trivia is
+empty. Comment handling, preserved source breaks, and ordinary spaced tokens do
+not inspect the enclosing structural context for that unused decision. Pending
+indentation takes its normal boundary path without constructing the query.
 
 Space rules do not inspect `SyntaxTree.Tree`, render state, or ancestors. Regrouping
 classifies the direct boundaries of ordinary infix chains and type ascriptions where empty
