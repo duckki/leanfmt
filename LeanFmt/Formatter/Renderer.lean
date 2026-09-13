@@ -127,6 +127,7 @@ structure TreeLayoutSummary where
   retryOwner? : Option LayoutTree.RetryOwner := none
   originalPlan? : Option OriginalTree.IslandPlan := none
   startsWithOriginalEmission : Bool := false
+  startsWithRetainedOriginalBoundary : Bool := false
   startsWithUnbreakableOriginalFirstLine : Bool := false
   containsMultilineOriginalEmission : Bool := false
   containsCommentForcedBreak : Bool := false
@@ -205,6 +206,10 @@ private def resolveSummary
       originalPlan?
       startsWithOriginalEmission :=
         originalPlan?.isSome || firstChild?.any (·.summary.startsWithOriginalEmission)
+      startsWithRetainedOriginalBoundary :=
+        match originalPlan? with
+        | some plan => plan.policy.leadingBoundary == .preserveWithIsland
+        | none => firstChild?.any (·.summary.startsWithRetainedOriginalBoundary)
       startsWithUnbreakableOriginalFirstLine :=
         match originalPlan? with
         | some plan => plan.policy.firstLine == .unbreakable
@@ -213,7 +218,7 @@ private def resolveSummary
         match originalPlan? with
         | some plan =>
             sourceHasLineStructure source summary.firstToken? summary.lastToken?
-            || (plan.policy.content == .proof
+            || (plan.policy.relativeLayout == .retain
                 && summary.firstToken?.any
                     fun token => (SourceBoundary.beforeToken token).hasLineStructure)
         | none => children.any (·.summary.containsMultilineOriginalEmission)
@@ -967,6 +972,59 @@ def RenderState.segmentStartBaseFor
     | none => state.currentColumn
   { column, indentation := indentationLevelForColumn column }
 
+def RenderState.sourceLayoutStart? (state : RenderState) (tree : SyntaxTree.Tree)
+    : Option (Nat × Nat) := do
+  let first ← tree.firstToken?
+  let leading :=
+    match state.lastToken? with
+    | some left => SyntaxTree.sourceText state.source left.span.stop first.span.start
+    | none => first.leading.text
+  if state.lastToken?.isNone || SpaceRules.hasLineStructure leading then
+    let column := lineWidth <| charsAfterLastNewline leading
+    some (column, state.layoutAnchor.shiftColumn column)
+  else
+    none
+
+def RenderState.withChildPlacement (state : RenderState)
+    (segment : LineBreakRules.Segment) (plan : LayoutPlan.Plan)
+    : RenderState :=
+  let base :=
+    if plan.inheritsBase then
+      let indentation :=
+        if plan.roundsUpBase then
+          max state.segmentIndentation
+            (state.pendingIndent?.map indentationLevelForColumn
+              |>.getD state.segmentIndentation)
+        else
+          state.segmentIndentation
+      {
+        column :=
+          if indentation == state.segmentIndentation then
+            state.segmentBaseColumn
+          else
+            indentation * indentationSpaces
+        indentation
+      }
+    else
+      state.segmentStartBaseFor segment
+  let layoutAnchor :=
+    match state.sourceLayoutStart? segment.parent with
+    | some (sourceColumn, _) =>
+        let startsOnNewOutputLine :=
+          segmentFirstToken? segment
+          |>.any fun token => SpaceRules.hasLineStructure (state.defaultWhitespace token)
+        if plan.inheritsBase && !startsOnNewOutputLine then
+          state.layoutAnchor
+        else
+          { sourceColumn, outputColumn := state.segmentStartColumn segment }
+    | none => state.layoutAnchor
+  {
+    state with
+      segmentBaseColumn := base.column
+      segmentIndentation := base.indentation
+      layoutAnchor
+  }
+
 def renderedTreeIsMultiline (before after : RenderState) (tree : SyntaxTree.Tree)
     : Bool :=
   let leadingBreakCount :=
@@ -1135,7 +1193,123 @@ def hasRuleBreakAt
     : Bool :=
   (LayoutPlan.resolve context segment).hasBreakAt index
 
+def naturalRuleBreakBase
+    (plan : LayoutPlan.Plan)
+    (baseColumn baseIndentation : Nat)
+    (breakPoint : LineBreakRules.BreakPoint)
+    : SegmentBase :=
+  let naturalIndentation :=
+    if plan.roundsUpBase && 0 < breakPoint.indentLevels then
+      max baseIndentation (indentationLevelForColumn (indentationPastColumn baseColumn))
+    else
+      baseIndentation
+  { column := baseColumn, indentation := naturalIndentation }
+
+def naturalBreakIndentation
+    (plan : LayoutPlan.Plan)
+    (baseColumn baseIndentation : Nat)
+    (breakPoint : LineBreakRules.BreakPoint)
+    : Nat :=
+  let base := naturalRuleBreakBase plan baseColumn baseIndentation breakPoint
+  indentationLevelForColumn <| breakIndent base.column base.indentation breakPoint
+
+def leastNaturalBreakIndentation?
+    (plan : LayoutPlan.Plan)
+    (baseColumn baseIndentation : Nat)
+    : List LineBreakRules.BreakPoint → Option Nat
+  | [] => none
+  | breakPoint :: rest =>
+      let indentation :=
+        naturalBreakIndentation plan baseColumn baseIndentation breakPoint
+      match leastNaturalBreakIndentation? plan baseColumn baseIndentation rest with
+      | some minimum => some (min indentation minimum)
+      | none => some indentation
+
+def requiredTailIndentation (plan : LayoutPlan.Plan) (baseColumn tailIndentation : Nat)
+    : Nat :=
+  if plan.liftsTail || plan.isFlow then
+    let headIndentation := indentationLevelForColumn (indentationPastColumn baseColumn)
+    max headIndentation (tailIndentation + 1)
+  else
+    tailIndentation
+
+def computeRuleBreakShift
+    (state : RenderState) (plan : LayoutPlan.Plan)
+    (baseColumn baseIndentation : Nat)
+    (points : List LineBreakRules.BreakPoint)
+    : Nat :=
+  match state.tailIndentation? with
+  | some tailIndentation =>
+      let required := requiredTailIndentation plan baseColumn tailIndentation
+      let minimum? := leastNaturalBreakIndentation? plan baseColumn baseIndentation points
+      required - minimum?.getD required
+  | none => 0
+
+def ruleBreakBase
+    (state : RenderState) (_segment : LineBreakRules.Segment)
+    (plan : LayoutPlan.Plan)
+    (baseColumn baseIndentation : Nat)
+    (breakPoint : LineBreakRules.BreakPoint)
+    : SegmentBase :=
+  let base := naturalRuleBreakBase plan baseColumn baseIndentation breakPoint
+  let shiftedIndentation :=
+    if breakPoint.indentLevels == 0 then
+      indentationLevelForColumn (breakIndent base.column base.indentation breakPoint)
+      + state.breakIndentationShift
+    else
+      base.indentation + state.breakIndentationShift
+  { base with indentation := shiftedIndentation }
+
+def breakPointIndent
+    (state : RenderState) (segment : LineBreakRules.Segment)
+    (plan : LayoutPlan.Plan)
+    (breakPoint : LineBreakRules.BreakPoint)
+    : Nat :=
+  let baseIndentation := state.segmentIndentation
+  let baseColumn :=
+    if baseIndentation == state.segmentIndentation then
+      state.segmentBaseColumn
+    else
+      baseIndentation * indentationSpaces
+  let base := ruleBreakBase state segment plan baseColumn baseIndentation breakPoint
+  breakIndent base.column base.indentation breakPoint
+
 /-! ## Flat rendering and fit measurement -/
+
+def childRetainsRuleSourceBreak (source : String) (segment : LineBreakRules.Segment)
+    (index : Nat) (facts? : Option TreeLayoutFacts)
+    : Bool :=
+  match segment.child? index with
+  | none => false
+  | some child =>
+      (treeLayoutSummary source child facts?).startsWithRetainedOriginalBoundary
+      && (match LineBreakRules.previousContentIndex? segment index
+                >>= segment.child?
+                >>= SyntaxTree.Tree.lastToken?, child.firstToken? with
+          | some left, some right =>
+              SpaceRules.hasLineStructure
+                (SyntaxTree.sourceText source left.span.stop right.span.start)
+          | _, _ => false)
+
+def RenderState.retainedChildBoundary? (state entryState : RenderState)
+    (segment : LineBreakRules.Segment) (index : Nat)
+    (facts? : Option TreeLayoutFacts)
+    : Option RenderState :=
+  if childRetainsRuleSourceBreak state.source segment index facts? then
+    let plan := LayoutPlan.resolve entryState.context segment
+    match plan.breakPoints.find?
+            (fun point =>
+              point.index == index && !plan.formatsOriginalLeadingBoundary index) with
+    | some point =>
+        let placement :=
+          if segment.start == 0 then
+            entryState.withChildPlacement segment plan
+          else
+            entryState
+        some <| state.withPendingIndent (breakPointIndent placement segment plan point)
+    | none => none
+  else
+    none
 
 partial def renderWithoutRuleBreaks
     (state : RenderState) (segment : LineBreakRules.Segment)
@@ -1144,13 +1318,18 @@ partial def renderWithoutRuleBreaks
   | .missing => state
   | .leaf token => state.emitToken token false
   | .node _ _ =>
+      let entryState := state
       segment.indexes.foldl
         (fun state index =>
           match segment.child? index with
           | some child =>
+              let scope := ChildRenderScope.capture state
               let parentContext := state.context
               let parentFacts? := state.layoutFacts?
               let childFacts? := parentFacts? >>= (·.child? index)
+              let state :=
+                (state.retainedChildBoundary? entryState segment index childFacts?).getD
+                  state
               let rendered :=
                 match originalPlanForTree state.source child childFacts? with
                 | some islandPlan =>
@@ -1166,7 +1345,7 @@ partial def renderWithoutRuleBreaks
                           layoutFacts? := childFacts?
                       }
                       (LineBreakRules.Segment.ofTree child)
-              { rendered with context := parentContext, layoutFacts? := parentFacts? }
+              scope.restore rendered
           | none => state)
         state
 
@@ -1174,24 +1353,34 @@ def layoutProbeHasNotOverflowed (state : RenderState) : Bool :=
   state.completedLineOverflowCount == 0
   && lineFits state.currentLine state.options.lineWidth
 
-partial def probeLayoutWithoutRuleBreaks?
+private partial def probeLayoutWithoutRuleBreaksCore?
     (state : RenderState) (segment : LineBreakRules.Segment)
-    : Option RenderState :=
+    (checkWidth : Bool)
+    : Option (RenderState × Bool) :=
   match segment.parent with
-  | .missing => some state
+  | .missing => some (state, false)
   | .leaf token =>
       let rendered := state.emitToken token false
-      if layoutProbeHasNotOverflowed rendered then some rendered else none
+      if !checkWidth || layoutProbeHasNotOverflowed rendered then
+        some (rendered, false)
+      else
+        none
   | .node _ _ =>
-      let rec loop (state : RenderState) : List Nat → Option RenderState
-        | [] => some state
+      let entryState := state
+      let rec loop (state : RenderState) (retainedBreak : Bool)
+          : List Nat → Option (RenderState × Bool)
+        | [] => some (state, retainedBreak)
         | index :: rest =>
             match segment.child? index with
-            | none => loop state rest
+            | none => loop state retainedBreak rest
             | some child =>
+                let scope := ChildRenderScope.capture state
                 let parentContext := state.context
                 let parentFacts? := state.layoutFacts?
                 let childFacts? := parentFacts? >>= (·.child? index)
+                let boundary? :=
+                  state.retainedChildBoundary? entryState segment index childFacts?
+                let state := boundary?.getD state
                 let rendered? :=
                   match originalPlanForTree state.source child childFacts? with
                   | some islandPlan =>
@@ -1201,25 +1390,33 @@ partial def probeLayoutWithoutRuleBreaks?
                             formatOriginalChildLeadingBoundary parentContext segment
                               index)
                           (islandPlan? := some islandPlan)
-                      if layoutProbeHasNotOverflowed rendered then some rendered else none
+                      if !checkWidth || layoutProbeHasNotOverflowed rendered then
+                        some (rendered, false)
+                      else
+                        none
                   | none =>
-                      probeLayoutWithoutRuleBreaks?
+                      probeLayoutWithoutRuleBreaksCore?
                         {
                           state with
                             context := parentContext.push segment index
                             layoutFacts? := childFacts?
                         }
-                        (LineBreakRules.Segment.ofTree child)
+                        (LineBreakRules.Segment.ofTree child) checkWidth
                 match rendered? with
-                | some rendered =>
-                    loop
-                      {
-                        rendered with
-                          context := parentContext, layoutFacts? := parentFacts?
-                      }
-                      rest
+                | some (rendered, childRetainedBreak) =>
+                    loop (scope.restore rendered)
+                      (retainedBreak || boundary?.isSome || childRetainedBreak) rest
                 | none => none
-      loop state segment.indexes
+      let rendered? := loop state false segment.indexes
+      rendered?.filter
+        fun (_, retainedBreak) =>
+          !retainedBreak
+          || !((LayoutPlan.resolve state.context segment).breakPoints.any
+                (·.indentLevels == 0))
+
+def probeLayoutWithoutRuleBreaks? (state : RenderState) (segment : LineBreakRules.Segment)
+    : Option RenderState :=
+  (probeLayoutWithoutRuleBreaksCore? state segment true).map (·.1)
 
 def currentLineFitsWith (state : RenderState) (suffix : String) : Bool :=
   !introducesCompletedLineOverflow state.currentLine suffix state.options.lineWidth
@@ -1417,7 +1614,7 @@ def RenderState.firstLineOfOriginalTree (state : RenderState) (tree : SyntaxTree
   match SyntaxTree.Tree.firstToken? tree, SyntaxTree.Tree.lastToken? tree with
   | some firstToken, some lastToken =>
       let emitted :=
-        state.defaultWhitespace firstToken true
+        state.defaultWhitespace firstToken
         ++ SyntaxTree.sourceText state.source firstToken.span.start lastToken.span.stop
       let (firstLine, stopped) := firstLineWithBreakFlag emitted
       (
@@ -1680,25 +1877,6 @@ def sourceBreaksAllowedByBreakPointsInState
   else
     sourceBreaks
 
-def segmentHasOriginalEmissionAtRuleSourceBreak
-    (source : String) (segment : LineBreakRules.Segment) (plan : LayoutPlan.Plan)
-    (facts? : Option TreeLayoutFacts := none)
-    : Bool :=
-  plan.breakPoints.any
-    fun breakPoint =>
-      match LineBreakRules.previousContentIndex? segment breakPoint.index
-            >>= segment.child?
-            >>= SyntaxTree.Tree.lastToken?,
-            segment.child? breakPoint.index with
-      | some prefixToken, some child =>
-          SpaceRules.hasLineStructure prefixToken.leading.text
-          && child.firstToken?.any
-              fun first =>
-                hasSourceBreakBetweenTokens source prefixToken first
-                && (treeLayoutSummary source child
-                      (facts? >>= (·.child? breakPoint.index))).startsWithOriginalEmission
-      | _, _ => false
-
 def segmentHasAllowedSourceBreaks
     (source : String) (context : LineBreakRules.RuleContext)
     (segment : LineBreakRules.Segment)
@@ -1745,9 +1923,8 @@ partial def segmentAllowsLayoutWithoutRuleBreaks
           || !treeSourceHasLineStructure source segment.parent
       | none =>
           let plan := LayoutPlan.resolve context segment
-          if segmentHasOriginalEmissionAtRuleSourceBreak source segment plan facts?
-              || (!plan.isFlow
-                  && treeContainsLineCommentForcedBreak source segment.parent facts?)
+          if (!plan.isFlow
+                && treeContainsLineCommentForcedBreak source segment.parent facts?)
               || plan.isMandatory
               || (plan.breakPoints.any (·.indentLevels == 0)
                   && segmentContainsMultilineOriginalEmission source segment facts?) then
@@ -1818,7 +1995,7 @@ def measureLayout
       if lineFits state.currentLine state.options.lineWidth then
         probeLayoutWithoutRuleBreaks? probe segment
       else
-        some <| renderWithoutRuleBreaks probe segment
+        (probeLayoutWithoutRuleBreaksCore? probe segment false).map (·.1)
     match rendered? with
     | none => { fits := false, flat := false }
     | some rendered =>
@@ -1834,7 +2011,8 @@ def measureLayout
         }
 
 def nestedLayoutFits (state : RenderState) (segment : LineBreakRules.Segment) : Bool :=
-  (measureLayout state segment).fits
+  let plan := LayoutPlan.resolve state.context segment
+  (measureLayout (state.withChildPlacement segment plan) segment).fits
 
 def LayoutProbe.acceptedForRule
     (probe : LayoutProbe)
@@ -1859,87 +2037,6 @@ def RenderState.extendTailIndentation
     | some indentation => max indentation parentIndentation
     | none => parentIndentation
   { state with tailIndentation? := some inheritedIndentation }
-
-def naturalRuleBreakBase
-    (plan : LayoutPlan.Plan)
-    (baseColumn baseIndentation : Nat)
-    (breakPoint : LineBreakRules.BreakPoint)
-    : SegmentBase :=
-  let naturalIndentation :=
-    if plan.roundsUpBase && 0 < breakPoint.indentLevels then
-      max baseIndentation (indentationLevelForColumn (indentationPastColumn baseColumn))
-    else
-      baseIndentation
-  { column := baseColumn, indentation := naturalIndentation }
-
-def naturalBreakIndentation
-    (plan : LayoutPlan.Plan)
-    (baseColumn baseIndentation : Nat)
-    (breakPoint : LineBreakRules.BreakPoint)
-    : Nat :=
-  let base := naturalRuleBreakBase plan baseColumn baseIndentation breakPoint
-  indentationLevelForColumn <| breakIndent base.column base.indentation breakPoint
-
-def leastNaturalBreakIndentation?
-    (plan : LayoutPlan.Plan)
-    (baseColumn baseIndentation : Nat)
-    : List LineBreakRules.BreakPoint → Option Nat
-  | [] => none
-  | breakPoint :: rest =>
-      let indentation :=
-        naturalBreakIndentation plan baseColumn baseIndentation breakPoint
-      match leastNaturalBreakIndentation? plan baseColumn baseIndentation rest with
-      | some minimum => some (min indentation minimum)
-      | none => some indentation
-
-def requiredTailIndentation (plan : LayoutPlan.Plan) (baseColumn tailIndentation : Nat)
-    : Nat :=
-  if plan.liftsTail || plan.isFlow then
-    let headIndentation := indentationLevelForColumn (indentationPastColumn baseColumn)
-    max headIndentation (tailIndentation + 1)
-  else
-    tailIndentation
-
-def computeRuleBreakShift
-    (state : RenderState) (plan : LayoutPlan.Plan)
-    (baseColumn baseIndentation : Nat)
-    (points : List LineBreakRules.BreakPoint)
-    : Nat :=
-  match state.tailIndentation? with
-  | some tailIndentation =>
-      let required := requiredTailIndentation plan baseColumn tailIndentation
-      let minimum? := leastNaturalBreakIndentation? plan baseColumn baseIndentation points
-      required - minimum?.getD required
-  | none => 0
-
-def ruleBreakBase
-    (state : RenderState) (_segment : LineBreakRules.Segment)
-    (plan : LayoutPlan.Plan)
-    (baseColumn baseIndentation : Nat)
-    (breakPoint : LineBreakRules.BreakPoint)
-    : SegmentBase :=
-  let base := naturalRuleBreakBase plan baseColumn baseIndentation breakPoint
-  let shiftedIndentation :=
-    if breakPoint.indentLevels == 0 then
-      indentationLevelForColumn (breakIndent base.column base.indentation breakPoint)
-      + state.breakIndentationShift
-    else
-      base.indentation + state.breakIndentationShift
-  { base with indentation := shiftedIndentation }
-
-def breakPointIndent
-    (state : RenderState) (segment : LineBreakRules.Segment)
-    (plan : LayoutPlan.Plan)
-    (breakPoint : LineBreakRules.BreakPoint)
-    : Nat :=
-  let baseIndentation := state.segmentIndentation
-  let baseColumn :=
-    if baseIndentation == state.segmentIndentation then
-      state.segmentBaseColumn
-    else
-      baseIndentation * indentationSpaces
-  let base := ruleBreakBase state segment plan baseColumn baseIndentation breakPoint
-  breakIndent base.column base.indentation breakPoint
 
 def ruleRetainsSourceBreakAt
     (state : RenderState) (segment : LineBreakRules.Segment)
@@ -2058,13 +2155,22 @@ def FlowRenderContext.measureChild
         context
         layoutFacts? := state.layoutFacts? >>= fun facts => facts.child? index
     }
-  measureLayout probe childSegment respectSourceBreaks
+  let plan := LayoutPlan.resolve context childSegment
+  measureLayout (probe.withChildPlacement childSegment plan) childSegment
+    respectSourceBreaks
 
 def FlowRenderContext.childFirstLineFits
     (flow : FlowRenderContext) (state : RenderState) (index : Nat)
     (context : LineBreakRules.RuleContext) (child : SyntaxTree.Tree)
     : Bool :=
-  let probe := { flow.stateForChildFit state index child with context }
+  let probe :=
+    {
+      flow.stateForChildFit state index child with
+        context
+        layoutFacts? := state.layoutFacts? >>= fun facts => facts.child? index
+    }
+  let segment := LineBreakRules.Segment.ofTree child
+  let probe := probe.withChildPlacement segment (LayoutPlan.resolve context segment)
   let (rendered, _) := renderFirstLineOfTree probe child
   !outputIntroducedLineBreak probe rendered
   && lineFitsWithTrailingWidth rendered.currentLine rendered.lineFitSuffixWidth
@@ -2086,7 +2192,8 @@ def FlowRenderContext.childLeadingOwnedPieceFits
               layoutFacts? := state.layoutFacts? >>= fun facts => facts.child? index
               lineFitSuffixWidth := 0
           }
-        (measureLayout probe (segment.slice segment.start breakPoint.index) false).flat
+        (measureLayout (probe.withChildPlacement segment plan)
+          (segment.slice segment.start breakPoint.index) false).flat
       else
         flow.childFirstLineFits state index context child
   | none => flow.childFirstLineFits state index context child
@@ -2559,23 +2666,8 @@ mutual
         let naturalStartColumn := state.segmentStartColumn childSegment
         let alignedStartColumn := indentationPastColumn naturalStartColumn
         state.appendOutput <| spaces (alignedStartColumn - naturalStartColumn)
-    let sourceLeading :=
-      match state.lastToken?, firstToken? with
-      | some leftToken, some firstToken =>
-          SyntaxTree.sourceText state.source leftToken.span.stop firstToken.span.start
-      | none, some firstToken => firstToken.leading.text
-      | _, none => ""
-    let startsOnNewSourceLine :=
-      state.lastToken?.isNone || SpaceRules.hasLineStructure sourceLeading
-    let sourceLayoutStart? :=
-      firstToken?.bind
-        fun _ =>
-          if startsOnNewSourceLine then
-            let sourceColumn := lineWidth <| charsAfterLastNewline sourceLeading
-            let parentRelativeColumn := state.layoutAnchor.shiftColumn sourceColumn
-            some (sourceColumn, parentRelativeColumn)
-          else
-            none
+    let sourceLayoutStart? := state.sourceLayoutStart? child
+    let startsOnNewSourceLine := sourceLayoutStart?.isSome
     let parentRelativeOriginalColumn? := sourceLayoutStart?.map (·.2)
     let formatLeadingBoundary :=
       formatOriginalChildLeadingBoundary state.context segment index
@@ -2649,52 +2741,11 @@ mutual
             state
       | _, _ => state
     let scope := ChildRenderScope.capture state
-    let childBase :=
-      if inheritsBase then
-        match state.pendingIndent? with
-        | some pendingIndent =>
-            if childPlan.roundsUpBase then
-              let indentation :=
-                max state.segmentIndentation (indentationLevelForColumn pendingIndent)
-              {
-                column :=
-                  if indentation == state.segmentIndentation then
-                    state.segmentBaseColumn
-                  else
-                    indentation * indentationSpaces
-                indentation
-              }
-            else
-              {
-                column := state.segmentBaseColumn, indentation := state.segmentIndentation
-              }
-        | none =>
-            { column := state.segmentBaseColumn, indentation := state.segmentIndentation }
-      else
-        state.segmentStartBaseFor childSegment
-    let layoutAnchor :=
-      match sourceLayoutStart? with
-      | some (sourceColumn, _) =>
-          let startsOnNewOutputLine :=
-            firstToken?.any
-              fun token =>
-                SpaceRules.hasLineStructure (state.defaultWhitespace token)
-          if inheritsBase && !startsOnNewOutputLine then
-            state.layoutAnchor
-          else
-            {
-              sourceColumn
-              outputColumn := state.segmentStartColumn childSegment
-            }
-      | none => state.layoutAnchor
     let childState :=
       {
-        state with
+        state.withChildPlacement childSegment childPlan with
           context := childContext
           layoutFacts? := childLayoutFacts?
-          segmentBaseColumn := childBase.column
-          segmentIndentation := childBase.indentation
-          layoutAnchor
           lineFitSuffixWidth := lineFitSuffix
           trace := state.trace.pushPath index
       }
@@ -2727,11 +2778,7 @@ mutual
         renderSegmentByPlan childState childSegment childPlan
       else if emitOriginal then
         emitOriginalAt
-          (!startsOnNewSourceLine
-            || state.pendingCommandBoundary?.isSome
-            || (originalPlan?.any
-                  fun plan =>
-                    plan.policy.content == .proofLayout && state.pendingIndent?.isSome))
+          (!startsOnNewSourceLine || state.pendingCommandBoundary?.isSome)
           none originalPlan?
       else
         renderSegment childState childSegment

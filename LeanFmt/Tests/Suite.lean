@@ -2559,10 +2559,7 @@ def assertProofIslandUsesStructuralIndent (env : Lean.Environment) : IO Unit := 
     "def shiftedRewriteRules :=\n"
     ++ "  outer\n"
     ++ "    (fun x => by\n"
-    ++ "      rw\n"
-    ++ "        [map_zero,\n"
-    ++ "        ← ConcreteCategory.comp_apply,\n"
-    ++ "        ← NatTrans.naturality,\n"
+    ++ "      rw [map_zero, ← ConcreteCategory.comp_apply, ← NatTrans.naturality,\n"
     ++ "        ConcreteCategory.comp_apply]\n"
     ++ "        at hk)\n"
   let formatted ←
@@ -2782,6 +2779,28 @@ def assertQqApplicationArgumentUsesStructuralBoundary (env : Lean.Environment)
   assertTrue "generated Qq closing-shell formatting preserves code"
     (← codePreservedIgnoringWhitespace env generatedKindSource
         generatedKindResult.formatted)
+
+  let bindingSource :=
+    "open scoped Qq\n"
+    ++ "\n"
+    ++ "def quotedBinding := do\n"
+    ++ "  let result ←\n"
+    ++ "    (evaluateQuotedPower firstArgument secondArgument thirdArgument fourthArgument\n"
+    ++ "      q(quotedValue) fifthArgument sixthArgument).run\n"
+    ++ "  pure result\n"
+  let bindingResult ←
+    Formatter.formatSourceWithEnvDetailed env bindingSource
+      "quoted-binding-structural-boundary.lean" { lineWidth := 100 }
+  assertTrue "a quoted binding does not fall back" (!bindingResult.fellBack)
+  assertEq "a removable quotation boundary does not keep an overflowing binding inline"
+    bindingSource bindingResult.formatted
+  assertTrue "a quoted binding preserves code"
+    (← codePreservedIgnoringWhitespace env bindingSource bindingResult.formatted)
+  assertTrue "a quoted binding fits the requested width"
+    (Formatter.linesFit bindingResult.formatted 100)
+  assertEq "a quoted binding is idempotent" bindingResult.formatted
+    (← Formatter.formatSourceWithEnv env bindingResult.formatted
+        "quoted-binding-structural-boundary-again.lean" { lineWidth := 100 })
 
 def assertParenthesizedProofIgnoresStaleSourceColumn (env : Lean.Environment)
     : IO Unit := do
@@ -6260,9 +6279,8 @@ def assertProofEquationArmsUseDeclarationBase (env : Lean.Environment) : IO Unit
     "theorem listFindIndex {p : α → β → Bool} (hp : Primrec₂ p)\n"
     ++ "    : ∀ l : List β, Primrec fun a => l.findIdx (p a)\n"
     ++ "  | [] => const 0\n"
-    ++ "  | a :: l =>\n"
-    ++ "      (cond (hp.comp .id (const a)) (const 0) (succ.comp (listFindIndex hp l))).of_eq\n"
-    ++ "        fun n => by simp [List.findIdx_cons]\n"
+    ++ "  | a :: l => (cond (hp.comp .id (const a)) (const 0) (succ.comp (listFindIndex hp l))).of_eq fun n =>\n"
+    ++ "    by simp [List.findIdx_cons]\n"
     ++ "\n"
     ++ "theorem next : True := by\n"
     ++ "  trivial\n"
@@ -8157,7 +8175,15 @@ def assertResolvedIslandFactsDriveProbes : IO Unit := do
     }
   assertTrue "selected source policy refreshes first-line facts"
     (selected.summary.startsWithOriginalEmission
+      && selected.summary.startsWithRetainedOriginalBoundary
       && selected.summary.startsWithUnbreakableOriginalFirstLine)
+  for kind in [.qq, .calc] do
+    let boundaryFormatted :=
+      selected.withAlternative source
+        (.structural #[.preserve (Formatter.OriginalTree.planForKind kind), .unchanged])
+    assertTrue "a wrapper retains source emission without retaining a structural boundary"
+      (boundaryFormatted.summary.startsWithOriginalEmission
+        && !boundaryFormatted.summary.startsWithRetainedOriginalBoundary)
   assertEq "flat emission uses selected source policy" source
     (Formatter.renderWithoutRuleBreaks state segment).output
   assertEq "first-line measurement uses selected source policy" source
@@ -8170,18 +8196,113 @@ def assertResolvedIslandFactsDriveProbes : IO Unit := do
     (suffix.1.suffixWidth == "first   second".length && suffix.2)
   assertTrue "fit probes count preserved spaces"
     (Formatter.probeLayoutWithoutRuleBreaks? state segment).isNone
+  let flow : Formatter.FlowRenderContext :=
+    {
+      segment
+      plan := Formatter.LayoutPlan.resolve {} segment
+      sourceBreaks := []
+      entryState := state
+    }
+  let childState := { state with options := { lineWidth := 13 } }
+  assertTrue "child first-line probes select the child's preserved layout facts"
+    (!flow.childFirstLineFits childState 0 (state.context.push segment 0) first)
   let structural :=
     selected.withAlternative source
       (.structural #[.structural #[.unchanged, .unchanged], .unchanged])
   let structuralState := { state with layoutFacts? := some structural }
   assertTrue "opening a source region refreshes first-line facts"
     (!structural.summary.startsWithOriginalEmission
+      && !structural.summary.startsWithRetainedOriginalBoundary
       && !structural.summary.startsWithUnbreakableOriginalFirstLine)
   assertEq "structural emission no longer uses the inherited source policy"
     "first second third"
     (Formatter.renderWithoutRuleBreaks structuralState segment).output
   assertTrue "fit probes use the same structural alternative as emission"
     (Formatter.probeLayoutWithoutRuleBreaks? structuralState segment).isSome
+  assertTrue "child first-line probes select the child's structural alternative"
+    (flow.childFirstLineFits { childState with layoutFacts? := some structural } 0
+      (state.context.push segment 0) first)
+  let detachedSource := "owner\nfirst   second"
+  let detached :=
+    SyntaxTree.Tree.node (.raw `null)
+      #[
+        .leaf (syntheticIdentTokenAt "first" 6 11),
+        .leaf (syntheticIdentTokenAt "second" 14 20)
+      ]
+  let detachedState : Formatter.RenderState :=
+    {
+      source := detachedSource
+      sourceMap := SyntaxTree.SourcePositionMap.ofString detachedSource
+      lastToken? := some (syntheticIdentTokenAt "owner" 0 5)
+    }
+  let detachedState := detachedState.appendOutput "owner"
+  assertEq "first-line probes measure the source content, not its leading newline"
+    "owner first   second"
+    (detachedState.firstLineOfOriginalTree detached).1.output
+  let commentSource := "owner -- note\nfirst   second"
+  let commented :=
+    SyntaxTree.Tree.node (.raw `null)
+      #[
+        .leaf (syntheticIdentTokenAt "first" 14 19),
+        .leaf (syntheticIdentTokenAt "second" 22 28)
+      ]
+  let commentState :=
+    {
+      detachedState with
+        source := commentSource
+        sourceMap := SyntaxTree.SourcePositionMap.ofString commentSource
+    }
+  let (commentLine, stopped) := commentState.firstLineOfOriginalTree commented
+  assertTrue "first-line probes still stop at line-breaking comments" stopped
+  assertEq "first-line probes retain the leading comment" "owner -- note"
+    commentLine.output
+  let detachedToken := syntheticIdentTokenAt "first" 6 11
+  let detachedLeaf :=
+    SyntaxTree.Tree.leaf
+      { detachedToken with leading := { detachedToken.leading with text := "\n" } }
+  let detachedFacts := Formatter.TreeLayoutFacts.ofTree detachedSource detachedLeaf
+  for kind in [.proof, .mathlibTactic, .quotation] do
+    let retained :=
+      detachedFacts.withAlternative detachedSource
+        (.preserve (Formatter.OriginalTree.planForKind kind))
+    assertTrue "relative-layout islands report their retained leading break"
+      retained.summary.containsMultilineOriginalEmission
+  for (operator, kind)
+      in [("<", `«term_<_»), ("=", `«term_=_»), ("+", `«term_+_»), ("*", `«term_*_»)] do
+    let relationSource := s!"left {operator}\n  right"
+    let rightToken := syntheticIdentTokenAt "right" 9 14
+    let right :=
+      SyntaxTree.Tree.node (.raw `null)
+        #[.leaf { rightToken with leading := { rightToken.leading with text := "\n  " } }]
+    let relation :=
+      SyntaxTree.Tree.node (.infixChain kind)
+        #[
+          .leaf (syntheticIdentTokenAt "left" 0 4),
+          .leaf (syntheticAtomTokenAt operator 5 6),
+          right
+        ]
+    let relationFacts := Formatter.TreeLayoutFacts.ofTree relationSource relation
+    for alternative
+        in [
+          .unchanged,
+          .structural
+            #[
+              .unchanged,
+              .unchanged,
+              .preserve (Formatter.OriginalTree.planForKind .proof)
+            ]
+        ] do
+      let relationState : Formatter.RenderState :=
+        {
+          source := relationSource
+          sourceMap := SyntaxTree.SourcePositionMap.ofString relationSource
+          options := { lineWidth := 8 }
+          layoutFacts? := some (relationFacts.withAlternative relationSource alternative)
+        }
+      assertEq "infix right-boundary ownership is independent of source protection"
+        s!"left\n{operator} right"
+        (Formatter.renderSegment relationState
+          (Formatter.LineBreakRules.Segment.ofTree relation)).output
 
 private partial def layoutFactsSnapshot (facts : Formatter.TreeLayoutFacts) : String :=
   match facts with
@@ -10420,11 +10541,17 @@ def assertNestedChildFitCountsInfixSuffix (env : Lean.Environment) : IO Unit := 
     ++ "  Submodule.liftQSpanSingleton _\n"
     ++ "    (CharacterModule.int.divByNat\n"
     ++ "      <| if addOrderOf a = 0 then 2 else addOrderOf a).toIntLinearMap <| by\n"
-    ++ "      exact h\n"
+    ++ "    exact h\n"
   let formatted ←
     Formatter.formatSourceWithEnv env source "nested-child-fit-infix-suffix.lean"
       { lineWidth := 100 }
   assertEq "nested child fit counts an enclosing infix suffix" expected formatted
+  assertTrue "nested infix suffix preserves code"
+    (← codePreservedIgnoringWhitespace env source formatted)
+  let again ←
+    Formatter.formatSourceWithEnv env formatted "nested-child-fit-infix-suffix.lean"
+      { lineWidth := 100 }
+  assertEq "nested infix suffix is idempotent" formatted again
 
 def assertNestedInfixFitCountsPairedDelimiterSuffix (env : Lean.Environment)
     : IO Unit := do
@@ -15423,6 +15550,25 @@ def assertFormattingExceptionChecks (env : Lean.Environment) : IO Unit := do
       "line-comment-overflow.lean"
   assertTrue "line-comment overflow is exempt"
     (Formatter.Diagnostics.overflowOccurrences lineCommentModule).isEmpty
+  let movedTrailingCommentSource :=
+    "def commentedProof : True := id (by\n"
+    ++ "    skip\n"
+    ++ "    exact True.intro) -- Keep the explanation beside the completed proof without exceeding its line.\n"
+  let movedTrailingComment := movedTrailingCommentSource.replace "\n    " "\n        "
+  assertTrue "the authored proof and trailing comment fit"
+    (Formatter.linesFit movedTrailingCommentSource 100)
+  let beforeCommentMove ←
+    SyntaxTree.parseModuleStringWithEnv env movedTrailingCommentSource
+      "moved-trailing-comment-source.lean"
+  let afterCommentMove ←
+    SyntaxTree.parseModuleStringWithEnv env movedTrailingComment
+      "moved-trailing-comment-formatted.lean"
+  assertTrue "moving code and its trailing comment can introduce actionable overflow"
+    ((Formatter.Diagnostics.formattingExceptions beforeCommentMove afterCommentMove
+        { lineWidth := 100 }).any
+      fun
+      | .lineOverflow _ => true
+      | _ => false)
   let blockCommentOverflow :=
     "/- " ++ String.ofList (List.replicate Formatter.maxLineWidth 'x') ++ " -/\n"
   let blockCommentModule ←
@@ -18444,15 +18590,8 @@ def assertMovedProofCollectionFitsWidth (env : Lean.Environment) : IO Unit := do
     ++ "    by\n"
   let expected :=
     proofPrefix
-    ++ "      simp\n"
-    ++ "        only [\n"
-    ++ "          Nat.add_assoc,\n"
-    ++ "          Nat.add_comm,\n"
-    ++ "          Nat.add_left_comm,\n"
-    ++ "          Nat.add_zero,\n"
-    ++ "          Nat.zero_add,\n"
-    ++ "          Nat.mul_one\n"
-    ++ "        ]\n"
+    ++ "      simp only [Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.add_zero,\n"
+    ++ "        Nat.zero_add, Nat.mul_one]\n"
     ++ "  ⟩\n"
   check "moved proof collection" source expected 90
   check "CRLF moved proof collection" (source.replace "\n" "\r\n") expected 90
@@ -18474,18 +18613,122 @@ def assertMovedProofCollectionFitsWidth (env : Lean.Environment) : IO Unit := do
     proofPrefix
     ++ "      -- Keep this comment.\n"
     ++ "      skip\n"
-    ++ "      simp\n"
-    ++ "        only [\n"
-    ++ "          Nat.mul_one,\n"
-    ++ "          Nat.add_assoc,\n"
-    ++ "          Nat.add_comm,\n"
-    ++ "          Nat.add_left_comm,\n"
-    ++ "          Nat.add_zero,\n"
-    ++ "          Nat.zero_add\n"
-    ++ "        ]\n"
+    ++ "      simp only [Nat.mul_one, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm,\n"
+    ++ "        Nat.add_zero, Nat.zero_add]\n"
     ++ "  ⟩\n"
   assertTrue "the later authored continuation fits" (Formatter.linesFit laterSource 82)
   check "later proof continuation" laterSource laterExpected 82
+  let locatedSource := source.replace "Nat.mul_one]" "Nat.mul_one] at *"
+  let locatedExpected := expected.replace "Nat.mul_one]" "Nat.mul_one]\n        at *"
+  check "moved collection with location" locatedSource locatedExpected 90
+
+  let bulletSource :=
+    "def movedBullet (p : Prop) (h : p) : {n : Nat // (p ∧ True) ∧ p} :=\n"
+    ++ "  ⟨0, by\n"
+    ++ "    constructor\n"
+    ++ "    · simp only [and_true, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.add_zero, Nat.zero_add]\n"
+    ++ "      exact h\n"
+    ++ "    · exact h⟩\n"
+  let bulletExpected :=
+    "def movedBullet (p : Prop) (h : p) : {n : Nat // (p ∧ True) ∧ p} :=\n"
+    ++ "  ⟨\n"
+    ++ "    0,\n"
+    ++ "    by\n"
+    ++ "      constructor\n"
+    ++ "      · simp only [and_true, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.add_zero,\n"
+    ++ "          Nat.zero_add]\n"
+    ++ "        exact h\n"
+    ++ "      · exact h\n"
+    ++ "  ⟩\n"
+  check "moved bullet header and sibling tactic" bulletSource bulletExpected 102
+
+  let nestedTermSource :=
+    "theorem attachedProofWithNestedTerm (p : Prop) (h : p) : p := by\n"
+    ++ "  have proofOfOurProposition : p := (id : p → p) <| by\n"
+    ++ "    simp only [show p = p by rfl, and_true, true_and, eq_self, h]\n"
+    ++ "  exact proofOfOurProposition\n"
+  check "attached proof with nested term" nestedTermSource nestedTermSource 100
+
+  let recordProofSource :=
+    "structure ProofRecord where\n"
+    ++ "  result : Nat → Nat → True → True\n"
+    ++ "def recordProof : ProofRecord :=\n"
+    ++ "  { result := fun x y h => id <| by\n"
+    ++ "      simp only [show True = True by rfl, and_true, true_and, eq_self, h] }\n"
+  let recordProofExpected :=
+    "structure ProofRecord where\n"
+    ++ "  result : Nat → Nat → True → True\n"
+    ++ "\n"
+    ++ "def recordProof : ProofRecord :=\n"
+    ++ "  {\n"
+    ++ "    result :=\n"
+    ++ "      fun x y h =>\n"
+    ++ "        id <| by\n"
+    ++ "          simp only [show True = True by rfl, and_true, true_and, eq_self, h]\n"
+    ++ "  }\n"
+  check "moved inline owner of a retained proof" recordProofSource recordProofExpected 100
+  check "CRLF moved inline owner of a retained proof"
+    (recordProofSource.replace "\n" "\r\n") recordProofExpected 100
+
+  for comment
+      in [
+        " -- Keep the explanation beside the completed proof without exceeding its line.",
+        " /- The explanation stays beside the completed proof. -/",
+        ""
+      ] do
+    let commentedProof :=
+      "structure CommentedProof where\n"
+      ++ "  proof : True\n"
+      ++ "\n"
+      ++ "def commentedProof : CommentedProof where\n"
+      ++ "  proof := id (by\n"
+      ++ "    skip\n"
+      ++ "    exact True.intro)"
+      ++ comment
+      ++ "\n"
+    assertTrue "the compact proof and attached comment fit"
+      (Formatter.linesFit commentedProof 100)
+    check "compact proof with an attached comment" commentedProof commentedProof 100
+    check "CRLF compact proof with an attached comment"
+      (commentedProof.replace "\n" "\r\n") commentedProof 100
+
+  let constructorShowSource :=
+    "def constructorShow : True ∧ True :=\n"
+    ++ "  ⟨True.intro,\n"
+    ++ "   show True = True by rfl ▸ True.intro⟩\n"
+  let constructorShowExpected :=
+    "def constructorShow : True ∧ True :=\n"
+    ++ "  ⟨\n"
+    ++ "    True.intro,\n"
+    ++ "    show True = True by rfl ▸ True.intro\n"
+    ++ "  ⟩\n"
+  check "protected show follows its constructor item base"
+    constructorShowSource constructorShowExpected 100
+  check "CRLF protected show follows its constructor item base"
+    (constructorShowSource.replace "\n" "\r\n") constructorShowExpected 100
+
+  for tactic in ["simp", "simp only", "rw", "simp_all only"] do
+    let headerSource := s!"example : 0 + 0 = 0 := by {tactic} [Nat.add_zero]\n"
+    let parsed ← SyntaxTree.parseModuleStringWithEnv env headerSource
+    assertTrue s!"{tactic} owns its delimited header"
+      (countTreeNodes .parserOwnedHeader parsed.tree == 1)
+    let some (.node _ headerChildren) := findTreeNode? .parserOwnedHeader parsed.tree
+    | throw <| IO.userError "missing tactic header"
+    assertTrue "grouped headers omit tokenless parser wrappers"
+      (headerChildren.all fun child => !child.tokens.isEmpty)
+    assertEq s!"{tactic} grouping preserves source" headerSource parsed.reconstruct
+    assertFrontendElaborates env headerSource "delimited-tactic-header.lean"
+    if tactic == "rw" then
+      let some collection := findTacticTree? `Lean.Parser.Tactic.rwRuleSeq parsed.tree
+      | throw <| IO.userError "missing rewrite collection"
+      assertEq "rewrite collections use general delimiter layout" "array"
+        (Formatter.LineBreakRules.formattingRuleFor collection).name
+      assertTrue "rewrite collections are not separate protected tactics"
+        (Formatter.OriginalTree.classify? collection).isNone
+  let applicationSource := "example : List Nat := by exact [0, 1, 2]\n"
+  let application ← SyntaxTree.parseModuleStringWithEnv env applicationSource
+  assertTrue "term-taking tactic lists retain term ownership"
+    (findTreeNode? .parserOwnedHeader application.tree).isNone
 
   let recordSource :=
     "def movedRecord : {n : Nat // n = 0} :=\n"
@@ -18551,6 +18794,69 @@ def assertMovedProofCollectionFitsWidth (env : Lean.Environment) : IO Unit := do
   let map := SyntaxTree.SourcePositionMap.ofString "f α β\n"
   assertTrue "recovery does not search inside nested quotations"
     (Formatter.OriginalTree.overflowAlternative? map containingQuote proofPlan 1 5).isNone
+
+def assertRecoveryPreservesSharedSourceLines (env : Lean.Environment) : IO Unit := do
+  let application (start : Nat) :=
+    SyntaxTree.Tree.node .application
+      #[
+        .leaf (syntheticIdentTokenAt "f" start (start + 1)),
+        .leaf (syntheticIdentTokenAt "a" (start + 2) (start + 3)),
+        .leaf (syntheticIdentTokenAt "b" (start + 4) (start + 5))
+      ]
+  let proofPlan := Formatter.OriginalTree.planForKind .proof
+  let neighbors : List (String × Array SyntaxTree.Tree) :=
+    [
+      ("x f a b", #[.leaf (syntheticIdentTokenAt "x" 0 1), application 2]),
+      ("f a b x", #[application 0, .leaf (syntheticIdentTokenAt "x" 6 7)])
+    ]
+  for (source, children) in neighbors do
+    let tree := SyntaxTree.Tree.node (.raw `null) children
+    let map := SyntaxTree.SourcePositionMap.ofString source
+    assertTrue "recovery cannot split a line shared with a preserved neighbor"
+      (Formatter.OriginalTree.overflowAlternative? map tree proofPlan 1 7).isNone
+  let separated :=
+    SyntaxTree.Tree.node (.raw `null)
+      #[.leaf (syntheticIdentTokenAt "x" 0 1), application 2]
+  let separatedMap := SyntaxTree.SourcePositionMap.ofString "x\nf a b"
+  assertTrue "a protected neighbor on another line does not block recovery"
+    (Formatter.OriginalTree.overflowAlternative? separatedMap separated proofPlan 1
+      5).isSome
+
+  let header :=
+    "theorem protectedSemicolonLine (n : Nat) : True := by\n"
+    ++ "  induction n with\n"
+    ++ "  | zero => trivial\n"
+    ++ "  | succ n ih =>\n"
+  let body :=
+    "    have : True := by\n"
+    ++ "      have : True := by\n"
+    ++ "        intro i\n"
+    ++ "        let fi := input\n"
+    ++ "        obtain ⟨x, h0, h1⟩ := exists_smul_eq_zero_and_mk_eq hp hM hj fi; refine ⟨x, h0, ?_⟩; rw [h1]\n"
+    ++ "        simp [fi]\n"
+    ++ "      exact this\n"
+    ++ "    exact this\n"
+  let source := header ++ body
+  let expected :=
+    (header ++ "  " ++ body.replace "\n" "\n  ").trimAsciiEnd.toString ++ "\n"
+  assertTrue "the protected semicolon line originally fits"
+    (Formatter.linesFit source 100)
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "protected-semicolon-line.lean"
+      { lineWidth := 100 }
+  assertTrue "shared-line protection does not fall back" (!result.fellBack)
+  assertEq "a moved protected line stays intact, including its final argument"
+    expected result.formatted
+  assertTrue "the required indentation retains an accepted overflow"
+    (!Formatter.linesFit result.formatted 100)
+  let before ← SyntaxTree.parseModuleStringWithEnv env source "protected-line-before.lean"
+  let after ←
+    SyntaxTree.parseModuleStringWithEnv env result.formatted "protected-line-after.lean"
+  assertTrue "a shifted protected line has no preservation or overflow exception"
+    (Formatter.Diagnostics.formattingExceptions before after { lineWidth := 100 }).isEmpty
+  assertEq "shared-line protection is idempotent" result.formatted
+    (← Formatter.formatSourceWithEnv env result.formatted "protected-line-again.lean"
+        { lineWidth := 100 })
 
 def assertConditionalChainCommentOwnership (env : Lean.Environment) : IO Unit := do
   let check (label source expected : String) (width : Nat := 100) := do
@@ -20966,6 +21272,39 @@ def assertCompactAndProtectedLayoutConsistency (_env : Lean.Environment) : IO Un
     ("def fittingSemicolon :=\n"
       ++ "  (fun f => by ext; exact Equiv.ulift.injective (hF.map_injective (by simp)))\n")
 
+  let fittingSemicolonPeers :=
+    "theorem fittingSemicolonPeers (p : Prop) : p → p ∧ p := by\n"
+    ++ "  intro h; constructor\n"
+    ++ "  · exact h\n"
+    ++ "  · exact h\n"
+  check "fitting-semicolon-proof-peers" fittingSemicolonPeers fittingSemicolonPeers
+
+  let commentedFlow :=
+    "theorem commentedFlow : True := by\n"
+    ++ "  simpa only [firstLemma, secondLemma -- Keep this comment.\n"
+    ++ "  ] using proof\n"
+  check "flowing-bracket-after-comment" commentedFlow
+    ("theorem commentedFlow : True := by\n"
+      ++ "  simpa only [firstLemma, secondLemma -- Keep this comment.\n"
+      ++ "  ]\n"
+      ++ "    using proof\n")
+
+  let movedProofHeader :=
+    "theorem movedFlowingProof (n : Nat) : True := by\n"
+    ++ "  induction n with\n"
+    ++ "  | zero => trivial\n"
+    ++ "  | succ n ih =>\n"
+  check "moved-flowing-proof-bracket"
+    (movedProofHeader
+      ++ "    have : True := by\n"
+      ++ "      simp only [comp_apply, id_apply, DFinsupp.lsingle_apply, DFinsupp.coprodMap_apply_single, hg]\n"
+      ++ "    exact this\n")
+    (movedProofHeader
+      ++ "      have : True := by\n"
+      ++ "        simp only [comp_apply, id_apply, DFinsupp.lsingle_apply, DFinsupp.coprodMap_apply_single,\n"
+      ++ "          hg]\n"
+      ++ "      exact this\n")
+
   check "trailing-semicolon-tactic-peers"
     ("theorem trailingSemicolonTacticPeers : True := by\n"
       ++ "  have first : True := by\n"
@@ -21943,6 +22282,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertSourceLayoutFactsCache
   assertSourceIslandRecoveryPreservesNeighbors env
   assertMovedProofCollectionFitsWidth env
+  assertRecoveryPreservesSharedSourceLines env
   assertHaveProofAfterInfixPreservesLayout env
   assertSingletonDelimitedHaveInheritsCollectionBase env
   assertAbsoluteValueDelimitersStayAttached env

@@ -440,7 +440,7 @@ private partial def containsDetachedExtractedProofIntroducer : SyntaxTree.Tree �
 private def isProtectedTacticTree : SyntaxTree.Tree → Bool
   | .node (.raw `Mathlib.Tactic.dsimpPercent) _ => false
   | .node (.tactic `Mathlib.Tactic.dsimpPercent _ _ _ _) _ => false
-  | tree@(.node kind _) =>
+  | tree@(.node kind children) =>
       let kindName := SyntaxTree.nodeKindName kind
       if isQuotationTree tree then
         false
@@ -450,6 +450,7 @@ private def isProtectedTacticTree : SyntaxTree.Tree → Bool
             !isTacticSequenceKind rawKind
             && !isOwner
             && !containsOwner
+            && SyntaxTree.outerDelimiterKind? children != some .bracket
             && !containsDetachedExtractedProofIntroducer tree
             && !(tree.isSpacedApplicationTactic && containsAttachedProofTerm tree)
         | .infixChain rawKind =>
@@ -738,7 +739,12 @@ def policyFor : LayoutIslandKind → IslandPolicy
         pendingIndent := .useWhenAvailable
         followingComment := .preserveSourceIndent
       }
-  | .proofLayout => { content := .proofLayout, firstLine := .unbreakable }
+  | .proofLayout =>
+      {
+        content := .proofLayout
+        firstLine := .unbreakable
+        pendingIndent := .useWhenAvailable
+      }
   | .attributes =>
       {
         multiline := .preserveWithoutRuleBreaks
@@ -818,7 +824,9 @@ private partial def isAttachedHeader : SyntaxTree.Tree → Bool
 private def ownsStructuredHeader : SyntaxTree.Tree → Bool
   | .node .declarationHeader _ | .node .parserOwnedHeader _ | .node .suffixGroup _ =>
       false
-  | .node _ children => children.any isAttachedHeader
+  | .node _ children =>
+      children.any isAttachedHeader
+      && children.any fun child => child.firstToken?.isSome && !isAttachedHeader child
   | _ => false
 
 private def ownsAttachedProof : SyntaxTree.Tree → Bool
@@ -884,6 +892,33 @@ private partial def argumentAlternative
               argumentAlternative child (alternatives[index]?.getD .unchanged))
     | _ => .unchanged
 
+private def retainSharedSourceLines
+    (sourceMap : SyntaxTree.SourcePositionMap) (children : Array SyntaxTree.Tree)
+    (alternatives : Array (Option OverflowAlternative))
+    : Array (Option OverflowAlternative) :=
+  Id.run do
+    let mut result := alternatives
+    let mut start := 0
+    let mut lastLine? : Option Nat := none
+    let mut containsPreserved := false
+    -- A retained sibling protects the complete physical line shared with a recovery candidate.
+    for index in [:children.size + 1] do
+      let child? := children[index]?
+      let firstLine? :=
+        (child? >>= SyntaxTree.Tree.firstToken?).map
+          (fun token => sourceMap.lineNumberAt token.span.start)
+      if index == children.size
+          || firstLine?.any (fun line => lastLine?.any (· < line)) then
+        if containsPreserved then
+          for previous in [start:index] do
+            result := result.set! previous none
+        start := index
+        containsPreserved := false
+      if let some last := child? >>= SyntaxTree.Tree.lastToken? then
+        lastLine? := some (sourceMap.lineNumberAt last.span.stop)
+        containsPreserved := containsPreserved || (alternatives[index]?.getD none).isNone
+    return result
+
 private partial def sourceOverflowAlternative?
     (sourceMap : SyntaxTree.SourcePositionMap) (shift limit : Nat)
     (inheritedPlan : IslandPlan) (tree : SyntaxTree.Tree)
@@ -899,11 +934,25 @@ private partial def sourceOverflowAlternative?
         some <| .structural (children.map fun _ => .unchanged)
       else
         let inheritedPlan := localPlan?.getD inheritedPlan
+        let preservesNeighbors :=
+          !ownsHeader
+          && match tree with
+              | .node .declarationHeader _
+              | .node .parserOwnedHeader _
+              | .node .suffixGroup _ => false
+              | _ => true
         let alternatives :=
           children.map (sourceOverflowAlternative? sourceMap shift limit inheritedPlan)
         let recoversArgument :=
           isRecoverableArgument tree
           && hasNewSourceLineOverflow sourceMap shift limit tree
+        let alternatives :=
+          if !recoversArgument
+              && preservesNeighbors
+              && alternatives.any Option.isSome then
+            retainSharedSourceLines sourceMap children alternatives
+          else
+            alternatives
         if recoversArgument || alternatives.any Option.isSome then
           some
           <| .structural
@@ -911,7 +960,7 @@ private partial def sourceOverflowAlternative?
               fun index child =>
                 if recoversArgument then
                   argumentAlternative child ((alternatives[index]!).getD .unchanged)
-                else if ownsHeader then
+                else if !preservesNeighbors then
                   (alternatives[index]!).getD .unchanged
                 else
                   (alternatives[index]!).getD
@@ -1101,7 +1150,7 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
                     && !proofLayoutRebasesFromFirstToken tree then
               structuralIndent
             else if proofLayout
-                    && request.respectPendingIndent
+                    && usesPendingIndent
                     && originalLeadingHasLineStructure then
               structuralIndent
             else
@@ -1118,7 +1167,7 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
   let inlineContinuationColumns? :=
     match inlineContinuationColumns? with
     | some (sourceIndent, targetIndent) =>
-        if proofLayout && request.respectPendingIndent then
+        if proofLayout && usesPendingIndent then
           some (sourceIndent, targetIndent)
         else if quotationStartsOnLine then
           some (sourceIndent, targetIndent)

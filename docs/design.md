@@ -111,6 +111,9 @@ Parser-owned modifiers stay with the argument they introduce. For example,
 internally. An attached body introducer likewise remains a suffix of an
 alternative, so generated term syntax uses `=> do` while an ordinary
 non-suffix alternative body begins on the following indented line.
+The same header attachment and collection flow apply to delimited tactic arguments
+without a term body, including `simp only [...]`, `rw [...]`, and a following
+location clause. Ordinary term arguments such as `exact [...]` retain term layout.
 Parser-defined tactic suffixes follow the same principle: a fitting body may stay
 beside a suffix such as `says`, while a broken body continues from the suffix
 owner's base. Likewise, `show ... from` keeps `from` with the following
@@ -1129,6 +1132,10 @@ lines in its chain:
   + h argumentOne argumentTwo
 ```
 
+The operator owns the boundary before its right operand, even when that operand's
+internal layout is protected. A retained source newline cannot leave the operator
+on a line by itself.
+
 Consecutive operators with the same parser binding powers are formatted as one
 chain, even when their spellings differ, such as alternating `+` and `-`.
 Chained pipe projections use the same peer layout, with every `|>.member`
@@ -1531,6 +1538,10 @@ exact Or.inl (by simp [hselected])
 ```
 
 Authored multiline tactic content remains protected.
+A retained proof-body break does not by itself force every surrounding header or
+application to break. A fitting compact header can stay intact; the proof body
+still receives its owner's indentation. Trailing comments and closing delimiters
+remain attached under the same policy as any other layout.
 If moving that content right makes a previously fitting source line overflow,
 the affected application or delimited argument may use its ordinary structural
 layout. This includes later authored continuation lines. Recovery can open the
@@ -1539,6 +1550,12 @@ in their source layout. Existing rules govern wrapping; tactic-specific recovery
 rules are not used. The alternative must reduce the number of overflowing lines.
 Already-overlong source lines, including their comments, do not trigger this
 argument recovery.
+A source line shared with a retained protected span cannot be partially reflowed.
+The complete line retains its authored layout, even when required indentation
+makes it exceed the width limit. For example, a protected inline tactic sequence
+keeps `obtain result := proof; refine next; rw [h]` intact instead of wrapping only
+`[h]`. This is an accepted protected-layout overflow, not a missing semicolon rule.
+Recovery on separate source lines remains eligible.
 A detached braced tactic sequence moves as one protected body beneath its
 owning tactic. Its internal relative indentation is retained rather than
 recomputed from the brace's previous source column.
@@ -1564,7 +1581,9 @@ Earlier breaks inside the owner do not force this suffix body to break.
 When a registered tactic parser ends a header with a keyword-owned term body,
 the keyword stays with the body application head. A bracketed tactic argument
 flows from the tactic base, while the body application's arguments use their
-own structural base:
+own structural base. A flowing collection reserves room for its attached closing
+delimiter; a final item wraps with the delimiter instead of leaving it alone on
+the next line. Line-breaking comments still require a boundary:
 
 ```lean
 simpa [firstNormalizationLemma, secondNormalizationLemma,

@@ -497,7 +497,19 @@ rule's closing boundary. No extension-kind exception is needed.
 
 A parser-owned header groups a single-token modifier with a following delimited
 argument. The delimiter then owns the collection's internal flow without allowing the
-modifier to detach. A single-token tactic prefix is carried through transparent,
+modifier to detach. Complete non-term-taking tactic entries with a delimited
+argument use that same grouping, with or without a trailing location clause;
+internal parser helpers and delimiter-owned nodes retain their own grouping.
+Bracketed tactic-argument collections are structural delimiters rather than
+separate protected tactics; an enclosing protected proof or tactic still retains
+its authored layout.
+Grouped headers omit tokenless parser wrappers while retaining every token,
+including empty-lexeme tokens. This keeps absent optional clauses from creating
+an empty leading flow segment. Their enclosing
+tactic keeps its source-island classification; recovery uses the existing header
+and collection rules. A wrapper containing only a header is not itself a
+header-and-body recovery owner, so an already-overlong collection stays protected.
+A single-token tactic prefix is carried through transparent,
 single-content tactic-sequence wrappers only when the descendant contains a structural
 tactic layout owner. The prefix then joins that owner's first structural head; unrelated
 proof islands retain their established suffix grouping. The tactic bullet `·` remains
@@ -853,7 +865,9 @@ Rule-authoring methods compile into these plan properties:
   between a modifier container and its extensible command. Named arguments use the
   same contract at their closing-delimiter boundary: `)` remains a tight suffix when
   it fits, while a forced comment activates the existing base-aligned closing
-  breakpoint. When no rule breakpoint exists, an unbreakable original first line also
+  breakpoint. Flowing parser-owned collections use that contract for their closing
+  delimiter too, so item fit probes reserve its width. When no rule breakpoint exists,
+  an unbreakable original first line also
   remains with its prefix if the fallback child break cannot make that line fit; this
   avoids a no-benefit break and a possible convergence cycle. Real rule breakpoints can
   still expose structural wrapping inside the child. If a tight leaf suffix does not fit
@@ -1378,9 +1392,20 @@ reflowed values with stale source indentation for their peer fields or elements.
 Their parser tactic wrappers become structural along with their contents;
 nested proof, quotation, ignored, and other protected islands keep their own plans.
 Header owners on the recovered path also retain ordinary child plans, so their
-proof introducers establish the proof's structural base. Other ancestor paths
+proof introducers establish the proof's structural base. Their declaration-header,
+parser-owned-header, and suffix-group envelopes likewise keep ordinary child
+plans: an attached keyword is part of that structural shell, not an independently
+protected peer. Other ancestor paths
 explicitly preserve unaffected siblings. There is no tactic-name dispatch or
 extra rule API for this recovery.
+Where recovery retains siblings, source-line ownership limits that sparse plan:
+a retained token-bearing sibling protects the complete physical line it shares
+with a candidate. `OriginalTree` discards partial recovery for that shared line;
+it does not invent separator breakpoints or put source-boundary policy in the
+renderer. Tokenless siblings do not protect a line, and retained siblings on
+separate lines do not prevent recovery. Required indentation can therefore
+produce an accepted protected-line overflow without opening only the final
+argument of an inline sequence.
 Optional single-value tactic assignments are regrouped in the syntax tree into a
 definition with a parser-owned header, assignment token, and value. This exposes the
 ordinary value boundary for `obtain`-shaped syntax without a tactic-specific break rule.
@@ -1389,7 +1414,14 @@ Absent assignments and multi-value assignment clauses retain their original shap
 The renderer resolves this alternative into its immutable `TreeLayoutFacts`, refreshing
 the original-emission and multiline summaries along the changed path. Flat probes,
 first-line and suffix measurement, and text emission all consume that same fact tree;
-child traversal restores the parent's facts on return. There is no recursive switch
+child probes select the child's facts and resolve its incoming base and source
+anchor through the same placement calculation as nested rendering. Flat and
+structural traversal restore the parent's scope on return. A first-line probe
+measures the island's first content line with normal
+leading-boundary spacing, not an empty line before its source start. Required
+comment breaks remain part of that boundary. Multiline summaries include a
+leading source break for every island that retains relative layout, not only
+proof-body islands. There is no recursive switch
 that disables descendant protection, and no mutation of the lossless syntax tree.
 The alternative is built only after a moved source island overflows and is selected
 only if it reduces the overflow count. Nested proof bodies therefore remain protected
@@ -1427,6 +1459,29 @@ flat when the attached keyword would make the completed line overflow.
 For flow rules, a multiline protected child likewise prevents acceptance of the whole
 segment's fitting multiline probe. When the rule exposes a boundary before that child,
 computed flow takes it and renders the complete child from the selected continuation base.
+A retained body beginning at a rule-owned source break receives that rule's
+indentation even during flat traversal. Its introducer's previous inline position
+does not determine the body's base. This does not reject the entire surrounding
+probe: fitting headers can remain compact while the body's authored break is
+retained. Balanced layouts still account for retained breaks at their own child
+boundaries; a break before the whole segment is not an internal break.
+Unbroken intermediate headers do not introduce continuation bases. When a retained
+break makes an owner multiline, its base is resolved from that owner's entry
+placement, not from the cursor after rendering its prefix.
+Checked probes propagate a local retained-body-break flag, separately from
+comment line breaks. Enclosing zero-indent layouts reject that candidate and use
+their existing structural rules. This flag is not persistent renderer state.
+Retained-boundary summaries follow the resolved island policy through wrappers;
+an original-layout island whose leading boundary is structural does not retain
+that source break. A parent rule that formats the boundary likewise takes
+precedence. Source preservation alone does not make a boundary mandatory.
+When the incoming line already overflows, only width rejection is disabled;
+the same placement and layout checks still apply.
+The single-expression `doExpr` parser wrapper inherits its binding's base;
+it does not establish a second base at an inline expression introducer.
+Compound proof-layout islands consume an available pending indent through their
+island policy, both in probes and nested emission. Their continuation rebasing
+uses that same resolved choice; the renderer does not add a separate policy override.
 
 When a multiline proof or
 quotation begins inline, its later source lines use the introducer's source-to-output
@@ -1523,6 +1578,10 @@ operand itself has structural breaks, the outer `<|` boundary takes priority ove
 splitting that operand merely to reserve space for the calc suffix. Diagnostics treat an
 unchanged protected calc operand shifted right by structural indentation as an
 unbreakable-layout overflow.
+An ordinary infix rule owns the leading boundary of each right operand, including
+an operand preserved by an overflow-recovery alternative. Its internal source
+layout remains protected; a retained leading newline cannot leave the operator
+alone after the rule breaks before it.
 The low-priority infix rule likewise owns the first line of an ordinary right operand.
 When a non-suffix right operand is multiline, the outer infix rule breaks before the
 complete operator-and-operand group. The nested operator-operand owner formats that

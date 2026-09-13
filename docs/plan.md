@@ -15,18 +15,12 @@ release-blocking only for Lean's standard library and Mathlib.
     thirdResult
 ```
 
-Overlapping continuation tails still require repeated rendering when restoring
-one nested base makes the next comment join overflow. Owner-local retries,
-early exit from invalid retries, cached source boundaries, and direct neighbor
-lookups reduce the cost but do not establish linear scaling. Canonical source facts
-are reused across retries. Boundary-edge, line-extent, and comment-break queries
-avoid whole-text character lists. Structural spacing context is queried only
-when source-adjacent tokens need it. The renderer does not cache
-accepted render pieces: their indentation and enclosing fit context can change.
-Retain the 32/64/128-clause sample alongside routine measurements. Eliminating the
-remaining repeated rendering requires a separate accepted-piece reuse contract;
-do not guess columns or split fitting later joins.
-This is a worst-case performance issue, not a known formatting failure.
+Overlapping continuation tails can require repeated rendering when restoring one
+nested base makes the next join overflow. Existing owner-local retries and cached
+source facts reduce cost but do not establish linear scaling. Retain the
+32/64/128-clause controls. Accepted-piece reuse needs a contract covering placement,
+suffix fit, comments, feedback, and trace equivalence. This is a worst-case
+performance issue, not a known formatting failure.
 
 ### Required prefix elaboration cost
 
@@ -35,92 +29,86 @@ theorem evidence : True := by trivial
 attribute [local simp] evidence
 ```
 
-Attributes, deriving handlers, wrappers, and unclassified commands still receive
-the complete preceding source state, including declaration bodies. Required
-replay dominates targeted Mathlib timings. Lean 4.33.1 has no audited
-source-dependency replay API. Do not skip proof bodies, guess dependencies, or
-add attribute exceptions. The audit found no duplicate completed-prefix replay
-within one parse. Native snapshot reuse needs unchanged syntax and source positions;
-it does not bypass the first changed declaration's required elaboration. Commands
-can also inspect the complete file source. Reusing final command state in the
-independent idempotency pass would weaken that check and is not allowed. No safe
-general shortcut was identified. This cost is not a known formatting failure.
+Attributes, deriving handlers, wrappers, and unclassified commands need the
+complete preceding source state. No duplicate completed-prefix replay was found
+within one parse. Native snapshots require unchanged syntax and positions;
+commands may inspect the complete file source. Do not guess dependencies, skip
+proof bodies, add attribute exceptions, or share final command state with the
+independent idempotency pass. No safe general shortcut has been identified.
 
 ## Progress
 
-### Current checkpoint: bounded performance pass
+### Current checkpoint: protected lines and flowing delimiters
 
-Comment-forced-break detection scans ASCII delimiters and nested block depth
-without normalizing or reconstructing comment text. Structural spacing context
-is deferred until an empty source boundary needs it; pending indentation and
-ordinary trivia do not evaluate that query. No new cache, rendering state,
-syntax rule, or layout policy is added.
+A retained protected span protects its complete shared physical source line.
+Recovery must not wrap only the final argument of an inline sequence such as
+`obtain result := proof; refine next; rw [h]`. Required indentation may leave
+that line over width; this is accepted protected layout. Semicolon regrouping
+and new separator rules are not planned. Source-preservation planning rejects
+partial recovery while keeping recovery on separate source lines available.
 
-Coverage compares comment detection with the previous implementation on 20,040
-inputs, including nested and unterminated comments, CR/LF/CRLF, long Unicode
-comments, and delimiter-like text inside blocks. Another 32 cases cover deferred
-spacing. The existing 9,366 boundary-edge equivalence cases remain in the suite.
-The complete local gate passed: build, unit tests, lint, fixture regeneration and
-dry check, self-format and dry check, preservation, overflow, and idempotency.
-Fixtures and existing expectations are unchanged; self-format touched only new
-code and tests. All 3,360 reference-renderer comparisons passed. The independent
-84-case ownership oracle retained output and syntax, elaborated, and converged
-idempotently.
+Focused tests cover protected neighbors on either side, a separate-line control,
+the moved Mathlib-shaped sequence, accepted overflow diagnostics, preservation,
+and idempotency. A protected theorem equation arm also keeps its authored line
+and relative continuation layout. The complete local gate passed after
+self-formatting, with no fixture changes or remaining formatting drift.
 
-Lightweight external validation passed from pristine inputs, including Mathlib
-missing-rule checks. Every output is identical to checkpoint `36c67fc`:
+The staged probe-placement changes remain intact. The additional rule fix gives
+flowing parser-owned collections the existing closing-delimiter attachment
+contract. Fit probes reserve the closer's width, so the final item wraps with
+`]` instead of leaving it on a separate line. Balanced collections retain their
+existing shape, and line-breaking comments still force a boundary.
 
-| Project | Scope | Formatter/check time | Changed output files |
+Coverage includes a proof moved into a deeper alternative, a closing bracket
+after a line comment, fitting semicolon runs, preservation, and idempotency.
+No renderer change, syntax-specific exception, or rule API is added.
+
+Final light checks passed on pristine inputs with automatic worker counts:
+
+| Project | Scope | Formatter/check time | Changes from delimiter candidate |
 | --- | --- | --- | --- |
-| GraphQL | 280 files, width 90 | 46s | 0 |
-| quantum | 20 owned files; 1 unowned skipped, width 90 | 40s | 0 |
-| CSLib | 200 files, width 100 | 119s | 0 |
-| Mathlib | 38 files, width 100 | 101.90s | 0 |
+| GraphQL | 280 files, width 90 | 53s | 0 |
+| quantum | 20 owned files; 1 unowned skipped, width 90 | 41s | 0 |
+| CSLib | 200 files, width 100 | 132s | 0 |
+| Mathlib | 98 files, width 100 | 191.37s | 16 |
 
-Compatible formatter builds passed on Lean 4.33.0 and 4.32.0; their build times
-are omitted above. Target-project builds and the complete Mathlib sweep were
-omitted. No changed-module builds were needed because all review patches are
-empty. This is a lightweight checkpoint, not the release gate.
+Preservation, actionable-overflow, idempotency, and fallback checks passed;
+Mathlib missing-rule checks also passed. All 16 Mathlib policy-change diffs were
+reviewed: every added line matches an authored source line apart from indentation.
+Protected tactic runs, headers, and continuations retain their source layout.
+`Mathlib/Algebra/Module/PID.lean:199` keeps its complete semicolon line at 102
+characters, with no formatting exception. Its surrounding fitting header also
+stays protected. The earlier flowing-delimiter improvements remain intact.
 
-Serial ABBA comparisons against `36c67fc` passed exception and idempotency checks
-at width 512. Mean checked-format times improved by 8-14%:
+An isolated before/after/after/before comparison on pristine `PID.lean` passed
+all checks. Mean user CPU time was 8.33s before and 8.52s after, a 2.3% difference.
+Wall samples were 17.20s/10.84s/10.79s/10.63s; the first baseline run dominates
+the wall average, so these do not establish a speedup or project-wide scaling.
 
-| Clauses | Before | After |
-| --- | --- | --- |
-| 32 | 233ms | 203.5ms |
-| 64 | 506.5ms | 464ms |
-| 128 | 1313ms | 1131ms |
+Target-project builds and the complete Mathlib sweep were omitted in this final
+light gate. Mathlib has 40 differences from the older build baseline, rather
+than just the 16 policy-change differences above. Do not treat either
+interrupted full validation attempt as a completed release gate.
 
-Separate paired runs also retained exact output (128 clauses: 1290ms to 1148ms).
-Plain and fitting-comment controls stayed at 18ms and 19-20ms. Simultaneous-failure
-controls retained output and idempotency (128 clauses: 735ms to 674ms); their
-deliberately overlong comments make them performance controls, not a width gate.
-Maximum observed RSS for the 128-clause command was 1312.7 MiB before and
-1311.5 MiB after, with no material increase.
+### Next checkpoint: complete release gate
 
-On 13 identical Mathlib inputs, serial ABBA means were 69.645s before and 69.605s
-after for user CPU, and 30.36s before and 30.76s after for wall time. Routine cost
-was effectively unchanged in this sample; no meaningful regression was observed.
-A process check during the paired runs found no competing active Lean build.
+Run complete validation on pinned CSLib and all 8,311 selected Mathlib files with
+the final candidate. Require exception and independent idempotency checks,
+changed-module builds, complete post-format builds, and visual review.
+Do not exempt new actionable overflows or detach comments and closing delimiters.
+Intact protected source lines may exceed width after required indentation.
+Stop for review if another fix needs a design change.
 
-This checkpoint completes the low-risk query-overhead pass, not the elimination
-of every repeated render. The two open costs above remain separately scoped
-architectural follow-ups. Accepted-output reuse needs resolved rule dependencies,
-incoming placement, suffix fit, comments, feedback, and trace equivalence. Prefix
-replay needs an audited native dependency API or a reviewed parser contract change.
-Neither belongs in an opportunistic cache or a weakened idempotency check.
+### Later checkpoint: accepted-piece reuse
 
-### Next checkpoint: release gate
-
-Rerun complete CSLib and Mathlib validation on the final candidate, including
-changed-module and aggregate builds. Review diagnostics, output changes, and
-performance. Lightweight checkpoints do not replace this gate. Already-overlong
-protected text and new too-many-lines warnings may remain acceptable when their
-formatting shape follows the design.
+Resolve the reuse contract before adding a render cache. Require equivalent
+output, diagnostics, feedback, and traces across placement and suffix changes,
+plus improved scaling in the stress controls. Prefix replay remains separately
+blocked on an audited native API or a reviewed parser contract change.
 
 ## Validation Standard
 
-Run focused checks while developing, then:
+Run focused checks, then the complete local gate:
 
 ```sh
 lake build
@@ -135,40 +123,44 @@ lake exe fmt --check --check-exception --check-idempotent -r LeanFmt
 git diff --check
 ```
 
-Review generated fixture and self-format changes. Use automatic worker counts;
-do not pass `--jobs`. For lightweight checkpoints, use recorded GraphQL, quantum,
-and CSLib build baselines, then select pristine Mathlib sources covering the
-changed path and existing safety regressions. Keep missing-rule checks enabled
-for Mathlib only. Report sample size, omitted builds, and changed-module build
-results. Compare performance on identical sources without concurrent validation.
+Review all generated fixture and self-format changes. Use automatic worker
+counts; do not pass `--jobs`. Lightweight checkpoints use recorded GraphQL,
+quantum, and CSLib build baselines plus pristine Mathlib safety regressions.
+Report scope and omitted builds. Compare performance on identical inputs without
+concurrent validation. Enable missing-rule checks for Mathlib only.
 
-Use full validation, not checkpoint mode, for the release gate. Mathlib is pinned
-to v4.33.1 commit `0df444a360eaa60ab8c11dca51a86af692955474`; format only
+Use full validation, not checkpoint mode, for release. Mathlib is pinned to
+v4.33.1 commit `0df444a360eaa60ab8c11dca51a86af692955474`; format only
 `Mathlib/`, use width 100 and Lake cache. CSLib is pinned to
-`98e395a701f2027a413ad24729e1a11a6c772eb4` with Lean v4.33.1 and width 100.
-The release gate runs clean, changed-module, and complete post-format builds.
-Successful validation does not mean every protected physical line fits width 100.
+`98e395a701f2027a413ad24729e1a11a6c772eb4`, Lean v4.33.1, width 100.
+The release gate includes clean, changed-module, and complete post-format builds.
+Passing does not mean every protected physical line fits width 100.
 
 ## Evidence
 
-Current artifacts use `.scratch/retry-final-*`. External source snapshots,
-changed-file lists, patches, and logs are under
-`.scratch/retry-final-validation/`. The focused Mathlib sample contains the
-36 existing safety-regression files plus both newly recovered proof examples.
-Paired performance runs use the saved `36c67fc` executable and 13 identical
-Mathlib sources. Final local results are in
-`.scratch/retry-final-check.log`; external results are in
-`.scratch/retry-final-external.log`. Stress evidence is under
-`.scratch/retry-final-stress/` and `.scratch/retry-final-uniform/`. The sampled
-call stacks are in `.scratch/retry-final-sample.txt`. The discarded byte-by-byte
-prototype's mixed timings are retained under `.scratch/retry-final-initial-stress/`;
-the candidate uses the standard library delimiter search instead.
-The final ABBA stress and peak-RSS records are in
-`.scratch/retry-final-resources/`; routine Mathlib comparisons are in
-`.scratch/retry-final-performance/`.
+The staged snapshot remains `.scratch/release-probe-placement/staged.patch`,
+SHA256 `b84a7cb1e783a26ebbe2456e3c885b6b942b41aead20a5c9cb54cb9b8a4a5001`.
+Its rebuilt formatter under `.scratch/recovery-staged-baseline/` exactly matches
+SHA256 `91928d3987f91bcf8df929f8250ffddd58f30efffd4326725115f163f8979ba3`.
 
-The recorded full-build baselines and batch logs are under
-`.scratch/external-validation-release/logs/`. They cover 200 CSLib files and
-all 8,311 selected Mathlib files, followed by changed-module and aggregate builds.
-They predate this candidate. External formatting changes must never be used as
-the source of a formatter fix.
+The delimiter-only comparison baseline is `.scratch/bracket-checkpoint-fmt`, SHA256
+`43fe39228410c8561417dc4320bcd82d736e27f1e714e70edb8d08192194b571`.
+The final formatter is frozen as `.scratch/protected-lines-fmt`, SHA256
+`4e20c39fe1ae940d589b5555ccad99a12c946ad2f27c2a7fa4263cafc4ab95fa`.
+The complete local gate is recorded in `.scratch/protected-lines-check-final.log`;
+fixture regeneration and self-format checks are in
+`.scratch/protected-lines-fixtures.log` and `.scratch/protected-lines-self.log`.
+External logs and review patches are under `.scratch/protected-lines-validation/`.
+Its Mathlib `bracket-comparison/review.patch` isolates the shared-line policy
+change from the delimiter-only candidate. Mathlib output remains staged under
+`.scratch/external-validation-release/mathlib/.lake/leanfmt-protected-lines/`.
+Isolated timing logs are under `.scratch/protected-line-performance/`.
+
+Interrupted full-gate logs, output snapshots, and review patches are under
+`.scratch/release-probe-placement/` and `.scratch/release-recovery-consistency/`.
+The latter candidate's semicolon changes were withdrawn; its timings and full
+CSLib build do not by themselves validate the final subset.
+The semicolon reproduction and trace are
+`.scratch/ReviewSemicolonRecovery.lean` and
+`.scratch/release-probe-placement/semicolon-peer-review.log`.
+External formatting output is never the source of a formatter fix.

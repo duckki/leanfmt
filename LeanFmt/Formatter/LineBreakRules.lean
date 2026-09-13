@@ -159,6 +159,7 @@ def defaultInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   || context.parentIsSingletonArrayItemWrapper
   || segment.rawKind? == some `Lean.Parser.Term.letDecl
   || segment.rawKind? == some `Lean.Parser.Term.sufficesDecl
+  || segment.rawKind? == some `Lean.Parser.Term.doExpr
   || (segment.rawKind? == some `null && context.parentIsStructureFieldDefaultValue)
   || (segment.rawKind? == some `Lean.Parser.Term.binderDefault
       && context.parentWrapsStructureFieldDefaultValue)
@@ -3571,6 +3572,11 @@ def arrayRule : LineBreakRule :=
     useExistingBreaks :=
       fun _ segment => segment.rawKind? == some `«term#[_,]»
     flow := fun context _ => hasNodeKindAncestor context .parserOwnedHeader
+    keepPrefixWithChildFirstLine :=
+      fun context segment index =>
+        hasNodeKindAncestor context .parserOwnedHeader
+        && (segment.child? index >>= SyntaxTree.Tree.singleToken?).any
+            SyntaxTree.Token.isClosingDelimiter
     inheritBase :=
       fun context segment =>
         segment.rawKind? == some `«term#[_,]»
@@ -3888,6 +3894,9 @@ def infixChainRule : LineBreakRule :=
     name := "infixChain"
     useExistingBreaks := fun _ segment => lowPriorityInfixAllRhsCanFlow segment
     flow := infixFlow
+    formatOriginalChildLeadingBoundary :=
+      fun _ segment index =>
+        !lowPriorityInfixSegment segment && 0 < index && index % 2 == 0
     keepPrefixWithChildFirstLine :=
       fun _ segment index => childLowPriorityInfixRhsHasAttachedBody segment index
     inheritBase :=
@@ -4719,7 +4728,6 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Tactic.tacticSeq1Indented) _ => some defaultRule
   | .node (.raw `Lean.Parser.Tactic.tacticSeqBracketed) _ => some transparentRule
   | .node (.raw `Lean.Parser.Tactic.tacticRwa__) _ => some defaultRule
-  | .node (.raw `Lean.Parser.Tactic.rwRuleSeq) _ => some defaultRule
   | .node (.raw `Lean.Parser.Tactic.rwRule) _ => some defaultRule
   | .node (.raw `Lean.Parser.Tactic.location) _ => some defaultRule
   | .node (.raw `Lean.Parser.Tactic.locationHyp) _ => some defaultRule

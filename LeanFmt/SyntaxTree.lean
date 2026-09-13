@@ -301,7 +301,12 @@ private def attachParserOwnedHeaderHead (children : Array Tree) : Array Tree :=
 
 private def parserOwnedHeaderTree (children : Array Tree) : Tree :=
   .node .parserOwnedHeader
-    (regroupParserOwnedHeaderAssignmentChildren (attachParserOwnedHeaderHead children))
+    ((regroupParserOwnedHeaderAssignmentChildren
+        (attachParserOwnedHeaderHead children)).filter
+      fun child =>
+        match tokenCardinality child with
+        | .empty => false
+        | _ => true)
 
 namespace Tree
 
@@ -2201,7 +2206,7 @@ private partial def regroupDoElseIfHeaderSuffix : Tree → Tree
         .node kind children
   | tree => tree
 
-private def regroupTacticTerminalDelimiter : Tree → Tree
+private def regroupTacticTerminalDelimiter (isTacticSequenceEntry : Bool) : Tree → Tree
   | .node kind@(.tactic rawKind containsSequence isOwner _ isSpacedApplication)
       children =>
       let terminalIndex? :=
@@ -2210,16 +2215,30 @@ private def regroupTacticTerminalDelimiter : Tree → Tree
       let terminalToken? :=
         terminalIndex?.bind fun index => children[index]? >>= Tree.firstToken?
       let delimiterWasDetached :=
-        terminalToken?.any fun token => token.leading.text.contains '\n'
+        terminalToken?.any
+          fun token =>
+            lexemeEndsWithOpeningDelimiter token.lexeme
+            && token.leading.text.contains '\n'
+      let ownsDelimitedHeader :=
+        isTacticSequenceEntry
+        && !containsSequence
+        && !isOwner
+        && !isSpacedApplication
+        && (outerDelimiterKind? children).isNone
+        && (children.find? hasContentToken).any directLeafAtom?
+        && children.any startsWithOpeningDelimiter
       let grouped :=
-        regroupRightmostSuffixChildren children
-          fun tree =>
-            if !startsWithOpeningDelimiter tree then
-              none
-            else
-              match tree with
-              | .node (.infixChain `«term_<|_») _ => none
-              | _ => some tree
+        if ownsDelimitedHeader then
+          #[parserOwnedHeaderTree children]
+        else
+          regroupRightmostSuffixChildren children
+            fun tree =>
+              if !startsWithOpeningDelimiter tree then
+                none
+              else
+                match tree with
+                | .node (.infixChain `«term_<|_») _ => none
+                | _ => some tree
       if grouped == children then
         .node kind children
       else if !isOwner && delimiterWasDetached then
@@ -4135,7 +4154,7 @@ private partial def regroupTreeWithPrecedencesInContext
             (regroupChildren children)
       regroupCalcOwnerTree
       <| regroupTacticSequenceWrapperPrefix
-      <| regroupTacticTerminalDelimiter
+      <| regroupTacticTerminalDelimiter isTacticSequenceEntry
       <| Tree.annotateTacticTree tree parserLayout
   | .node kind children =>
       .node kind (children.map (regroupTreeWithPrecedencesInContext parserLayout false))
