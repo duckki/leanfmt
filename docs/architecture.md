@@ -1437,19 +1437,39 @@ anchor through the same placement calculation as nested rendering. Flat and
 structural traversal restore the parent's scope on return. A first-line probe
 measures the island's first content line with normal
 leading-boundary spacing, not an empty line before its source start. Required
-comment breaks remain part of that boundary. Multiline summaries include a
-leading source break for every island that retains relative layout, not only
-proof-body islands. There is no recursive switch
+comment breaks remain part of that boundary. An island's multiline summary covers
+its content, not the boundary before its first token. Enclosing owners count
+retained boundaries between their children; transparent wrappers do not turn a
+leading break into an internal one. Fit probes for sliced segments use that same
+composition over their selected children, so retained body boundaries still
+require the owning rule's indentation. Thus a quotation at the start of a line does
+not force an otherwise fitting infix expression to break. There is no recursive switch
 that disables descendant protection, and no mutation of the lossless syntax tree.
+At an available flow boundary, an actually retained leading break still selects
+that boundary's indentation even if the child's content is one line. This keeps
+named-argument proof bodies beneath their header after `by` rejoins `:=`.
 The alternative is built only after a moved source island overflows and is selected
 only if it reduces the overflow count. Nested proof bodies therefore remain protected
 even while their enclosing declaration is formatted structurally.
 
 A source-emitted
-quotation or compound proof-layout island may instead reduce a uniform shift by whole
+quotation may instead reduce a uniform shift by whole
 indentation levels, never past its original source column. That fit calculation reserves
 any closing delimiters and other tight parent suffix that must remain on the island's
 last line; excluding that suffix would undercount the actual completed-line width.
+Protected proof and calc continuations retain their resolved owning indentation;
+width fitting cannot reduce that indentation. Intact source lines may overflow
+at that required base under the existing protected-line policy.
+
+An attached suffix group is a structural header during overflow recovery even
+when it contains only prefix tokens, such as `exact let`. Opening the owner does
+not leave that group as a separately preserved neighbor while rebasing its body.
+Terminal infix proof envelopes use the existing header/body/suffix split for
+protected leaf proofs. The proof remains owned by its infix value: when the value
+moves to a continuation line, its proof moves with that base rather than
+inheriting the declaration's base. Assignment-first break priority remains
+unchanged, even when a complete field header could fit before its proof.
+Structural tactic owners remain atomic under their existing ownership contract.
 
 Anonymous constructors and structure instances remain structural even when an item or
 field contains a proof. Their ordinary rules own item, field, and closing-delimiter

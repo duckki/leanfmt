@@ -2840,9 +2840,7 @@ def assertMovedInlineProofBodiesUseStructuralBase (env : Lean.Environment) : IO 
     ++ "                              exact True.intro)\n"
   let expected :=
     "theorem movedInlinePipeProofBodyWithEnoughCharactersToBreak (hb : True -> True) : True :=\n"
-    ++ "  fun proofArgument =>\n"
-    ++ "    hb <| by\n"
-    ++ "      exact proofArgument\n"
+    ++ "  fun proofArgument => hb <| by exact proofArgument\n"
     ++ "\n"
     ++ "def parenthesizedInlineProofBodyWithEnoughCharactersToBreak :=\n"
     ++ "  veryLongOuterFunctionName firstArgument\n"
@@ -2950,10 +2948,7 @@ def assertProtectedBodiesUseStructuralIndentation (env : Lean.Environment) : IO 
     ++ "        exact n)\n"
     ++ "\n"
     ++ "theorem nestedPipeProof (h : True -> True) : True :=\n"
-    ++ "  id\n"
-    ++ "  <| h\n"
-    ++ "  <| by\n"
-    ++ "    exact True.intro\n"
+    ++ "  id <| h <| by exact True.intro\n"
     ++ "\n"
     ++ "def structureFieldProof : Subtype fun _ : Nat => True where\n"
     ++ "  val := 0\n"
@@ -5348,10 +5343,12 @@ def assertMovedProofBodiesKeepRelativeIndentation (env : Lean.Environment) : IO 
   let outdentedSource :=
     "theorem originalProofIslandOutdentsFromNestedValue : True :=\n"
     ++ "    id <| by\n"
+    ++ "  skip\n"
     ++ "  exact True.intro\n"
   let outdentedExpected :=
     "theorem originalProofIslandOutdentsFromNestedValue : True :=\n"
     ++ "  id <| by\n"
+    ++ "    skip\n"
     ++ "    exact True.intro\n"
   let outdentedResult ←
     Formatter.formatSourceWithEnvDetailed env outdentedSource
@@ -7176,8 +7173,7 @@ def assertDeclarationValueKeepsAttachedByBody (env : Lean.Environment) : IO Unit
     "instance {VeryLongTypeNameForAttachedBody : Type}\n"
     ++ "    [VeryLongClassNameForAttachedBody VeryLongTypeNameForAttachedBody]\n"
     ++ "    : Inhabited Nat :=\n"
-    ++ "  makeInhabited veryLongArgumentName <| by\n"
-    ++ "    exact 0\n"
+    ++ "  makeInhabited veryLongArgumentName <| by exact 0\n"
   let formatted ←
     Formatter.formatSourceWithEnv env source "declaration-value-attached-by.lean"
   assertEq "declaration value keeps attached by body" expected formatted
@@ -7467,9 +7463,8 @@ def assertDirectCalcBreaksBeforeItsBody (env : Lean.Environment) : IO Unit := do
     "def directCalcWithLongDeclarationName : Nat :=\n"
     ++ "  calc firstProposition = secondProposition := firstProof\n"
   let expected :=
-    "def directCalcWithLongDeclarationName : Nat :=\n"
-    ++ "  calc\n"
-    ++ "    firstProposition = secondProposition := firstProof\n"
+    "def directCalcWithLongDeclarationName : Nat := calc\n"
+    ++ "  firstProposition = secondProposition := firstProof\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "direct-calc-body-boundary.lean" { lineWidth := 80 }
@@ -7488,11 +7483,15 @@ def assertProoflessCalcInitialStaysWithKeyword (env : Lean.Environment) : IO Uni
     ++ "  calc _\n"
     ++ "    _ = middle := firstProof\n"
     ++ "    _ = final := secondProof\n"
+  let expected :=
+    "def prooflessCalcInitial : Nat := calc _\n"
+    ++ "  _ = middle := firstProof\n"
+    ++ "  _ = final := secondProof\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "proofless-calc-initial-layout.lean" { lineWidth := 80 }
   assertTrue "proofless calc initial does not fall back" (!result.fellBack)
-  assertEq "proofless calc initial stays with calc" source result.formatted
+  assertEq "proofless calc initial stays with calc" expected result.formatted
   assertTrue "proofless calc initial preserves code"
     (← codePreservedIgnoringWhitespace env source result.formatted)
   let formattedAgain ←
@@ -7707,29 +7706,27 @@ def assertLongCalcProofBreaksAfterAssignment (env : Lean.Environment) : IO Unit 
       "long-calc-proof-after-assignment-formatted.lean" { lineWidth := 80 }
   assertEq "long calc proof is idempotent" result.formatted formattedAgain
 
-def assertDetachedCalcUsesRenderedIntroducerBase (env : Lean.Environment) : IO Unit := do
+def assertAttachedCalcUsesDeclarationBase (env : Lean.Environment) : IO Unit := do
   let source :=
     "def detachedCalcAfterLongAssignmentName : VeryLongResultTypeNameForLayoutTesting := calc\n"
     ++ "  left = middle := proofOne\n"
     ++ "  _ = right := proofTwo\n"
   let expected :=
     "def detachedCalcAfterLongAssignmentName\n"
-    ++ "    : VeryLongResultTypeNameForLayoutTesting :=\n"
-    ++ "  calc\n"
-    ++ "    left = middle := proofOne\n"
-    ++ "    _ = right := proofTwo\n"
+    ++ "    : VeryLongResultTypeNameForLayoutTesting := calc\n"
+    ++ "  left = middle := proofOne\n"
+    ++ "  _ = right := proofTwo\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "detached-calc-rendered-introducer-base.lean" { lineWidth := 80 }
-  assertTrue "detached calc does not fall back" (!result.fellBack)
-  assertEq "detached calc steps use the rendered introducer base"
-    expected result.formatted
-  assertTrue "detached calc preserves code"
+  assertTrue "attached calc does not fall back" (!result.fellBack)
+  assertEq "attached calc steps use the declaration base" expected result.formatted
+  assertTrue "attached calc preserves code"
     (← codePreservedIgnoringWhitespace env source result.formatted)
   let formattedAgain ←
     Formatter.formatSourceWithEnv env result.formatted
       "detached-calc-rendered-introducer-base-formatted.lean" { lineWidth := 80 }
-  assertEq "detached calc is idempotent" result.formatted formattedAgain
+  assertEq "attached calc is idempotent" result.formatted formattedAgain
 
 def assertLowPriorityPipeCalcKeepsIndentedOperand (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -7781,8 +7778,7 @@ def assertLowPriorityPipeBoundaryPolicy (env : Lean.Environment) : IO Unit := do
     ++ "    pure value\n\n"
     ++ "def pipeBy :=\n"
     ++ "  longFunctionNameWithEnoughCharactersToForceThePipeGroupOntoItsOwnLine\n"
-    ++ "  <| by\n"
-    ++ "    exact value\n\n"
+    ++ "  <| by exact value\n\n"
     ++ "def pipeMatch (errors : Nat) :=\n"
     ++ "  id\n"
     ++ "  <| match errors with\n"
@@ -8107,11 +8103,10 @@ def assertMovedInlineCalcKeepsContinuationLayout (env : Lean.Environment) : IO U
   let expected :=
     "def movedInlineCalcKeepsContinuationLayout : Nat :=\n"
     ++ "  longApplicationNameWithEnoughCharactersToBreakBeforeLambda firstArgument\n"
-    ++ "    fun f v ↦\n"
-    ++ "      calc\n"
-    ++ "        left = middle := by\n"
-    ++ "          refine proof\n"
-    ++ "        _ = right := by exact proof\n"
+    ++ "    fun f v ↦ calc\n"
+    ++ "      left = middle := by\n"
+    ++ "        refine proof\n"
+    ++ "      _ = right := by exact proof\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "moved-inline-calc-continuation.lean" { lineWidth := 100 }
@@ -8119,6 +8114,10 @@ def assertMovedInlineCalcKeepsContinuationLayout (env : Lean.Environment) : IO U
   assertEq "moved inline calc keeps its continuation layout" expected result.formatted
   assertTrue "moved inline calc preserves code"
     (← codePreservedIgnoringWhitespace env source result.formatted)
+  let again ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "moved-inline-calc-continuation-again.lean" { lineWidth := 100 }
+  assertEq "moved inline calc is idempotent" result.formatted again
 
 def assertExplicitLambdaKeepsPrefixMarker (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -8265,8 +8264,26 @@ def assertResolvedIslandFactsDriveProbes : IO Unit := do
     let retained :=
       detachedFacts.withAlternative detachedSource
         (.preserve (Formatter.OriginalTree.planForKind kind))
-    assertTrue "relative-layout islands report their retained leading break"
-      retained.summary.containsMultilineOriginalEmission
+    assertTrue "an island's leading boundary is not an internal multiline layout"
+      (retained.summary.startsWithRetainedOriginalBoundary
+        && !retained.summary.containsMultilineOriginalEmission)
+    let wrapper := SyntaxTree.Tree.node (.raw `null) #[detachedLeaf]
+    let wrapped :=
+      (Formatter.TreeLayoutFacts.ofTree detachedSource wrapper).withAlternative
+        detachedSource
+        (.structural #[.preserve (Formatter.OriginalTree.planForKind kind)])
+    assertTrue
+      "transparent wrappers do not turn a leading boundary into an internal break"
+      (!wrapped.summary.containsMultilineOriginalEmission)
+    let owner :=
+      SyntaxTree.Tree.node (.raw `null)
+        #[.leaf (syntheticIdentTokenAt "owner" 0 5), detachedLeaf]
+    let owned :=
+      (Formatter.TreeLayoutFacts.ofTree detachedSource owner).withAlternative
+        detachedSource
+        (.structural #[.unchanged, .preserve (Formatter.OriginalTree.planForKind kind)])
+    assertTrue "an enclosing owner counts retained interior boundaries"
+      owned.summary.containsMultilineOriginalEmission
   for (operator, kind)
       in [("<", `«term_<_»), ("=", `«term_=_»), ("+", `«term_+_»), ("*", `«term_*_»)] do
     let relationSource := s!"left {operator}\n  right"
@@ -8282,6 +8299,21 @@ def assertResolvedIslandFactsDriveProbes : IO Unit := do
           right
         ]
     let relationFacts := Formatter.TreeLayoutFacts.ofTree relationSource relation
+    let retainedRelation :=
+      relationFacts.withAlternative relationSource
+        (.structural
+          #[
+            .unchanged,
+            .unchanged,
+            .preserve (Formatter.OriginalTree.planForKind .proof)
+          ])
+    let relationSegment := Formatter.LineBreakRules.Segment.ofTree relation
+    assertTrue "a segment retains its protected interior boundary"
+      (!Formatter.segmentAllowsLayoutWithoutRuleBreaks relationSource {} relationSegment
+          true (some retainedRelation))
+    assertTrue "a sliced segment excludes its incoming retained boundary"
+      (Formatter.segmentAllowsLayoutWithoutRuleBreaks relationSource {}
+        (relationSegment.slice 2 3) true (some retainedRelation))
     for alternative
         in [
           .unchanged,
@@ -8840,7 +8872,7 @@ def assertDelimitedCalcProofKeepsAttachedOpener (env : Lean.Environment) : IO Un
       "delimited-calc-proof-opener.lean" { lineWidth := 100 }
   assertTrue "delimited calc proof does not fall back" (!result.fellBack)
   assertTextContains "delimited calc proof keeps its opener with by"
-    result.formatted ":= by {\n      apply sigmaCongrRight"
+    result.formatted ":= by {\n    apply sigmaCongrRight"
   assertTextLacks "delimited calc proof does not detach its opener"
     result.formatted ":= by\n      {"
   assertTextLacks "delimited calc proof body does not retain its stale source column"
@@ -8865,10 +8897,10 @@ def assertDelimitedCalcProofKeepsAttachedOpener (env : Lean.Environment) : IO Un
       "inline-delimited-calc-proof-opener.lean" { lineWidth := 100 }
   assertTrue "inline delimited calc proof does not fall back" (!inlineResult.fellBack)
   assertTextContains "inline delimited calc proof keeps sibling tactics aligned"
-    inlineResult.formatted ":= by {\n      refine veryLongProofFunctionName"
+    inlineResult.formatted ":= by {\n    refine veryLongProofFunctionName"
   assertTextContains
     "inline delimited calc proof keeps the following tactic at the body base"
-    inlineResult.formatted "\n      exact h }"
+    inlineResult.formatted "\n    exact h }"
   assertTrue "inline delimited calc proof fits its configured width"
     (Formatter.linesFit inlineResult.formatted 100)
   assertTrue "inline delimited calc proof preserves code"
@@ -8894,7 +8926,7 @@ def assertDelimitedCalcProofKeepsAttachedOpener (env : Lean.Environment) : IO Un
   assertTextContains
     "multiline delimited proof starts at its proof-body base even when the first tactic fits"
     fittingInlineResult.formatted
-    ":= by {\n      refine shortProof ?_\n      · exact h\n      · exact h }"
+    ":= by {\n    refine shortProof ?_\n    · exact h\n    · exact h }"
   assertTrue "fitting inline delimited calc proof preserves code"
     (← codePreservedIgnoringWhitespace env fittingInlineSource
         fittingInlineResult.formatted)
@@ -10540,8 +10572,7 @@ def assertNestedChildFitCountsInfixSuffix (env : Lean.Environment) : IO Unit := 
     "def nestedInfixSuffixExample :=\n"
     ++ "  Submodule.liftQSpanSingleton _\n"
     ++ "    (CharacterModule.int.divByNat\n"
-    ++ "      <| if addOrderOf a = 0 then 2 else addOrderOf a).toIntLinearMap <| by\n"
-    ++ "    exact h\n"
+    ++ "      <| if addOrderOf a = 0 then 2 else addOrderOf a).toIntLinearMap <| by exact h\n"
   let formatted ←
     Formatter.formatSourceWithEnv env source "nested-child-fit-infix-suffix.lean"
       { lineWidth := 100 }
@@ -18662,9 +18693,7 @@ def assertMovedProofCollectionFitsWidth (env : Lean.Environment) : IO Unit := do
     ++ "def recordProof : ProofRecord :=\n"
     ++ "  {\n"
     ++ "    result :=\n"
-    ++ "      fun x y h =>\n"
-    ++ "        id <| by\n"
-    ++ "          simp only [show True = True by rfl, and_true, true_and, eq_self, h]\n"
+    ++ "      fun x y h => id <| by simp only [show True = True by rfl, and_true, true_and, eq_self, h]\n"
     ++ "  }\n"
   check "moved inline owner of a retained proof" recordProofSource recordProofExpected 100
   check "CRLF moved inline owner of a retained proof"
@@ -21309,6 +21338,127 @@ def assertParserOwnedSuffixAndPipeBoundaries (env : Lean.Environment) : IO Unit 
       ++ "    using proof\n")
     86
 
+def assertReviewedProtectedLayouts (env : Lean.Environment) : IO Unit := do
+  let check (name source : String) (fragments : List String) (lineWidth := 100)
+      : IO String := do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source s!"{name}.lean" { lineWidth }
+    assertTrue s!"{name} does not fall back" (!result.fellBack)
+    for fragment in fragments do
+      assertTextContains s!"{name} retains its owned layout" result.formatted fragment
+    let before ← SyntaxTree.parseModuleStringWithEnv env source s!"{name}-source.lean"
+    let after ←
+      SyntaxTree.parseModuleStringWithEnv env result.formatted s!"{name}-result.lean"
+    assertTrue s!"{name} preserves code and has no actionable overflow"
+      (Formatter.Diagnostics.formattingSafetyExceptions before after
+        { lineWidth }).isEmpty
+    let again ←
+      Formatter.formatSourceWithEnv env result.formatted s!"{name}-again.lean"
+        { lineWidth }
+    assertEq s!"{name} is idempotent" result.formatted again
+    return result.formatted
+
+  let _ ←
+    check "moved-show-result"
+      ("theorem movedShow : Final R :=\n"
+        ++ "  { out := fun c =>\n"
+        ++ "      let u := StructuredArrow.mk (adj.unit.app c)\n"
+        ++ "      @zigzag_isConnected _ _ ⟨u⟩ fun f g =>\n"
+        ++ "        Relation.ReflTransGen.single\n"
+        ++ "          (show Zag f u from\n"
+        ++ "            Or.inr ⟨StructuredArrow.homMk ((adj.homEquiv c f.right).symm f.hom) (by simp [u])⟩) }\n")
+      ["              (show Zag f u from\n                Or.inr"]
+
+  let _ ←
+    check "moved-pipe-show-proof"
+      ("theorem movedProof : ResultType :=\n"
+        ++ "  mulVec_injective_iff.mp fun x y eq ↦"
+        ++ " funext fun k ↦ hA _ _ <| show _ = _ by\n"
+        ++ "    have h v : firstFunction firstArgument secondArgument = secondFunction thirdArgument := by\n"
+        ++ "      congr 1; ext k i\n"
+        ++ "      obtain (h | h) := eq_or_ne k i <;> simp [adjp_mul_apply_eq, add_comm, adjp_mul_apply_ne, h]\n"
+        ++ "    simp [add_mulVec, smul_mulVec, mulVec_mulVec] at h; grind\n")
+      [
+        "          <| show _ = _ by\n            have h v",
+        "\n              congr 1; ext k i\n",
+        "\n            simp [add_mulVec"
+      ]
+
+  let _ ←
+    check "quotation-leading-boundary"
+      ("def quotedResult := do\n"
+        ++ "  let result ← withAppArg do\n"
+        ++ "    let value ← withNaryFn delab\n"
+        ++ "    `(Nat) >>= annotateGoToSyntaxDef\n"
+        ++ "  `(Nat) >>= annotateGoToSyntaxDef\n")
+      ["      `(Nat) >>= annotateGoToSyntaxDef\n", "  `(Nat) >>= annotateGoToSyntaxDef\n"]
+
+  let _ ←
+    check "assigned-pipe-proof-value"
+      ("def proofField : Equivalence where\n"
+        ++ "  left_inv f := Subtype.ext <| funext <| Fin.forall_fin_two.2 <| by\n"
+        ++ "    simp [← (show f.1 0 + f.1 1 = 1 by simpa using f.2.2)]\n")
+      ["  left_inv f :=\n    Subtype.ext <| funext <| Fin.forall_fin_two.2 <| by\n      simp"]
+
+  let _ ←
+    check "moved-infix-proof-owner"
+      ("def nestedInfixSuffixExample :=\n"
+        ++ "  Submodule.liftQSpanSingleton _\n"
+        ++ "    (CharacterModule.int.divByNat <| if addOrderOf a = 0 then 2 else addOrderOf a).toIntLinearMap <| by\n"
+        ++ "      have h' := h\n"
+        ++ "      exact h'\n")
+      ["\n  Submodule.liftQSpanSingleton _\n", "\n    have h' := h\n    exact h'\n"]
+
+  let _ ←
+    check "inline-multitactic-pipe-body"
+      ("def freshProof :=\n"
+        ++ "  fun h => not_le_of_gt (hf (s.sup' hs id)) <| by rw [dif_pos hs] at h; exact s.le_sup' id h\n")
+      ["<| by\n", "rw [dif_pos hs] at h; exact s.le_sup' id h\n"]
+
+  let calcSource :=
+    "theorem proofCalc : True := by\n"
+    ++ "  have := calc\n"
+    ++ "    first = second := by\n"
+    ++ "      simpa [identity] using proof\n"
+    ++ "    _ = third := anotherProof\n"
+    ++ "  exact result\n"
+  let calcResult ← check "assigned-calc-suffix" calcSource ["  have := calc\n"]
+  assertEq "an attached calc retains its proof layout" calcSource calcResult
+
+  let letSource :=
+    "theorem proofLet (n : Nat) : True := by\n"
+    ++ "  cases n with\n"
+    ++ "  | zero => trivial\n"
+    ++ "  | succ n =>\n"
+    ++ "    exact\n"
+    ++ "      let ⟨q, hqf, hq⟩ := Multiset.exists_mem_of_rel_of_mem h (Multiset.mem_cons_self p _)\n"
+    ++ "      (Multiset.mem_add.1 hqf).elim\n"
+    ++ "        (fun hqa =>\n"
+    ++ "          Or.inl <| hq.dvd_iff_dvd_left.2 <| hfa.2.dvd_iff_dvd_right.1 (Multiset.dvd_prod hqa))\n"
+    ++ "        fun hqb =>\n"
+    ++ "        Or.inr <| hq.dvd_iff_dvd_left.2 <| hfb.2.dvd_iff_dvd_right.1 (Multiset.dvd_prod hqb)\n"
+  for width in [92, 96] do
+    let _ ←
+      check s!"recovered-attached-let-{width}" letSource
+        ["      exact let ⟨q, hqf, hq⟩ :=", "\n      (Multiset.mem_add.1 hqf).elim\n"]
+        width
+  let _ ←
+    check "unopened-attached-let" letSource
+      [
+        "      exact\n        let ⟨q, hqf, hq⟩ :=",
+        "\n        (Multiset.mem_add.1 hqf).elim\n"
+      ]
+
+  let _ ←
+    check "retained-rewrite-arrow"
+      ("theorem retainedArrow (n : Nat) : True := by\n"
+        ++ "  cases n with\n"
+        ++ "  | zero => trivial\n"
+        ++ "  | succ n =>\n"
+        ++ "    rw [←\n"
+        ++ "      firstRewriteLemmaWithEnoughCharactersToKeepTheArgumentOnItsOwnLine, secondRewriteLemma]\n")
+      ["←\n", "firstRewriteLemmaWithEnoughCharactersToKeepTheArgumentOnItsOwnLine"]
+
 def assertTacticHeaderCollectionOwnership (env : Lean.Environment) : IO Unit := do
   let header :=
     "theorem movedHeader (n : Nat) : True := by\n"
@@ -22405,7 +22555,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertBrokenCalcRelationKeepsProofBodyBase env
   assertLongCalcProofBreaksAfterAssignment env
   assertDelimitedCalcProofKeepsAttachedOpener env
-  assertDetachedCalcUsesRenderedIntroducerBase env
+  assertAttachedCalcUsesDeclarationBase env
   assertLowPriorityPipeCalcKeepsIndentedOperand env
   assertLowPriorityPipeBoundaryPolicy env
   assertLowPriorityPipeApplicationKeepsOperandBase env
@@ -22527,6 +22677,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertAdjacentQuantifiersFitBeforeSourceBreaks env
 
 def runControlFlowTests (env : Lean.Environment) : IO Unit := do
+  assertReviewedProtectedLayouts env
   assertOwnedTerminalSuffixesStayAttached env
   assertStructuralHeadersOwnAttachedBodies env
   assertParserOwnedClauseBodies env

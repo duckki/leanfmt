@@ -990,7 +990,9 @@ def nullInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   || wrappedByDoLetFallbackSequence context
 
 def attachedBodyStart (segment : Segment) (index : Nat) : Bool :=
-  childStartsWithLexeme segment index "do" || childStartsWithLexeme segment index "by"
+  childStartsWithLexeme segment index "do"
+  || childStartsWithLexeme segment index "by"
+  || childStartsWithLexeme segment index "calc"
 
 def attachedBodyFollowsDelimiter (context : RuleContext) (delimiter : String) : Bool :=
   match context.ancestors with

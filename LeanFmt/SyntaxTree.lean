@@ -4336,11 +4336,11 @@ private partial def regroupAssignedProofDeclarations : Tree → Tree
           (Tree.regroupAssignedProofDeclaration? kind children).getD tree
       | _ => tree
 
-private partial def regroupSimpleApplicationProofArgumentsWithSummary : Tree → Tree × Bool
+private partial def regroupTrailingProofArgumentsWithSummary : Tree → Tree × Bool
   | .missing => (.missing, false)
   | .leaf token => (.leaf token, false)
   | .node kind children =>
-      let summaries := children.map regroupSimpleApplicationProofArgumentsWithSummary
+      let summaries := children.map regroupTrailingProofArgumentsWithSummary
       let children := summaries.map (fun summary => summary.1)
       let tree := .node kind children
       let proofArgumentCount :=
@@ -4354,13 +4354,27 @@ private partial def regroupSimpleApplicationProofArgumentsWithSummary : Tree →
         match tree with
         | .node .application children =>
             (regroupApplicationAttachedBody? children).getD tree
+        | .node (.infixChain _) _ =>
+            if proofArgumentCount != 1 then
+              tree
+            else
+              match Tree.splitTrailingOwnedProofBody? tree true with
+              | some split =>
+                  match split.body with
+                  | .node (.proofBody false) _ =>
+                      if split.before.firstToken?.isSome then
+                        .node .suffixGroup #[split.before, split.body, split.after]
+                      else
+                        tree
+                  | _ => tree
+              | none => tree
         | _ => tree
       let containsProofBody :=
         kind == .proofBody false || kind == .proofBody true || 0 < proofArgumentCount
       (tree, containsProofBody)
 
-private def regroupSimpleApplicationProofArguments (tree : Tree) : Tree :=
-  (regroupSimpleApplicationProofArgumentsWithSummary tree).1
+private def regroupTrailingProofArguments (tree : Tree) : Tree :=
+  (regroupTrailingProofArgumentsWithSummary tree).1
 
 def extractTree
     (source : String) (stx : Syntax)
@@ -4370,7 +4384,7 @@ def extractTree
   regroupAssignedProofDeclarations
   <| regroupTopLevelAnnotations
   <| annotateLetExpressions letBodyParserFacts
-  <| regroupSimpleApplicationProofArguments
+  <| regroupTrailingProofArguments
   <| regroupTreeWithPrecedences parserLayout
   <| removeOverlappingSourceTokens source
   <| extractRawTree source stx

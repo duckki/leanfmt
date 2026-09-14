@@ -196,6 +196,25 @@ private def sourceHasLineStructure
         (SyntaxTree.sourceText source firstToken.span.start lastToken.span.stop)
   | _, _ => false
 
+private def childrenContainMultilineOriginalEmission
+    (source : String) (children : Array TreeLayoutFacts)
+    (start := 0) (stop := children.size)
+    : Bool :=
+  Id.run do
+    let mut previous? := none
+    for index in [start:min stop children.size] do
+      let summary := children[index]!.summary
+      if summary.containsMultilineOriginalEmission then
+        return true
+      if summary.startsWithRetainedOriginalBoundary then
+        if let (some left, some right) := (previous?, summary.firstToken?) then
+          if SpaceRules.hasLineStructure
+              (SyntaxTree.sourceText source left.span.stop right.span.start) then
+            return true
+      if let some last := summary.lastToken? then
+        previous? := some last
+    return false
+
 private def resolveSummary
     (source : String) (summary : TreeLayoutSummary)
     (originalPlan? : Option OriginalTree.IslandPlan) (children : Array TreeLayoutFacts)
@@ -216,12 +235,9 @@ private def resolveSummary
         | none => firstChild?.any (·.summary.startsWithUnbreakableOriginalFirstLine)
       containsMultilineOriginalEmission :=
         match originalPlan? with
-        | some plan =>
+        | some _ =>
             sourceHasLineStructure source summary.firstToken? summary.lastToken?
-            || (plan.policy.relativeLayout == .retain
-                && summary.firstToken?.any
-                    fun token => (SourceBoundary.beforeToken token).hasLineStructure)
-        | none => children.any (·.summary.containsMultilineOriginalEmission)
+        | none => childrenContainMultilineOriginalEmission source children
   }
 
 /-- Resolve an alternative once, including the summaries used by fit and suffix probes. -/
@@ -1143,22 +1159,17 @@ private def originalPlanForTree
     : Option OriginalTree.IslandPlan :=
   (treeLayoutSummary source tree facts?).originalPlan?
 
-private def treeContainsMultilineOriginalEmission
-    (source : String) (tree : SyntaxTree.Tree)
-    (facts? : Option TreeLayoutFacts := none)
-    : Bool :=
-  (treeLayoutSummary source tree facts?).containsMultilineOriginalEmission
-
 private def segmentContainsMultilineOriginalEmission
     (source : String) (segment : LineBreakRules.Segment)
     (facts? : Option TreeLayoutFacts := none)
     : Bool :=
-  segment.indexes.any
-    fun index =>
-      (segment.child? index).any
-        fun child =>
-          treeContainsMultilineOriginalEmission source child
-            (facts? >>= fun facts => facts.child? index)
+  let facts :=
+    match facts? with
+    | some facts => facts
+    | none => TreeLayoutFacts.ofTree source segment.parent
+  let .node _ children := facts
+  TreeLayoutFacts.childrenContainMultilineOriginalEmission source children
+    segment.start segment.stop
 
 def childHasPriorContent (segment : LineBreakRules.Segment) (index : Nat) : Bool :=
   segment.indexes.any
@@ -2280,8 +2291,11 @@ def FlowRenderContext.stateForForcedNestedChild?
               || !childFit.get.fits
               || flow.hasSourceBreakAt index
               || commentForcesBreakAt state.source flow.segment index
-              || (treeContainsMultilineOriginalEmission state.source child
-                    (state.layoutFacts? >>= (·.child? index))
+              || (let summary :=
+                    treeLayoutSummary state.source child
+                      (state.layoutFacts? >>= (·.child? index))
+                  (summary.containsMultilineOriginalEmission
+                    || summary.startsWithRetainedOriginalBoundary)
                   && !childFit.get.flat)
               || treeContainsCommentForcedBreak state.source child
                   (state.layoutFacts? >>= (·.child? index))

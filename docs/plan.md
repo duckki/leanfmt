@@ -4,6 +4,42 @@ Rules describe general syntax ownership. External paths and declaration names
 are evidence for tests, never formatter conditions. Missing-rule coverage is
 release-blocking only for Lean's standard library and Mathlib.
 
+## Open Issues
+
+### Whole-field proof-header attachment
+
+```lean
+left_inv f :=
+  Subtype.ext <| funext <| Fin.forall_fin_two.2 <| by
+    simp [← (show f.1 0 + f.1 1 = 1 by simpa using f.2.2)]
+```
+
+The inner proof header can stay intact, but the surrounding assignment still
+breaks first. Keeping the whole field header inline needs a reviewed policy for
+partial headers: lifting the proof to the assignment loses the value's base;
+unconditional header flow changes assignment-first priority when declaration
+parameters wrap. Keep the current priority and value ownership for this checkpoint.
+No new rule API or renderer exception is approved for this remaining cosmetic case.
+
+### Quoted continuation ownership
+
+```lean
+        if toDual then
+          liftCommandElabM
+          <| Command.elabCommand
+          <| ←
+        `(command| attribute [to_dual none] $(mkIdent tgt))
+```
+
+`Mathlib/Tactic/CategoryTheory/Reassoc.lean` still leaves the quotation at its
+old source indentation when an enclosing match arm moves right. A core-only
+reproduction confirms the same lost relative indentation. Review the layout
+anchor shared by the `←` wrapper and protected quotation; preserve quotation
+contents and comment boundaries. This is separate from the corrected fitting
+quotation followed by `>>=`. The current checkpoint leaves this ownership change
+for review, with its reproduction and trace in
+`.scratch/visual-placement-final/quoted-pipe-trace.log`.
+
 ## Progress
 
 ### Checkpoint 1: tactic-header consistency (complete)
@@ -26,14 +62,49 @@ skipped. All changed Mathlib modules built successfully (3,345 Lake jobs includi
 dependencies); complete project builds are reserved for the final gate. Evidence
 is in `.scratch/visual-headers-final/`.
 
-### Checkpoint 2: protected placement and header fit (planned)
+### Checkpoint 2: protected placement and header fit (complete)
 
 Preserve each protected fragment's relative indentation at its enclosing base.
-Investigate premature `have := calc`, quotation/infix, and field `<| by` breaks
-with the same placement and fit contracts. Preserve authored rewrite-arrow breaks
-as an accepted source-layout compromise. Stop for design review if existing
-contracts cannot express a clean fix. Run the local and lightweight external gate,
-then the final complete CSLib/Mathlib gate before closing visual review.
+Keep `have := calc` attached and distinguish leading source breaks from retained
+interior breaks in whole-tree and sliced fit checks. Treat attached prefix groups
+consistently during overflow recovery. Expose terminal infix proof headers without
+moving their bodies out of the value's ownership. Preserve authored rewrite-arrow
+breaks as an accepted source-layout compromise, with regression coverage.
+Whole-field attachment and moved quotation ownership stop at the review questions
+above. Complete the final CSLib/Mathlib release gate before closing visual review.
+
+The complete local gate passed. Light checks passed on 280 GraphQL, 20 owned
+quantum, 200 CSLib, and 127 Mathlib files. GraphQL and quantum output is unchanged.
+All six CSLib and 35 Mathlib output differences were reviewed: attached `calc`
+introducers, compact infix proof headers, required multi-tactic body breaks,
+corrected protected indentation, and fitting quotation/infix expressions. Existing
+fixtures are unchanged; a new fixture covers the corrected layouts. The explicit
+semicolon-proof regression test added during external review passed the complete
+local rerun. All changed Mathlib modules and dependencies built successfully
+(3,341 Lake jobs). CSLib's changed-module build (1,689 jobs) and complete project
+build (2,800 jobs) passed. GraphQL and quantum outputs are unchanged, so their
+target-project builds were not rerun in this light gate.
+
+| Project | Checkpoint 1 checks | Checkpoint 2 checks | Changed outputs |
+| --- | --- | --- | --- |
+| GraphQL | 53s | 48s | 0 / 280 |
+| quantum | 42s | 37s | 0 / 20 owned |
+| CSLib | 152s | 103s | 6 / 200 |
+| Mathlib, paired pristine inputs | 192.27s | 189.68s | 35 / 127 |
+
+Mathlib user CPU was 1189.73s versus 1211.00s (+1.8%); wall time was 1.3% lower.
+These single comparisons show no material performance regression, not a controlled
+speedup. All formatter safety checks passed, including Mathlib missing rules.
+A character-width scan found three newly over-width Mathlib lines: two protected
+`show` bodies in `Limits/Final.lean` (102 columns) and one intact proof line in
+`Matrix/Nonsingular.lean` (105). They retain source code at its corrected owning
+indentation and remain accepted protected-line overflows. CSLib has none.
+
+The `Monoidal.induced` argument break matches an authored break before a multiline
+record and is consistent with the application rule. Authored rewrite-arrow breaks
+remain accepted and covered. Whole-field attachment and quoted-continuation
+ownership remain open above; do not declare the visual review or release gate
+complete. Evidence is in `.scratch/visual-placement-final/`.
 
 ### Validated candidate: comment processing cost
 
@@ -89,11 +160,12 @@ These single project runs show no regression, but are not controlled speedup
 measurements like the alternating stress runs above. Target-project builds and
 the complete Mathlib sweep were omitted from that light run; full results follow.
 
-### Current checkpoint: automated gate passed; visual review open
+### Previous complete gate: 812f244
 
 Committed candidate `812f244` passed the complete automated gate. Logs and output
-comparisons are retained under `.scratch/release-812f244/`. Release approval
-remains open for the visual findings below, not the deferred optimizations.
+comparisons are retained under `.scratch/release-812f244/`. The two checkpoints
+above supersede its formatter output; their remaining issues are listed at the
+top of this plan. These earlier full-build results do not validate later changes.
 
 The fresh local gate and complete CSLib validation passed. CSLib checked all 200
 files, rebuilt changed modules, and passed its complete post-format build in
@@ -130,42 +202,10 @@ Do not exempt new actionable overflows or detach comments and closing delimiters
 Intact protected source lines may exceed width after required indentation.
 Stop for review if another fix needs a design change.
 
-### Visual review findings
-
-These are formatting review findings, not deferred performance work. All safety
-checks and required builds passed. Do not mark the visual gate complete until
-their policy is reviewed:
-
-- Tactic headers: `Algebra/Homology/HomotopyCategory/Shift.lean` expands a
-  `simpa only` list item-by-item; `Analysis/InnerProductSpace/Basic.lean` separates `simp +instances only`
-  from its bracketed argument. Check consistency with flowing, attached headers.
-  `CategoryTheory/Monoidal/Types/Coyoneda.lean` also balances a `rw` list inside
-  `conv_lhs` instead of flowing it.
-- Suffix attachment: `Analysis/Calculus/FDeriv/Basic.lean` separates authored `have := calc`.
-  `Analysis/Convex/StdSimplex.lean` expands a short field definition's `<| ... <| by` chain.
-  Both reproduce with core Lean syntax; scratch traces identify the existing
-  `letIdDecl` and `infixChain` layouts.
-  `Geometry/Manifold/Notation.lean` and `Geometry/Manifold/MFDeriv/NormedSpace.lean`
-  also split short quotations from `>>= annotateGoToSyntaxDef` despite fitting.
-- Protected continuation indentation: `CategoryTheory/Limits/Final.lean` places
-  `Or.inr`/`Or.inl` bodies after `(show ... from` at the opening-parenthesis
-  indentation, losing one level from the earlier output and authored shape.
-  `LinearAlgebra/Matrix/Nonsingular.lean` moves a `<| show ... by` proof left of
-  its surrounding expression. Its focused Lean check passes, but the indentation
-  still needs review.
-  `RingTheory/PowerSeries/Binomial.lean` also places a protected `show` rewrite-list
-  item at the `rw` indentation instead of the list-item indentation.
-  `RingTheory/UniqueFactorizationDomain/Basic.lean` splits `exact let` while the
-  binding body remains left of `let`; its focused Lean check also passes.
-- Preserved rewrite breaks: `Algebra/Module/LocalizedModule/Basic.lean` and
-  `Analysis/Analytic/Composition.lean` can leave `←` alone after the surrounding list wraps.
-  The source already breaks after the arrow; review this source-layout compromise.
-
-All paths are relative to `Mathlib/`. Comparisons and scratch
-reproductions are retained in `.scratch/release-812f244/review-notes.md` and
-`.scratch/release-812f244/mathlib-review/`. No formatter fixes are included in
-this release-gate run. The saved full-output baseline predates several checkpoints;
-these are current-candidate findings, not all regressions introduced by `812f244`.
+The earlier visual inventory and reproductions remain in
+`.scratch/release-812f244/review-notes.md` and
+`.scratch/release-812f244/mathlib-review/`. Resolved findings are no longer open
+tasks; the current disposition is recorded in the two checkpoints above.
 
 ## Deferred Optimization Opportunities
 

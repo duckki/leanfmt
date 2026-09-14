@@ -1487,7 +1487,7 @@ def pipeHave :=
 ```
 
 When a `by` proof is the right operand of `<|`, the introducer remains attached
-to the operator and its body starts one level below the surrounding expression
+to the operator. A multiline body starts one level below the surrounding expression
 base. If the tactic shell before that proof is already multiline, the proof body
 uses the shell's rounded local base; it does not inherit an incidental inline
 token column:
@@ -1495,8 +1495,11 @@ token column:
 ```lean
 theorem pipedProof : True :=
   id <| by
+    skip
     exact True.intro
 ```
+
+A single-tactic proof may rejoin its header when the complete expression fits.
 
 An unparenthesized proof containing multiple tactics always starts its body on
 the following line. The required layout boundary prevents the first tactic from
@@ -1545,6 +1548,20 @@ A retained proof-body break does not by itself force every surrounding header or
 application to break. A fitting compact header can stay intact; the proof body
 still receives its owner's indentation. Trailing comments and closing delimiters
 remain attached under the same policy as any other layout.
+For example, an infix value's fitting proof header stays intact:
+
+```lean
+left_inv f :=
+  Subtype.ext <| funext <| Fin.forall_fin_two.2 <| by
+    simp [← (show f.1 0 + f.1 1 = 1 by simpa using f.2.2)]
+```
+
+This does not change the surrounding assignment's break priority.
+An assigned `calc` stays with `:=`, including `have := calc`.
+Width pressure does not move a protected proof continuation left of its owning
+base. Required indentation takes precedence over fitting an intact protected line.
+An island's leading source break is separate from its internal layout, so a
+fitting quotation and its following infix operator may share a line.
 If moving that content right makes a previously fitting source line overflow,
 the affected application or delimited argument may use its ordinary structural
 layout. This includes later authored continuation lines. Recovery can open the

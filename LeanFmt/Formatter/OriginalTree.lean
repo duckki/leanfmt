@@ -815,10 +815,10 @@ deriving Inhabited
 private def allowsStructuralRecovery (kind : LayoutIslandKind) : Bool :=
   kind == .proof || kind == .proofLayout || kind == .mathlibTactic
 
-private partial def isAttachedHeader : SyntaxTree.Tree → Bool
+private def isAttachedHeader : SyntaxTree.Tree → Bool
   | .node .declarationHeader _ => true
   | .node .parserOwnedHeader _ => true
-  | .node .suffixGroup children => children.any isAttachedHeader
+  | .node .suffixGroup _ => true
   | _ => false
 
 private def ownsStructuredHeader : SyntaxTree.Tree → Bool
@@ -1164,23 +1164,6 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
             none with
     | some sourceIndent => some (sourceIndent, leadingColumn)
     | none => inlineContinuationColumns?
-  let inlineContinuationColumns? :=
-    match inlineContinuationColumns? with
-    | some (sourceIndent, targetIndent) =>
-        if proofLayout && usesPendingIndent then
-          some (sourceIndent, targetIndent)
-        else if quotationStartsOnLine then
-          some (sourceIndent, targetIndent)
-        else if quotation then
-          some (sourceIndent, targetIndent)
-        else if proofLayout || calcLayout then
-          let fittedTarget :=
-            fittingTargetColumn request.source request.sourceMap tree sourceText
-              sourceIndent targetIndent request.lineWidth request.lineFitSuffixWidth
-          some (sourceIndent, fittedTarget)
-        else
-          some (sourceIndent, targetIndent)
-    | none => none
   let sourceColumnRebasedFromLayoutBase := request.layoutAnchor.shiftColumn sourceColumn
   let layoutTargetColumn? :=
     if !retainsRelativeLayout
