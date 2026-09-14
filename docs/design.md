@@ -1551,17 +1551,21 @@ remain attached under the same policy as any other layout.
 For example, an infix value's fitting proof header stays intact:
 
 ```lean
-left_inv f :=
-  Subtype.ext <| funext <| Fin.forall_fin_two.2 <| by
-    simp [← (show f.1 0 + f.1 1 = 1 by simpa using f.2.2)]
+left_inv f := Subtype.ext <| funext <| Fin.forall_fin_two.2 <| by
+  simp [← (show f.1 0 + f.1 1 = 1 by simpa using f.2.2)]
 ```
 
-This does not change the surrounding assignment's break priority.
+When the complete header fits, its attached body's retained source break can take
+priority over the surrounding assignment. If the header itself must wrap, the
+assignment still breaks first. This does not introduce a new split inside an
+originally inline protected proof.
 An assigned `calc` stays with `:=`, including `have := calc`.
 Width pressure does not move a protected proof continuation left of its owning
 base. Required indentation takes precedence over fitting an intact protected line.
 An island's leading source break is separate from its internal layout, so a
 fitting quotation and its following infix operator may share a line.
+When an enclosing construct moves, a source-detached quotation moves with it;
+its internal relative indentation and comments remain protected.
 If moving that content right makes a previously fitting source line overflow,
 the affected application or delimited argument may use its ordinary structural
 layout. This includes later authored continuation lines. Recovery can open the

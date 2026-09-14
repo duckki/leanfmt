@@ -1035,6 +1035,24 @@ the current line and pending boundary state, then records two facts from that on
   layout owned by an opaque or already-broken nested child without activating this
   segment's own break points.
 
+A failing child probe may restore a protected child's source break at its owner's
+existing positive-indentation breakpoint when that boundary keeps the child's
+first line attached to its prefix.
+The prefix must already have fitted without breaks; only the child is retried.
+This admits a fitting assignment header with a broken attached proof body without
+hoisting the proof out of its value or wrapping declaration parameters ahead of
+the assignment. It cannot create a break inside an originally inline protected
+span. The result is multiline, not flat, and zero-indentation peer
+owners still reject that joined layout.
+
+When a child retains its leading source boundary and no structural indentation is
+pending, it and its transparent wrappers keep the enclosing layout anchor instead
+of replacing it with a hypothetical inline token column.
+Protected quotation emission rebases a retained leading source boundary before
+computing its internal continuation anchors. The already-rebased leading column
+is the input to later target-column adjustments, so the first line and multiline
+contents move together without applying the shift twice.
+
 An original-layout island can make a source newline physically unremovable even when its
 parent rule does not generally preserve source breaks. If that island starts at a
 configured breakpoint and the preceding prefix moved from its own source line, flat

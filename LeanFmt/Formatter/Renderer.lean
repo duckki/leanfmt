@@ -1392,7 +1392,7 @@ private partial def probeLayoutWithoutRuleBreaksCore?
                 let boundary? :=
                   state.retainedChildBoundary? entryState segment index childFacts?
                 let state := boundary?.getD state
-                let rendered? :=
+                let renderChild (state : RenderState) :=
                   match originalPlanForTree state.source child childFacts? with
                   | some islandPlan =>
                       let rendered :=
@@ -1413,10 +1413,35 @@ private partial def probeLayoutWithoutRuleBreaksCore?
                             layoutFacts? := childFacts?
                         }
                         (LineBreakRules.Segment.ofTree child) checkWidth
+                let rendered? := renderChild state
+                -- Retry only the body at its retained boundary; the prefix already fits.
+                let retryState? :=
+                  if rendered?.isNone
+                      && checkWidth
+                      && boundary?.isNone
+                      && childRetainsRuleSourceBreak state.source segment index
+                          childFacts? then do
+                    let plan := LayoutPlan.resolve entryState.context segment
+                    let point ←
+                      plan.breakPoints.find?
+                        fun point =>
+                          point.index == index
+                          && point.indentLevels > 0
+                          && plan.keepsPrefixWithChildFirstLine index
+                    let placement := entryState.withChildPlacement segment plan
+                    some
+                      (state.withPendingIndent
+                        (breakPointIndent placement segment plan point))
+                  else
+                    none
+                let rendered? := rendered?.orElse fun _ => retryState? >>= renderChild
                 match rendered? with
                 | some (rendered, childRetainedBreak) =>
                     loop (scope.restore rendered)
-                      (retainedBreak || boundary?.isSome || childRetainedBreak) rest
+                      (retainedBreak
+                        || boundary?.isSome
+                        || retryState?.isSome
+                        || childRetainedBreak) rest
                 | none => none
       let rendered? := loop state false segment.indexes
       rendered?.filter
@@ -2763,6 +2788,16 @@ mutual
           lineFitSuffixWidth := lineFitSuffix
           trace := state.trace.pushPath index
       }
+    -- A retained boundary uses the parent anchor, not a hypothetical inline column.
+    let childState :=
+      if startsOnNewSourceLine
+          && state.pendingIndent?.isNone
+          && !formatLeadingBoundary
+          && (treeLayoutSummary state.source child
+                childLayoutFacts?).startsWithRetainedOriginalBoundary then
+        { childState with layoutAnchor := state.layoutAnchor }
+      else
+        childState
     let childState :=
       if state.tailIndentationStop?.any fun stop => index < stop then
         let anchorIndentation :=

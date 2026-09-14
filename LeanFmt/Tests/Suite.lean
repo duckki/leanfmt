@@ -18692,8 +18692,8 @@ def assertMovedProofCollectionFitsWidth (env : Lean.Environment) : IO Unit := do
     ++ "\n"
     ++ "def recordProof : ProofRecord :=\n"
     ++ "  {\n"
-    ++ "    result :=\n"
-    ++ "      fun x y h => id <| by simp only [show True = True by rfl, and_true, true_and, eq_self, h]\n"
+    ++ "    result := fun x y h => id <| by\n"
+    ++ "      simp only [show True = True by rfl, and_true, true_and, eq_self, h]\n"
     ++ "  }\n"
   check "moved inline owner of a retained proof" recordProofSource recordProofExpected 100
   check "CRLF moved inline owner of a retained proof"
@@ -21398,7 +21398,69 @@ def assertReviewedProtectedLayouts (env : Lean.Environment) : IO Unit := do
       ("def proofField : Equivalence where\n"
         ++ "  left_inv f := Subtype.ext <| funext <| Fin.forall_fin_two.2 <| by\n"
         ++ "    simp [← (show f.1 0 + f.1 1 = 1 by simpa using f.2.2)]\n")
-      ["  left_inv f :=\n    Subtype.ext <| funext <| Fin.forall_fin_two.2 <| by\n      simp"]
+      ["  left_inv f := Subtype.ext <| funext <| Fin.forall_fin_two.2 <| by\n    simp"]
+
+  let fieldSource :=
+    "def proofField : Equivalence where\n"
+    ++ "  left_inv f := Subtype.ext <| funext <| Fin.forall_fin_two.2 <| by\n"
+    ++ "    simp [firstLemma, secondLemma, thirdLemma]\n"
+  for width in [72, 80] do
+    let result ← check s!"fitting-field-header-{width}" fieldSource [] width
+    assertEq "a fitting field header breaks at its attached proof body" fieldSource result
+  let _ ← check "long-field-header" fieldSource ["  left_inv f :=\n", "<| by\n"] 50
+  let _ ←
+    check "wrapped-field-parameters"
+      ("def proofField : Equivalence where\n"
+        ++ "  left_inv (firstParameterWithLongName : Nat) (secondParameterWithLongName : Nat) :=\n"
+        ++ "    Subtype.ext <| funext <| by\n"
+        ++ "      simp [firstLemma, secondLemma, thirdLemma]\n")
+      ["(secondParameterWithLongName : Nat) :=\n", "    Subtype.ext <| funext <| by simp"]
+      80
+  let compactField :=
+    "def compactField : Equivalence where\n  left_inv f := f <| by trivial\n"
+  assertEq "a fitting field proof still stays inline" compactField
+    (← check "compact-field-proof" compactField [])
+  let elaboratingField :=
+    "structure ProofField where\n"
+    ++ "  left_inv : (firstParameter : Nat) → firstParameter = firstParameter\n"
+    ++ "def fieldInstance : ProofField where\n"
+    ++ "  left_inv firstParameter := id <| id <| by\n"
+    ++ "    exact Eq.refl firstParameter\n"
+  let fieldResult ←
+    check "elaborating-field-proof" elaboratingField
+      ["  left_inv firstParameter := id <| id <| by\n    exact"] 70
+  assertFrontendElaborates env fieldResult "attached-field-result.lean"
+
+  for quotation
+      in [
+        "`(command| attribute [simp] theoremName)",
+        "`(command| attribute [simp]\n            theoremName)",
+        "`(command| attribute [simp] -- Keep the quoted comment.\n"
+        ++ "            theoremName)"
+      ] do
+    let source :=
+      "def quotedPipe :=\n"
+      ++ "  match ref with\n"
+      ++ "  | ref =>\n"
+      ++ "    MetaM.run' do\n"
+      ++ "      if condition then\n"
+      ++ "        liftCommandElabM <| Command.elabCommand <| ←\n"
+      ++ s!"          {quotation}\n"
+      ++ "      return result\n"
+    let expected :=
+      "def quotedPipe :=\n"
+      ++ "  match ref with\n"
+      ++ "  | ref =>\n"
+      ++ "      MetaM.run' do\n"
+      ++ "        if condition then\n"
+      ++ "          liftCommandElabM\n"
+      ++ "          <| Command.elabCommand\n"
+      ++ "          <| ←\n"
+      ++ s!"            {quotation.replace "\n" "\n  "}\n"
+      ++ "        return result\n"
+    for width in [80, 100] do
+      assertEq "a quotation moves with its enclosing source layout" expected
+        (← check s!"moved-quoted-continuation-{width}" source [] width)
 
   let _ ←
     check "moved-infix-proof-owner"

@@ -1042,6 +1042,16 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
           request.pendingLeadingWhitespace?.getD originalLeading
         else
           originalLeading)
+  let sourceColumn := request.sourceMap.columnAt firstToken.span.start
+  let leading :=
+    if quotation
+        && request.formattedLeadingWhitespace?.isNone
+        && !usesPendingIndent
+        && SpaceRules.hasLineStructure originalLeading then
+      rebaseTextIndent sourceColumn (request.layoutAnchor.shiftColumn sourceColumn)
+        leading
+    else
+      leading
   let quotationStartsOnLine :=
     quotation
     && (currentLineAfterAppend request.currentLine leading).all
@@ -1049,7 +1059,6 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
   let leadingColumn := lineWidth <| currentLineAfterAppend request.currentLine leading
   let sourceText :=
     SyntaxTree.sourceText request.source firstToken.span.start lastToken.span.stop
-  let sourceColumn := request.sourceMap.columnAt firstToken.span.start
   let retainsRelativeLayout :=
     islandPlan?.any fun plan => plan.policy.relativeLayout == .retain
   let retainsInlineRelativeLayout := retainsRelativeLayout || proofLayout || calcLayout
@@ -1266,7 +1275,9 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
       match targetColumn? with
       | some targetColumn =>
           let sourceColumn :=
-            if request.formattedLeadingWhitespace?.isSome || usesPendingIndent then
+            if quotation
+                || request.formattedLeadingWhitespace?.isSome
+                || usesPendingIndent then
               leadingColumn
             else
               sourceColumn
