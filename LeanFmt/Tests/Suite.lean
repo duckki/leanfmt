@@ -21309,6 +21309,84 @@ def assertParserOwnedSuffixAndPipeBoundaries (env : Lean.Environment) : IO Unit 
       ++ "    using proof\n")
     86
 
+def assertTacticHeaderCollectionOwnership (env : Lean.Environment) : IO Unit := do
+  let header :=
+    "theorem movedHeader (n : Nat) : True := by\n"
+    ++ "  cases n with\n"
+    ++ "  | zero => trivial\n"
+    ++ "  | succ n =>\n"
+  let check (name source expected : String) (lineWidth : Nat) : IO Unit := do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source s!"{name}.lean" { lineWidth }
+    assertTrue s!"{name} does not fall back" (!result.fellBack)
+    assertEq s!"{name} keeps header ownership" expected result.formatted
+    assertTrue s!"{name} preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    assertEq s!"{name} is idempotent" result.formatted
+      (← Formatter.formatSourceWithEnv env result.formatted s!"{name}-again.lean"
+          { lineWidth })
+
+  check "configured-header-recovery"
+    (header
+      ++ "    simp +instances only [firstRewriteLemma, secondRewriteLemma, thirdRewriteLemma, fourthRewriteLemma]\n")
+    (header
+      ++ "      simp +instances only [firstRewriteLemma, secondRewriteLemma, thirdRewriteLemma,\n"
+      ++ "        fourthRewriteLemma]\n")
+    104
+  check "configured-header-with-body"
+    ("example : True := by\n"
+      ++ "  simpa +contextual only [firstRewriteLemma, secondRewriteLemma, thirdRewriteLemma, fourthRewriteLemma] using proof\n")
+    ("example : True := by\n"
+      ++ "  simpa +contextual only [firstRewriteLemma, secondRewriteLemma,\n"
+      ++ "    thirdRewriteLemma, fourthRewriteLemma]\n"
+      ++ "    using proof\n")
+    70
+
+  let separatedClauses :=
+    header
+    ++ "    rcases hlookups field hfield with\n"
+    ++ "      ⟨fieldDefinition, hfieldLookup⟩\n"
+    ++ "    simpa using\n"
+    ++ "      (resultValueOrNull_handleFieldError_cacheReady\n"
+    ++ "        (ObjectRef := ObjectRef) fieldDefinition.outputType)\n"
+  check "header-modifiers-do-not-absorb-trailing-clauses" separatedClauses
+    (header
+      ++ "      rcases hlookups field hfield with\n"
+      ++ "        ⟨fieldDefinition, hfieldLookup⟩\n"
+      ++ "      simpa using\n"
+      ++ "        (resultValueOrNull_handleFieldError_cacheReady\n"
+      ++ "          (ObjectRef := ObjectRef) fieldDefinition.outputType)\n")
+    100
+
+  for tactic in ["simp only", "simpa only", "rw"] do
+    let source :=
+      s!"example : True := by\n  {tactic} [show True by trivial; trivial, proof]\n"
+    let parsed ← SyntaxTree.parseModuleStringWithEnv env source
+    let collectionKind :=
+      if tactic == "rw" then
+        `Lean.Parser.Tactic.rwRuleSeq
+      else
+        `Lean.Parser.Tactic.simpArgs
+    let some collection :=
+      (findTacticTree? collectionKind parsed.tree).orElse
+        (fun _ => findTreeNode? (.delimitedCollection .bracket) parsed.tree)
+    | throw <| IO.userError s!"missing {tactic} collection"
+    assertEq "nested proof semicolons are not collection row separators" "array"
+      (Formatter.LineBreakRules.formattingRuleFor collection).name
+  let conversion := "example : 0 + 0 = 0 := by\n  conv =>\n    rw [Nat.add_zero]\n"
+  let parsed ← SyntaxTree.parseModuleStringWithEnv env conversion
+  assertTrue "conversion tactic sequences expose their delimited headers"
+    (countTreeNodes .parserOwnedHeader parsed.tree == 1)
+  assertFrontendElaborates env conversion "conversion-header.lean"
+  for tactic
+      in ["simp +instances only", "simp (config := {}) only", "simpa +contextual only"] do
+    let source := s!"example : True := by {tactic} [proof]\n"
+    let parsed ← SyntaxTree.parseModuleStringWithEnv env source
+    let some (.node _ children) := findTreeNode? .parserOwnedHeader parsed.tree
+    | throw <| IO.userError s!"missing {tactic} header"
+    assertTrue "configuration and atom modifiers remain in one attached header"
+      (children.size == 1)
+
 def assertCompactAndProtectedLayoutConsistency (_env : Lean.Environment) : IO Unit := do
   let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
   let check (name source expected : String) (lineWidth : Nat := 100) : IO Unit := do
@@ -22453,6 +22531,7 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertStructuralHeadersOwnAttachedBodies env
   assertParserOwnedClauseBodies env
   assertParserOwnedSuffixAndPipeBoundaries env
+  assertTacticHeaderCollectionOwnership env
   assertCompactAndProtectedLayoutConsistency env
   assertFallbackAndConditionalSuffixesStayAttached env
   assertIfThenElseRuleBreaksBalancedShape env

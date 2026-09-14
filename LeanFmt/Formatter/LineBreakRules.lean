@@ -4443,7 +4443,7 @@ def delimitedRuleFor (tree : SyntaxTree.Tree) : SyntaxTree.DelimiterKind -> Line
       match tree with
       | .node (.delimitedCollection _) _ => tupleRule
       | _ => parenRule
-  | .bracket => if treeContainsLexeme ";" tree then matrixNotationRule else arrayRule
+  | .bracket => if tree.hasDelimitedRows then matrixNotationRule else arrayRule
   | .brace => bracedTermRule
   | .anonymousConstructor => anonymousCtorRule
   | .doubleAngle | .norm => transparentRule

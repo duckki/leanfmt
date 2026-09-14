@@ -1,0 +1,42 @@
+theorem configuredHeader : True := by
+  simpa +contextual only [firstRewriteLemma, secondRewriteLemma, thirdRewriteLemma, fourthRewriteLemma] using proof
+
+theorem nestedProofHeader (n : Nat) : True := by
+  cases n with
+  | zero => trivial
+  | succ n =>
+    simpa only [firstRewriteLemma, secondRewriteLemma,
+      thirdRewriteLemma, fourthRewriteLemma,
+      relation _ (show Relation left right by dsimp; trivial)] using proof
+
+theorem conversionHeader (n : Nat) : True := by
+  cases n with
+  | zero => trivial
+  | succ n =>
+    conv =>
+      rw [firstRewriteLemma, secondRewriteLemma, thirdRewriteLemma, fourthRewriteLemma,
+        fifthRewriteLemma]
+
+-----------------------------------------------------------------------------------------
+-- leanfmt: expected output below (DO NOT EDIT)
+-----------------------------------------------------------------------------------------
+theorem configuredHeader : True := by
+  simpa +contextual only [firstRewriteLemma, secondRewriteLemma, thirdRewriteLemma,
+    fourthRewriteLemma]
+    using proof
+
+theorem nestedProofHeader (n : Nat) : True := by
+  cases n with
+  | zero => trivial
+  | succ n =>
+      simpa only [firstRewriteLemma, secondRewriteLemma, thirdRewriteLemma,
+        fourthRewriteLemma, relation _ (show Relation left right by dsimp; trivial)]
+        using proof
+
+theorem conversionHeader (n : Nat) : True := by
+  cases n with
+  | zero => trivial
+  | succ n =>
+      conv =>
+        rw [firstRewriteLemma, secondRewriteLemma, thirdRewriteLemma, fourthRewriteLemma,
+          fifthRewriteLemma]

@@ -264,39 +264,42 @@ private def regroupParserOwnedHeaderAssignmentChildren (children : Array Tree)
       | _, _ => children
   | _ => children
 
+private def isHeaderModifier : Tree → Bool
+  | .node (.tactic `Lean.Parser.Tactic.optConfig _ _ _ _) _ => true
+  | child =>
+      match tokenCardinality child with
+      | .single token => token.role == .atom
+      | .empty => true
+      | _ => false
+
 private def attachParserOwnedHeaderHead (children : Array Tree) : Array Tree :=
   let contentIndexes :=
     (List.range children.size).filter fun index => children[index]?.any hasContentToken
   match contentIndexes with
-  | firstIndex :: modifierIndex :: argumentIndex :: _ =>
-      match children[firstIndex]?, children[modifierIndex]?, children[argumentIndex]? with
-      | some first, some modifier, some argument =>
-          if (match tokenCardinality modifier with
-              | .single _ => true
-              | _ => false)
-              && (firstContentToken? argument).any
-                  (fun token => lexemeEndsWithOpeningDelimiter token.lexeme) then
-            children.set! firstIndex .missing
-            |>.set! modifierIndex .missing
-            |>.set! argumentIndex (.node .suffixGroup #[first, modifier, argument])
+  | firstIndex :: argumentIndex :: rest =>
+      Id.run do
+        let modifiers := rest.takeWhile fun index => children[index]?.any isHeaderModifier
+        let continuation :=
+          if children[argumentIndex]?.any isHeaderModifier then
+            match (rest.drop modifiers.length).head? with
+            | some index =>
+                if (children[index]? >>= firstContentToken?).any
+                    (fun token => token.lexeme.endsWith "[") then
+                  modifiers ++ [index]
+                else
+                  []
+            | none => []
           else
-            let attached :=
-              match modifier with
-              | .node .suffixGroup modifierChildren =>
-                  .node .suffixGroup <| #[first] ++ modifierChildren
-              | _ => .node .suffixGroup #[first, modifier]
-            children.set! firstIndex .missing |>.set! modifierIndex attached
-      | _, _, _ => children
-  | firstIndex :: argumentIndex :: _ =>
-      match children[firstIndex]?, children[argumentIndex]? with
-      | some first, some argument =>
-          let attached :=
-            match argument with
-            | .node .suffixGroup argumentChildren =>
-                .node .suffixGroup <| #[first] ++ argumentChildren
-            | _ => .node .suffixGroup #[first, argument]
-          children.set! firstIndex .missing |>.set! argumentIndex attached
-      | _, _ => children
+            []
+        let indexes := firstIndex :: argumentIndex :: continuation
+        let mut result := children
+        let mut attached := #[]
+        for index in indexes do
+          match children[index]! with
+          | .node .suffixGroup parts => attached := attached ++ parts
+          | child => attached := attached.push child
+          result := result.set! index .missing
+        return result.set! (indexes.getLast!) (.node .suffixGroup attached)
   | _ => children
 
 private def parserOwnedHeaderTree (children : Array Tree) : Tree :=
@@ -322,6 +325,9 @@ def isTacticSequenceKind (kind : Lean.SyntaxNodeKind) : Bool :=
   kind == `Lean.Parser.Tactic.tacticSeq
   || kind == `Lean.Parser.Tactic.tacticSeq1Indented
   || kind == `Lean.Parser.Tactic.tacticSeqBracketed
+  || kind == `Lean.Parser.Tactic.Conv.convSeq
+  || kind == `Lean.Parser.Tactic.Conv.convSeq1Indented
+  || kind == `Lean.Parser.Tactic.Conv.convSeqBracketed
 
 def tacticKindOwnsStructuralLayout (kind : Lean.SyntaxNodeKind) : Bool :=
   kind == `Lean.Parser.Tactic.cases
@@ -2206,9 +2212,37 @@ private partial def regroupDoElseIfHeaderSuffix : Tree → Tree
         .node kind children
   | tree => tree
 
+private partial def exposeDelimitedHeader? (tree : Tree) : Option (Array Tree) :=
+  if tree.firstToken?.any (fun token => token.lexeme.endsWith "[") then
+    some #[tree]
+  else
+    match tree with
+    | .node (.tactic _ false false false false) children
+    | .node (.raw `null) children
+    | .node .suffixGroup children =>
+        Id.run do
+          for index in [:children.size] do
+            if let some arguments := exposeDelimitedHeader? children[index]! then
+              return some
+              <| childrenRange children 0 index
+                  ++ arguments
+                  ++ childrenRange children (index + 1) children.size
+            if hasContentToken children[index]! && !isHeaderModifier children[index]! then
+              return none
+          return none
+    | _ => none
+
 private def regroupTacticTerminalDelimiter (isTacticSequenceEntry : Bool) : Tree → Tree
   | .node kind@(.tactic rawKind containsSequence isOwner _ isSpacedApplication)
       children =>
+      let children :=
+        if isTacticSequenceEntry
+            && !containsSequence
+            && !isOwner
+            && !isSpacedApplication then
+          (exposeDelimitedHeader? (.node kind children)).getD children
+        else
+          children
       let terminalIndex? :=
         ((List.range children.size).filter
           fun index => children[index]?.bind Tree.firstToken? |>.isSome).getLast?
@@ -3415,6 +3449,16 @@ partial def flattenDelimitedCollectionChildren (children : Array Tree) : Array T
             children
       | _ => children
   | none => children
+
+private partial def hasCollectionRowSeparator : Tree → Bool
+  | .leaf token => token.lexeme == ";"
+  | .node (.raw `null) children => children.any hasCollectionRowSeparator
+  | _ => false
+
+def Tree.hasDelimitedRows (tree : Tree) : Bool :=
+  match tree with
+  | .node _ children => children.any hasCollectionRowSeparator
+  | _ => false
 
 private def isDelimitedSequenceKind : NodeKind → Bool
   | .raw kind | .tactic kind _ _ _ _ =>

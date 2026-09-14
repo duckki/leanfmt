@@ -114,6 +114,9 @@ non-suffix alternative body begins on the following indented line.
 The same header attachment and collection flow apply to delimited tactic arguments
 without a term body, including `simp only [...]`, `rw [...]`, and a following
 location clause. Ordinary term arguments such as `exact [...]` retain term layout.
+Configuration modifiers such as `+instances` or `(config := ...)` do not detach
+the following `only [...]` header. Conversion tactics use the same flowing lists;
+a semicolon inside a list item's proof is not a matrix row separator.
 Parser-defined tactic suffixes follow the same principle: a fitting body may stay
 beside a suffix such as `says`, while a broken body continues from the suffix
 owner's base. Likewise, `show ... from` keeps `from` with the following

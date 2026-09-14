@@ -520,6 +520,13 @@ an empty leading flow segment. Their enclosing
 tactic keeps its source-island classification; recovery uses the existing header
 and collection rules. A wrapper containing only a header is not itself a
 header-and-body recovery owner, so an already-overlong collection stays protected.
+Header normalization includes intervening atom modifiers and Lean's configuration
+parser before a bracketed header argument, not just one optional modifier. Term
+arguments and trailing clauses remain outside that attached prefix. Conversion
+sequences carry the same tactic-entry
+context as ordinary tactic sequences. Matrix row classification examines only
+collection separators through parser sequence wrappers; semicolons inside an
+item's nested proof do not change the surrounding collection rule.
 A single-token tactic prefix is carried through transparent,
 single-content tactic-sequence wrappers only when the descendant contains a structural
 tactic layout owner. The prefix then joins that owner's first structural head; unrelated
