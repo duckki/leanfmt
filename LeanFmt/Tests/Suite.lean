@@ -18788,6 +18788,73 @@ def assertMvcgenAlternativesPreserveLayout (env : Lean.Environment) : IO Unit :=
     assertEq s!"{name} is idempotent" result.formatted
       (← Formatter.formatSourceWithEnv env result.formatted name { lineWidth := 100 })
 
+def assertNestedPreservedRecordUsesDelimiterBase (env : Lean.Environment) : IO Unit := do
+  let declarations :=
+    "structure RecordFields where\n"
+    ++ "  fieldName : Nat\n"
+    ++ "  arguments : Nat\n"
+    ++ "  selectionSet : Nat\n\n"
+    ++ "def collectMultilineSelection\n"
+    ++ "    (responseName fieldName arguments selectionSet : Nat)\n"
+    ++ "    : Bool → List (Nat × RecordFields)\n"
+    ++ "  | allowed =>\n"
+    ++ "      if allowed then\n"
+  let ending := "      else\n        []\n"
+  let inlineRecord :=
+    "        [(responseName, {\n"
+    ++ "          fieldName\n"
+    ++ "          arguments\n"
+    ++ "          selectionSet\n"
+    ++ "        })]\n"
+  let brokenRecord :=
+    "        [(\n"
+    ++ "          responseName,\n"
+    ++ "          {\n"
+    ++ "          fieldName\n"
+    ++ "          arguments\n"
+    ++ "          selectionSet\n"
+    ++ "        }\n"
+    ++ "        )]\n"
+  let expectedRecord :=
+    "        [(\n"
+    ++ "          responseName,\n"
+    ++ "          {\n"
+    ++ "            fieldName\n"
+    ++ "            arguments\n"
+    ++ "            selectionSet\n"
+    ++ "          }\n"
+    ++ "        )]\n"
+  let commentedRecord :=
+    inlineRecord.replace "          selectionSet\n"
+      "          selectionSet\n          -- Keep this comment with the fields.\n"
+  let expectedCommentedRecord :=
+    expectedRecord.replace "            selectionSet\n"
+      "            selectionSet\n            -- Keep this comment with the fields.\n"
+  for (record, formattedRecord)
+      in [
+        (inlineRecord, expectedRecord),
+        (brokenRecord, expectedRecord),
+        (expectedRecord, expectedRecord),
+        (commentedRecord, expectedCommentedRecord)
+      ] do
+    let source := declarations ++ record ++ ending
+    let expected := declarations ++ formattedRecord ++ ending
+    let name := "nested-preserved-record.lean"
+    assertFrontendElaborates env source name
+    let sourceModule ← SyntaxTree.parseModuleStringWithEnv env source name
+    assertTrue "shorthand fields retain the ambiguous syntax wrapper"
+      (findTreeNode? (.raw `choice) sourceModule.tree).isSome
+    let result ← Formatter.formatSourceWithEnvDetailed env source name { lineWidth := 60 }
+    assertTrue "a nested preserved record does not fall back" (!result.fellBack)
+    assertEq "a moved record aligns its closer and indents its fields" expected
+      result.formatted
+    assertTrue "a nested preserved record preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    assertTrue "a nested preserved record fits" (Formatter.linesFit result.formatted 60)
+    assertFrontendElaborates env result.formatted name
+    assertEq "a nested preserved record is idempotent" result.formatted
+      (← Formatter.formatSourceWithEnv env result.formatted name { lineWidth := 60 })
+
 def assertMovedProofCollectionFitsWidth (env : Lean.Environment) : IO Unit := do
   let check (label source expected : String) (width : Nat) (fits : Bool := true) := do
     let normalizedSource := Formatter.SpaceRules.normalizeLineEndings source
@@ -23425,6 +23492,7 @@ def runCollectionAndDeclarationTests (env : Lean.Environment) : IO Unit := do
   assertStructInstanceFieldBindersPreserved env
   assertStructUpdateWithFieldsBreaks env
   assertNestedArrayStructureInstancesUseExpressionBase env
+  assertNestedPreservedRecordUsesDelimiterBase env
   assertTupleBreakBalanced env
   assertAnonymousConstructorBreakBalanced env
   assertExportBreaksLongList env

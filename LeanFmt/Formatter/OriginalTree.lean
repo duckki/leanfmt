@@ -145,11 +145,9 @@ private def treeTrailingDelimiterIndent?
   |>.takeWhile (fun token => SpaceRules.isDelimiterCloserToken token.lexeme)
   |>.foldl
       (fun minimum? token =>
-        let boundary := SourceBoundary.beforeToken token
+        let column := sourceMap.columnAt token.span.start
         if firstLine < sourceMap.lineNumberAt token.span.start
-            && boundary.hasLineStructure
-            && !boundary.hasComment then
-          let column := sourceMap.columnAt token.span.start
+            && sourceLineIndentationAt sourceMap token.span.start == column then
           match minimum? with
           | some minimum => some (min minimum column)
           | none => some column
@@ -752,7 +750,11 @@ def policyFor : LayoutIslandKind → IslandPolicy
         pendingIndent := .useWhenAvailable
       }
   | .syntaxChoice =>
-      { multiline := .preserveWithoutRuleBreaks }
+      {
+        multiline := .preserveWithoutRuleBreaks
+        relativeLayout := .retain
+        pendingIndent := .useWhenAvailable
+      }
   | .calc =>
       {
         content := .calc
@@ -1167,7 +1169,11 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
           some (sourceIndent, targetIndent)
       | _, _ => none
   let inlineContinuationColumns? :=
-    match if inlineMultilineLayoutIsland && quotationStartsOnLine then
+    match if (inlineMultilineLayoutIsland && quotationStartsOnLine)
+              || (content == .ordinary
+                  && retainsRelativeLayout
+                  && startsOnOutputLine
+                  && tree.startsWithOpeningDelimiter) then
             treeTrailingDelimiterIndent? request.sourceMap tree
           else
             none with

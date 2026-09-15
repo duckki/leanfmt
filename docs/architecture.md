@@ -1403,6 +1403,12 @@ renderer state. When the renderer reaches a recognized proof or attribute node, 
 applies that plan. If the renderer has already formatted the boundary before an island,
 that boundary's output column is final; original-tree emission rebases only the island's
 source slice and must not apply the source-to-output shift to the boundary again.
+Ambiguous syntax choices retain relative layout and follow pending structural indentation.
+When an ordinary retained delimited island starts an output line, its standalone source
+closing delimiter anchors the continuation shift to the output opener. Interior lines
+keep their offsets from that anchor, even when the opener was previously inline or a
+comment precedes the closer. The island stays opaque; no record-specific renderer rule
+or syntax-choice resolution is required.
 A following standalone comment at or above the next source token's indentation follows
 that token. When an island's policy preserves following-comment ownership, a comment
 deeper than the next token retains the same relative depth as both move; no blank-line

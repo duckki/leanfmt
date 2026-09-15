@@ -62,6 +62,10 @@ def assertOriginalIslandPolicies : IO Unit := do
   let calcPlan := Formatter.OriginalTree.planForKind .calc
   assertTrue "calc islands delegate their leading boundary"
     (calcPlan.policy.leadingBoundary == .formatStructurally)
+  let syntaxChoice := Formatter.OriginalTree.planForKind .syntaxChoice
+  assertTrue "ambiguous syntax moves its relative layout with structural indentation"
+    (syntaxChoice.policy.relativeLayout == .retain
+      && syntaxChoice.policy.pendingIndent == .useWhenAvailable)
 
 def assertRebaseAnchor : IO Unit := do
   let movedRight : Formatter.Rebase.Anchor := { sourceColumn := 4, outputColumn := 8 }

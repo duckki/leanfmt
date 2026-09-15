@@ -2162,6 +2162,22 @@ before `}`. Comma-separated fields remain flat when they fit. Newline-separated
 fields without commas are structurally multiline because Lean's layout syntax
 requires those boundaries.
 
+Shorthand fields can retain an ambiguous parser shape. Their source layout stays
+protected, but moves with the surrounding expression: when a nested record's
+opener moves to its own line, its standalone closer aligns with that opener and
+the fields retain their indentation beneath it.
+
+```lean
+[(
+  responseName,
+  {
+    fieldName
+    arguments
+    selectionSet
+  }
+)]
+```
+
 A field value introduced by `by` or `do` keeps that introducer with `:=`, just
 as a declaration value does. The body breaks after the introducer:
 
