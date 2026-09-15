@@ -18532,12 +18532,19 @@ def assertParserStateRestoresScopes (env : Lean.Environment) : IO Unit := do
       && parsed.tokens.any (·.lexeme == "%"))
 
 def assertFrontendFallbackRejectsParserErrors (env : Lean.Environment) : IO Unit := do
+  let droppedProofTail :=
+    "example : True := by\n"
+    ++ "  have h : True := by exact id\n"
+    ++ "    True.intro\n"
+    ++ "  exact h\n\n"
+    ++ "example : True := by trivial\n"
   for source
       in [
         "namespace Int\ndef negative (n : Nat) : Int := -[n + 1]\nend Int\n",
         "def broken := (0\n",
         "import\n",
-        "macro \"badQuotation\" : tactic => `(tactic| unknown_tactic)\n"
+        "macro \"badQuotation\" : tactic => `(tactic| unknown_tactic)\n",
+        droppedProofTail
       ] do
     let rejected ←
       try
@@ -18567,16 +18574,23 @@ def assertFrontendFallbackRejectsParserErrors (env : Lean.Environment) : IO Unit
     (← Formatter.formatSourceWithEnv env result.formatted "generated-parser-syntax.lean")
   IO.FS.withTempDir
     fun root => do
-      let source := "namespace Int\ndef negative (n : Nat) : Int := -[n + 1]\nend Int\n"
       let file := root / "Invalid.lean"
-      IO.FS.writeFile file source
       let loader : LeanFmt.Driver.EnvironmentLoader :=
         { default := env, lastExact := ← IO.mkRef none }
-      let exitCode ←
-        LeanFmt.Driver.runOptionsWithLoader loader
-          { files := [file], checkException := true }
-      assertTrue "the CLI rejects parser recovery" (exitCode == 1)
-      assertEq "the CLI does not overwrite invalid source" source (← IO.FS.readFile file)
+      for source
+          in [
+            "namespace Int\ndef negative (n : Nat) : Int := -[n + 1]\nend Int\n",
+            droppedProofTail
+          ] do
+        for checkException in [false, true] do
+          IO.FS.writeFile file source
+          let before ← IO.FS.readBinFile file
+          let exitCode ←
+            LeanFmt.Driver.runOptionsWithLoader loader { files := [file], checkException }
+          assertTrue "the CLI rejects parser recovery with or without diagnostics"
+            (exitCode == 1)
+          assertTrue "the CLI preserves every byte, including the unparsed proof tail"
+            (before == (← IO.FS.readBinFile file))
 
 def assertLocalElaboratorRegistersCompoundKeyword (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -18715,6 +18729,64 @@ def assertFrontendElaborates (env : Lean.Environment) (source fileName : String)
     Lean.Language.Lean.processCommands input parserState (Lean.Elab.Command.mkState env)
   for snapshot in (Lean.Language.toSnapshotTree snapshot.get).getAll do
     SyntaxTree.checkParserMessages snapshot.diagnostics.msgLog
+
+def assertMvcgenAlternativesPreserveLayout (env : Lean.Environment) : IO Unit := do
+  let sourcePrefix :=
+    "open Std.Do\n"
+    ++ "set_option mvcgen.warning false\n"
+    ++ "def countItems (xs : List Nat) : Id Nat := do\n"
+    ++ "  let mut n := 0\n"
+    ++ "  for _ in xs do\n"
+    ++ "    n := n + 1\n"
+    ++ "  return n\n\n"
+    ++ "example (xs : List Nat) : ⦃⌜True⌝⦄ countItems xs ⦃⇓ r => ⌜r = xs.length⌝⦄ := by\n"
+    ++ "  mvcgen -trivial [countItems] invariants\n"
+  let separate :=
+    "  · ⇓ ⟨cursor, n⟩ => ⌜n = cursor.prefix.length⌝\n"
+    ++ "  with\n"
+    ++ "  | vc1 =>\n"
+    ++ "    skip\n"
+    ++ "    simp_all +zetaDelta only [List.length_append, List.length_cons, List.length_nil]\n"
+    ++ "  | vc2 => simp_all +zetaDelta\n"
+    ++ "  | vc3 => simp_all +zetaDelta\n"
+  let grouped :=
+    "  | inv1 => ⇓ ⟨cursor, n⟩ => ⌜n = cursor.prefix.length⌝\n"
+    ++ "  with\n"
+    ++ "  | vc1 | vc2 =>\n"
+    ++ "    first\n"
+    ++ "    | rfl\n"
+    ++ "    | simp_all +zetaDelta\n"
+    ++ "  | vc3 => simp_all +zetaDelta\n"
+  for (name, body, headers)
+      in [
+        ("mvcgen-sibling-alternatives", separate, ["| vc1 =>", "| vc2 =>", "| vc3 =>"]),
+        ("mvcgen-grouped-alternatives", grouped, ["| vc1 | vc2 =>", "| vc3 =>"])
+      ] do
+    let source := sourcePrefix ++ body ++ "\nexample : True := by trivial\n"
+    assertFrontendElaborates env source name
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source name { lineWidth := 100 }
+    assertTrue s!"{name} does not fall back" (!result.fellBack)
+    assertTrue s!"{name} preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    assertTrue s!"{name} fits the requested width"
+      (Formatter.linesFit result.formatted 100)
+    let branches :=
+      (result.formatted.splitOn "\n").filter
+        fun line => line.trimAsciiStart.toString.startsWith "| vc"
+    assertTrue s!"{name} keeps all alternative headers"
+      (branches.length == headers.length)
+    let indents := branches.map fun line => (line.toList.takeWhile (· == ' ')).length
+    assertTrue s!"{name} aligns siblings without accumulating preceding tactic widths"
+      (indents.all fun indent => indent <= 6 && some indent == indents.head?)
+    for header in headers do
+      assertTextContains "alternative headers keep every name and their shared arrow"
+        result.formatted header
+    assertTextContains "formatting retains the declaration after the alternatives"
+      result.formatted "example : True := by trivial"
+    assertFrontendElaborates env result.formatted name
+    assertEq s!"{name} is idempotent" result.formatted
+      (← Formatter.formatSourceWithEnv env result.formatted name { lineWidth := 100 })
 
 def assertMovedProofCollectionFitsWidth (env : Lean.Environment) : IO Unit := do
   let check (label source expected : String) (width : Nat) (fits : Bool := true) := do
@@ -23413,6 +23485,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertParserStateUpdatesAfterSyntaxCommands env
   assertParserStateRestoresScopes env
   assertFrontendFallbackRejectsParserErrors env
+  assertMvcgenAlternativesPreserveLayout env
   assertLocalElaboratorRegistersCompoundKeyword env
   assertFrontendReplayPreservesParserFacts env
   assertParserReplayStopsAtRequiredPrefix env
