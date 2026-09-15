@@ -8836,13 +8836,16 @@ def assertGeneratedTightNotationPiecesStayAttached (env : Lean.Environment)
       ++ "  @@@longFunctionWithEnoughCharacters first second third fourth fifth\n"
       ++ "      sixth seventh\n")
   assertTextContains
-    "generated delimited prefix keeps its closing delimiter at the term base"
+    "generated prefixed delimiter uses its opener's rounded base"
     result.formatted
     ("            #testSet{firstValueWithEnoughCharacters |\n"
-      ++ "              secondValueWithEnoughCharacters\n"
-      ++ "                thirdValueWithEnoughCharacters\n"
-      ++ "                fourthValueWithEnoughCharacters\n"
-      ++ "            } :=\n")
+      ++ "                secondValueWithEnoughCharacters\n"
+      ++ "                  thirdValueWithEnoughCharacters\n"
+      ++ "                  fourthValueWithEnoughCharacters\n"
+      ++ "              } :=\n")
+  let formattedTree ← SyntaxTree.parseModuleStringWithEnv env result.formatted
+  assertTrue "generated prefix attachment retains structural rule coverage"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule formattedTree).isEmpty
   assertTrue "generated tight notation fits its configured width"
     (Formatter.linesFit result.formatted 70)
   assertTrue "generated tight notation preserves code"
@@ -21098,6 +21101,75 @@ def assertDetachedCalcUsesRenderedBase (env : Lean.Environment) : IO Unit := do
     let again ← Formatter.formatSourceWithEnv env result.formatted fileName
     assertEq s!"{name} detached calc is idempotent" result.formatted again
 
+def assertUnaryPrefixPreservesSourceTightness (env : Lean.Environment) : IO Unit := do
+  for (input, expectedTerm)
+      in [
+        ("-2", "-2"),
+        ("- 2", "- 2"),
+        ("-(2)", "-(2)"),
+        ("-(2:Int)", "-(2 : Int)"),
+        ("- (2:Int)", "- (2 : Int)"),
+        ("-2^3", "-2 ^ 3"),
+        ("-(2:Int)^3", "-(2 : Int) ^ 3"),
+        ("- /- operand -/ (2:Int)", "- /- operand -/ (2 : Int)"),
+        ("¬(True:Prop)", "¬(True : Prop)"),
+        ("¬ (True:Prop)", "¬ (True : Prop)"),
+        ("!(true:Bool)", "!(true : Bool)"),
+        ("! (true:Bool)", "! (true : Bool)"),
+        ("~~~(2:UInt64)", "~~~(2 : UInt64)"),
+        ("~~~ (2:UInt64)", "~~~ (2 : UInt64)")
+      ] do
+    let source := s!"def value := {input}\n"
+    let expected := s!"def value := {expectedTerm}\n"
+    let result ← Formatter.formatSourceWithEnvDetailed env source
+    assertTrue s!"unary prefix {input} does not fall back" (!result.fellBack)
+    assertEq s!"unary prefix {input} preserves source tightness" expected result.formatted
+    assertFrontendElaborates env source "unary-prefix-source.lean"
+    assertFrontendElaborates env result.formatted "unary-prefix-output.lean"
+    let before ← SyntaxTree.parseModuleStringWithEnv env source
+    let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted
+    assertTrue s!"unary prefix {input} preserves code and width"
+      (Formatter.Diagnostics.formattingSafetyExceptions before after).isEmpty
+    assertEq s!"unary prefix {input} is independently idempotent" result.formatted
+      (← Formatter.formatSourceWithEnv env result.formatted)
+  for (source, kind, arity)
+      in [
+        ("def value := -(2:Int)\n", .raw `Lean.Parser.Term.typeAscription, 5),
+        ("def value := -2^3\n", .infixChain `«term_^_», 3)
+      ] do
+    let parsed ← SyntaxTree.parseModuleStringWithEnv env source
+    assertTrue "unary attachment preserves its operand's child positions"
+      (parsed.tree.firstNodeChildCount? kind == some arity)
+
+def assertUnaryPrefixOperandWrapsStructurally (env : Lean.Environment) : IO Unit := do
+  let source := "def value := -(Int.add (1234567890 : Int) (1234567890 : Int))\n"
+  let wrapped :=
+    "def value :=\n"
+    ++ "  -(Int.add (1234567890 : Int)\n"
+    ++ "      (1234567890 : Int))\n"
+  let coefficientSource :=
+    "def CoefficientFits (value : Int32) (width : Nat) : Prop :=\n"
+    ++ "  -(2 : Int) ^ (width - 1) ≤ value.toInt ∧ value.toInt < (2 : Int) ^ (width - 1)\n"
+  for (input, expected, width)
+      in [
+        (source, wrapped, 45),
+        (source, source, 100),
+        (coefficientSource, coefficientSource, 100)
+      ] do
+    let options := { lineWidth := width : Formatter.Options }
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env input "unary-wrapping.lean" options
+    assertTrue "unary operand wrapping does not fall back" (!result.fellBack)
+    assertEq "unary operands own their internal wrapping" expected result.formatted
+    assertFrontendElaborates env input "unary-wrapping-source.lean"
+    assertFrontendElaborates env result.formatted "unary-wrapping-output.lean"
+    let before ← SyntaxTree.parseModuleStringWithEnv env input
+    let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted
+    assertTrue "unary operand wrapping preserves code and width"
+      (Formatter.Diagnostics.formattingSafetyExceptions before after options).isEmpty
+    assertEq "unary operand wrapping is independently idempotent" result.formatted
+      (← Formatter.formatSourceWithEnv env result.formatted "unary-wrapping.lean" options)
+
 def assertCompoundCalcHeaderOwnsValueBoundary (env : Lean.Environment) : IO Unit := do
   for header in ["example", "theorem initialTermHeaderWithLongName"] do
     let source := header ++ " : (1 : Nat) = 1 := calc (1 : Nat)\n  _ = 1 := rfl\n"
@@ -22794,6 +22866,8 @@ def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertDelimitedCollectionsFlattenOnlySeparatedItems
 
 def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
+  assertUnaryPrefixPreservesSourceTightness env
+  assertUnaryPrefixOperandWrapsStructurally env
   assertReviewedMathlibConsistencyShapes env
   assertBorrowedTermUsesUnaryPrefixRule env
   assertSafeArrayIndexKeepsPostfixQuestion env

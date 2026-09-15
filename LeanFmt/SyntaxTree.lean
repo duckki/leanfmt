@@ -1402,9 +1402,7 @@ private def groupGeneratedTightPiece
     && (directLeafAtomToken? left).any
         fun token => firstToken.any (·.span.start == token.span.start)
   if leading then
-    match right with
-    | .node kind children => .node kind (#[left] ++ children)
-    | _ => .node .suffixGroup #[left, right]
+    .node .suffixGroup #[left, right]
   else
     match right with
     | .node .application children =>

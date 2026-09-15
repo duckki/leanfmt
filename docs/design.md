@@ -343,9 +343,9 @@ The main punctuation rules are:
 - no space before `)`, `]`, `⟩`, `⟫`, `,`, `;`, or `@`;
 - dots stay tight in projections and qualified names;
 - the complete two-backtick prefix of fully qualified name quotations stays tight;
-- ordinary operators and declaration punctuation receive surrounding spaces;
-- compact `!value` remains compact when `!` and the following token were
-  adjacent; otherwise `! value` retains a space.
+- ordinary infix operators and declaration punctuation receive surrounding spaces;
+- unary prefixes retain source adjacency: `!value` and `-(x : Int)` stay tight,
+  while `! value` and `- (x : Int)` retain a space.
 
 Source-tight edge pieces of generated notation remain structural units when
 the surrounding term wraps. This keeps forms such as `#{...}`, `∂μ`, and
@@ -1123,6 +1123,21 @@ theorem duplicateArgumentNamesRejected
 This applies consistently to logical negation `¬`, compact bang `!`, numeric
 negation `-`, and bitwise complement `~~~`. Postfix operators follow their own
 right-attached layout.
+
+Tightness does not depend on whether the operand is a name, a parenthesized term,
+or a type ascription. Spacing inside the operand still follows its own rules,
+including ordinary infix spacing around exponentiation.
+Delimited operands retain their own opener-based indentation, including rounding
+to an indentation boundary when their delimiter rule requires it.
+
+<!-- leanfmt-test -->
+```lean
+def tightNegation := -(2 : Int)
+
+def spacedNegation := - (2 : Int)
+
+def negatedPower := -(2 : Int) ^ 3
+```
 
 ## Tail indentation
 
