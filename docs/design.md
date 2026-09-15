@@ -1559,9 +1559,22 @@ When the complete header fits, its attached body's retained source break can tak
 priority over the surrounding assignment. If the header itself must wrap, the
 assignment still breaks first. This does not introduce a new split inside an
 originally inline protected proof.
-An assigned `calc` stays with `:=`, including `have := calc`.
+A plain `calc` introducer stays with `:=`, including `have := calc`.
+A proofless initial term forms a compound header with `calc`. That complete
+header uses the ordinary value boundary instead of attaching only its first
+token as a suffix. Its rows indent one level below the header:
+
+<!-- leanfmt-test -->
+```lean
+example : 1 = 1 :=
+  calc 1
+    _ = 1 := rfl
+```
+
 Width pressure does not move a protected proof continuation left of its owning
 base. Required indentation takes precedence over fitting an intact protected line.
+Source-layout recovery for a `do` body obeys the same lower bound: it cannot
+restore the body's old margin to the left of a newly wrapped header.
 An island's leading source break is separate from its internal layout, so a
 fitting quotation and its following infix operator may share a line.
 When an enclosing construct moves, a source-detached quotation moves with it;
@@ -1572,6 +1585,9 @@ layout. This includes later authored continuation lines. Recovery can open the
 path to that argument, but keeps neighboring tactics and nested protected regions
 in their source layout. Existing rules govern wrapping; tactic-specific recovery
 rules are not used. The alternative must reduce the number of overflowing lines.
+An overflow retry at a flow boundary uses that boundary's existing rule and
+indentation. It cannot invent a break after an attached operator merely to fit
+an intact protected line.
 Already-overlong source lines, including their comments, do not trigger this
 argument recovery.
 A source line shared with a retained protected span cannot be partially reflowed.

@@ -2905,6 +2905,7 @@ mutual
         match parentRelativeOriginalColumn? with
         | none => rendered
         | some targetColumn =>
+            let targetColumn := max targetColumn childState.segmentBaseIndent
             let original := emitOriginalAt true (some targetColumn) none
             preferCandidateWithFewerOverflows childState rendered original
     let rendered :=
@@ -2916,7 +2917,8 @@ mutual
         let targetColumn? :=
           sourceLayoutStart?.map
             fun (sourceColumn, _) =>
-              childState.layoutAnchor.shiftColumn sourceColumn
+              max (childState.layoutAnchor.shiftColumn sourceColumn)
+                childState.segmentBaseIndent
         if targetColumn? == parentRelativeOriginalColumn? then
           rendered
         else
@@ -3101,18 +3103,19 @@ mutual
                 (keepPrefixWithChildFirstLine && childStartsWithLineBreakingComment)
             let rendered := renderNested state
             let rendered :=
-              if state.pendingIndent?.isNone
-                  && 0 < renderedOutputOverflowCount state rendered then
-                let candidateState :=
-                  state.withPendingIndent (state.segmentBaseIndent + indentationSpaces)
-                let candidate := renderNested candidateState
-                if renderedOutputOverflowCount state candidate
-                    < renderedOutputOverflowCount state rendered then
-                  candidate
-                else
-                  rendered
-              else
-                rendered
+              match flow.breakAt? index with
+              | some breakPoint =>
+                  if state.pendingIndent?.isNone
+                      && 0 < renderedOutputOverflowCount state rendered then
+                    let candidate := renderNested (flow.withBreak state breakPoint)
+                    if renderedOutputOverflowCount state candidate
+                        < renderedOutputOverflowCount state rendered then
+                      candidate
+                    else
+                      rendered
+                  else
+                    rendered
+              | none => rendered
             renderFlowChildren rendered flow (index + 1)
               (renderedTreeIsMultiline before rendered child)
           match flow.stateForForcedNestedChild? state index child breakAfterPreviousChild

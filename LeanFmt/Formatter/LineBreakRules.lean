@@ -990,12 +990,19 @@ def nullInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   || wrappedByDoLetFallbackSequence context
 
 def attachedBodyStart (segment : Segment) (index : Nat) : Bool :=
-  match segment.child? index with
-  | some (.node (.proofBody _) _) => false
-  | _ =>
-      childStartsWithLexeme segment index "do"
-      || childStartsWithLexeme segment index "by"
-      || childStartsWithLexeme segment index "calc"
+  (childStartsWithLexeme segment index "do"
+    || childStartsWithLexeme segment index "by"
+    || childStartsWithLexeme segment index "calc")
+  && match segment.child? index with
+      | some (.node (.proofBody _) _) => false
+      | some (.node _ children) =>
+          -- A grouped header moves as a whole, not as its first token's suffix.
+          !(children.find? fun child => child.firstToken?.isSome).any
+            fun
+            | .node .suffixGroup parts =>
+                1 < (parts.filter fun child => child.firstToken?.isSome).size
+            | _ => false
+      | _ => true
 
 def attachedBodyFollowsDelimiter (context : RuleContext) (delimiter : String) : Bool :=
   match context.ancestors with

@@ -6,50 +6,15 @@ release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Overflow retry and suffix ownership
-
-```lean
-  <|
-    show result by
-      proof
-```
-
-The generic overflow retry can separate a protected operand from `<|`, even
-when its first line fits. Restricting retries to rule breakpoints also exposes
-actionable overflow in long proofless `:= calc firstTerm` headers. Such headers
-can also detach without moving their row base:
-
-```lean
-  calc a * x
-  _ = y := proof
-```
-
-The rows should be one level beneath the rendered `calc`. Comment-detached calc
-blocks are fixed, but that does not repair this header-retry path. Design the
-legal header/body boundaries and base propagation together before removing the
-fallback; do not add a protected-operand exception. Evidence: `Multiplier`,
-`Semiconj/Units`, and `Deriv/Slope` in Mathlib. The retained consistency fixes
-pass the complete local gate and 13-file Mathlib diagnostic/idempotency checks;
-a fresh full gate is still pending. This attachment-policy issue remains for
-review.
+No known unresolved formatting blockers.
 
 ## Progress
 
-### Review suffix boundary ownership
+### Release preparation
 
-Agree where a proofless calc header may wrap while keeping `calc` with its
-initial term and moving its row base consistently. Add focused width and
-protected-operand coverage, then restrict overflow retries to boundaries
-represented by that policy. No new rule API or syntax-specific renderer branch
-without design review.
-
-### Release gate
-
-Freeze the final candidate and fully validate pinned CSLib and all 8,311 selected
-Mathlib files at width 100. Require exception and independent idempotency checks,
-changed-module builds, complete post-format builds, and visual review. Earlier
-full-gate results do not validate later formatter changes. Accept intact protected
-lines at required indentation; investigate every new actionable overflow.
+No further corrective checkpoint is scheduled. Review and commit the validated
+candidate, then complete release packaging. Any subsequent formatter change
+requires a fresh release gate; earlier results do not validate later changes.
 
 ## Deferred Optimization Opportunities
 

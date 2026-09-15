@@ -696,6 +696,7 @@ def isolatedTokenSourceLineOverflowed
 def overflowContainedInUnbreakableLineHead
     (formattedMap : SyntaxTree.SourcePositionMap)
     (formattedTokens : List SyntaxTree.Token)
+    (atomicSpans : List SyntaxTree.Span)
     (occurrence : OverflowOccurrence) (lineWidth : Nat)
     : Bool :=
   let lineStart := formattedMap.fileMap.lineStart occurrence.line
@@ -706,20 +707,25 @@ def overflowContainedInUnbreakableLineHead
     (occurrence.text.takeWhile SpaceRules.isHorizontalWhitespace).toString.length
   let overflowStart := positionAfter lineStart (occurrence.text.take lineWidth).toString
   let contentStop := positionAfter lineStart occurrence.text.trimAsciiEnd.toString
-  match formattedTokens.filter (tokenIntersects overflowStart contentStop) with
-  | [token] =>
-      contentStop <= token.span.stop
-      && (contentIndentation + token.lexeme.length > lineWidth
-          || (let leading :=
-                SyntaxTree.sourceText formattedMap.source contentStart token.span.start
-              leading.toList.all
-                fun char =>
-                  char == '('
-                  || char == '['
-                  || char == '{'
-                  || char == '⟨'
-                  || char == '⟪'))
-  | _ => false
+  atomicSpans.any
+    (fun span =>
+      span.start == contentStart
+      && spanWithLineEndersCovers formattedTokens overflowStart contentStop span)
+  || match formattedTokens.filter (tokenIntersects overflowStart contentStop) with
+      | [token] =>
+          contentStop <= token.span.stop
+          && (contentIndentation + token.lexeme.length > lineWidth
+              || (let leading :=
+                    SyntaxTree.sourceText formattedMap.source contentStart
+                      token.span.start
+                  leading.toList.all
+                    fun char =>
+                      char == '('
+                      || char == '['
+                      || char == '{'
+                      || char == '⟨'
+                      || char == '⟪'))
+      | _ => false
 
 def sourceCommentLineTexts (moduleTree : SyntaxTree.Module) : List String :=
   (preservationFragments moduleTree).flatMap
@@ -857,7 +863,7 @@ def formattingSafetyExceptions (sourceModule formattedModule : SyntaxTree.Module
                   sourceTokens formattedTokens formattedUnbreakableOriginalSpans
                   occurrence options.lineWidth
               || overflowContainedInUnbreakableLineHead formattedMap formattedTokens
-                  occurrence options.lineWidth
+                  formattedAtomicSpans occurrence options.lineWidth
               || overflowCoveredBySpans formattedMap formattedTokens
                   formattedAttachedSuffixHeadSpans occurrence options.lineWidth
               || commentOnlyOverflowMatchesSource formattedMap formattedTokens

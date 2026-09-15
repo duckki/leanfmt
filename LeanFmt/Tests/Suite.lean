@@ -7484,9 +7484,10 @@ def assertProoflessCalcInitialStaysWithKeyword (env : Lean.Environment) : IO Uni
     ++ "    _ = middle := firstProof\n"
     ++ "    _ = final := secondProof\n"
   let expected :=
-    "def prooflessCalcInitial : Nat := calc _\n"
-    ++ "  _ = middle := firstProof\n"
-    ++ "  _ = final := secondProof\n"
+    "def prooflessCalcInitial : Nat :=\n"
+    ++ "  calc _\n"
+    ++ "    _ = middle := firstProof\n"
+    ++ "    _ = final := secondProof\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "proofless-calc-initial-layout.lean" { lineWidth := 80 }
@@ -15938,9 +15939,28 @@ def assertFormattingExceptionChecks (env : Lean.Environment) : IO Unit := do
   let movedAtomicFormattedModule ←
     SyntaxTree.parseModuleStringWithEnv env movedAtomicFormatted
       "moved-atomic-syntax-overflow.lean"
-  assertTrue "newly indented atomic syntax overflow is attributed to formatting"
-    ((Formatter.Diagnostics.formattingExceptions
+  assertTrue "isolated atomic syntax uses the same overflow policy as a single token"
+    (!(Formatter.Diagnostics.formattingExceptions
         fittingAtomicSourceModule movedAtomicFormattedModule).any
+        fun exception =>
+          match exception with
+          | .lineOverflow _ => true
+          | _ => false)
+  let prefixedAtomicPayload :=
+    String.ofList (List.replicate (Formatter.maxLineWidth - 24) 'x')
+  let prefixedAtomicSource :=
+    "def message :=\n  render m!\"" ++ prefixedAtomicPayload ++ "{value}\"\n"
+  let prefixedAtomicFormatted :=
+    "def message :=\n          render m!\"" ++ prefixedAtomicPayload ++ "{value}\"\n"
+  let prefixedAtomicSourceModule ←
+    SyntaxTree.parseModuleStringWithEnv env prefixedAtomicSource
+      "prefixed-atomic-source.lean"
+  let prefixedAtomicFormattedModule ←
+    SyntaxTree.parseModuleStringWithEnv env prefixedAtomicFormatted
+      "prefixed-atomic-output.lean"
+  assertTrue "a movable atomic argument after a prefix remains actionable"
+    ((Formatter.Diagnostics.formattingSafetyExceptions
+        prefixedAtomicSourceModule prefixedAtomicFormattedModule).any
       fun exception =>
         match exception with
         | .lineOverflow _ => true
@@ -21063,7 +21083,8 @@ def assertDetachedCalcUsesRenderedBase (env : Lean.Environment) : IO Unit := do
           "proofless-comment",
           "example : 1 = 1 :=\n  -- Keep this comment.\n  calc 1\n"
           ++ "    _ = 1 := rfl\n",
-          "example : 1 = 1 := -- Keep this comment.\n  calc 1\n" ++ "    _ = 1 := rfl\n"
+          "example : 1 = 1 :=\n  -- Keep this comment.\n  calc 1\n"
+          ++ "    _ = 1 := rfl\n"
         )
       ] do
     let fileName := s!"detached-calc-{name}.lean"
@@ -21076,6 +21097,116 @@ def assertDetachedCalcUsesRenderedBase (env : Lean.Environment) : IO Unit := do
     assertFrontendElaborates env result.formatted fileName
     let again ← Formatter.formatSourceWithEnv env result.formatted fileName
     assertEq s!"{name} detached calc is idempotent" result.formatted again
+
+def assertCompoundCalcHeaderOwnsValueBoundary (env : Lean.Environment) : IO Unit := do
+  for header in ["example", "theorem initialTermHeaderWithLongName"] do
+    let source := header ++ " : (1 : Nat) = 1 := calc (1 : Nat)\n  _ = 1 := rfl\n"
+    let expected := header ++ " : (1 : Nat) = 1 :=\n  calc (1 : Nat)\n    _ = 1 := rfl\n"
+    assertFrontendElaborates env source "compound-calc-header.lean"
+    for width in [65, 100] do
+      let options := { lineWidth := width : Formatter.Options }
+      let result ←
+        Formatter.formatSourceWithEnvDetailed env source "compound-calc-header.lean"
+          options
+      assertTrue "a compound calc header does not fall back" (!result.fellBack)
+      assertEq "the complete calc header owns its value boundary" expected
+        result.formatted
+      assertFrontendElaborates env result.formatted "compound-calc-header-formatted.lean"
+      let before ← SyntaxTree.parseModuleStringWithEnv env source
+      let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted
+      assertTrue "compound calc headers preserve code and width"
+        (Formatter.Diagnostics.formattingSafetyExceptions before after options).isEmpty
+      let again ←
+        Formatter.formatSourceWithEnv env result.formatted "compound-calc-header.lean"
+          options
+      assertEq "compound calc headers are independently idempotent" result.formatted again
+
+def assertOverflowRetryRespectsOperandBoundary (env : Lean.Environment) : IO Unit := do
+  let longComment := String.ofList (List.replicate 92 'x')
+  let source :=
+    "def proofField : Proofs where\n"
+    ++ "  proof := fun a => le_of_eq <| Eq.symm <| congr_arg functionWithEnoughCharactersToBreak <|\n"
+    ++ "    show True by\n    /- A protected comment.\n    "
+    ++ longComment
+    ++ "\n    -/\n      trivial\n"
+  let expected :=
+    "def proofField : Proofs where\n"
+    ++ "  proof :=\n"
+    ++ "    fun a =>\n"
+    ++ "      le_of_eq\n"
+    ++ "      <| Eq.symm\n"
+    ++ "      <| congr_arg functionWithEnoughCharactersToBreak\n"
+    ++ "      <| show True by\n"
+    ++ "      /- A protected comment.\n      "
+    ++ longComment
+    ++ "\n      -/\n        trivial\n"
+  let options := { lineWidth := 100 : Formatter.Options }
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "rule-boundary-overflow.lean" options
+  assertTrue "protected operand overflow does not fall back" (!result.fellBack)
+  assertEq "overflow retry does not invent a post-operator boundary" expected
+    result.formatted
+  let before ← SyntaxTree.parseModuleStringWithEnv env source
+  let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted
+  assertTrue "protected operand overflow remains an intact accepted line"
+    (Formatter.Diagnostics.formattingSafetyExceptions before after options).isEmpty
+  let again ←
+    Formatter.formatSourceWithEnv env result.formatted "rule-boundary-overflow.lean"
+      options
+  assertEq "protected operand attachment is independently idempotent" result.formatted
+    again
+
+def assertOverflowRecoveryKeepsMovedBodyBase (env : Lean.Environment) : IO Unit := do
+  let message := "\"" ++ String.ofList (List.replicate 86 'x') ++ "\""
+  let prelude :=
+    "structure RunConfig where\n  run : IO Unit\n"
+    ++ "def withRun (action : Unit -> IO Unit) : IO Unit := action ()\n"
+  let source :=
+    "def nestedRunner : RunConfig where run := withRun fun _ => do\n"
+    ++ "  let msg := match (0 : Nat) with\n"
+    ++ "    | _ => "
+    ++ message
+    ++ "\n"
+    ++ "  IO.println msg\n"
+  let expected :=
+    "def nestedRunner : RunConfig where\n"
+    ++ "  run :=\n"
+    ++ "    withRun\n"
+    ++ "      fun _ => do\n"
+    ++ "        let msg :=\n"
+    ++ "          match (0 : Nat) with\n"
+    ++ "          | _ =>\n"
+    ++ "              "
+    ++ message
+    ++ "\n"
+    ++ "        IO.println msg\n"
+  let interpolatedMessage :=
+    "s!\"" ++ String.ofList (List.replicate 72 'x') ++ "{(0 : Nat)}\""
+  let options := { lineWidth := 100 : Formatter.Options }
+  for (source, expected)
+      in [
+        (source, expected),
+        (
+          source.replace message interpolatedMessage,
+          expected.replace message interpolatedMessage
+        )
+      ] do
+    assertFrontendElaborates env (prelude ++ source) "moved-body-source.lean"
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source "moved-body-overflow.lean" options
+    assertTrue "moved body overflow does not fall back" (!result.fellBack)
+    assertEq "source recovery cannot move a body left of its formatted owner"
+      expected result.formatted
+    assertFrontendElaborates env (prelude ++ result.formatted) "moved-body-formatted.lean"
+    let before ← SyntaxTree.parseModuleStringWithEnv env source
+    let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted
+    assertTrue "an indivisible literal keeps its required body indentation"
+      (Formatter.Diagnostics.formattingSafetyExceptions before after options).isEmpty
+    let again ←
+      Formatter.formatSourceWithEnv env result.formatted "moved-body-overflow.lean"
+        options
+    assertEq "moved body overflow recovery is independently idempotent"
+      result.formatted again
 
 def assertMultilineProofAttachmentChecksWholeIsland (env : Lean.Environment)
     : IO Unit := do
@@ -22964,6 +23095,9 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertExtractedProofBodyKeepsSequenceBase env
   assertTrailingParserOwnedProofConverges env
   assertDetachedCalcUsesRenderedBase env
+  assertCompoundCalcHeaderOwnsValueBoundary env
+  assertOverflowRetryRespectsOperandBoundary env
+  assertOverflowRecoveryKeepsMovedBodyBase env
   assertMultilineProofAttachmentChecksWholeIsland env
   assertParserOwnedConversionBodies env
   assertParserOwnedClauseBodies env

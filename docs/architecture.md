@@ -1631,7 +1631,9 @@ also measures the source layout translated only by its parent layout's movement 
 that candidate when it has fewer overflows. For `do` bodies, token emission records only
 new atomic overflow caused by moving a source token away from a column where it fit.
 The outermost eligible `do` sequence considers a source-layout candidate only when that
-signal is present. This avoids both repeated nested recovery and reconstructing large
+signal is present. Both source-relative candidates are bounded below by the child's
+resolved structural base; recovering an old margin cannot detach the body from a
+moved header. This avoids both repeated nested recovery and reconstructing large
 `do` bodies for pre-existing overflow that recovery cannot improve. Rebased original text
 is reconstructed token by token so whitespace inside string and other atomic token
 lexemes is never changed.
@@ -1644,8 +1646,15 @@ the boundary whitespace and the island preserves only its internal relative layo
 term or tactic owner owns the mandatory break before a proof-bearing body, the body aligns
 rows one level beneath the rendered introducer line, and a proofless first term stays
 attached to `calc`. The existing rounded-base policy includes a pending continuation
-indent when a comment detaches the introducer. A long single-operator
-step can break before its operator. Opaque
+indent when a comment detaches the introducer. A multi-piece leading suffix group
+is a compound header, not a plain introducer: its first token cannot suppress
+the enclosing value boundary. A proofless `calc initialTerm` therefore moves as
+one header, and the existing calc owner establishes the row base at that new
+position. This distinction uses the grouped tree, not the initial term's text.
+The flow renderer's overflow retry requires an existing rule breakpoint and uses
+that breakpoint's indentation. It does not create a post-operator boundary to
+reduce protected-line overflow.
+A long single-operator step can break before its operator. Opaque
 operands retain protected internal layout, while a regrouped application or infix chain on
 the right uses its ordinary breaks before the attached assignment overflows. A
 low-priority chain may keep `<| calc` after an indivisible left operand; when the left
@@ -1852,7 +1861,8 @@ structural base as the uncommented form.
 Overflow analysis uses the formatted module's lossless token spans. A terminal token
 exempts overflow only when the token itself is wider than the configured limit; a token
 that fits by itself remains actionable because another rule may move it, unless the
-formatted line already consists only of that token and tight excluded line enders at its
+formatted line already consists only of that token or an atomic syntax tree and tight
+excluded line enders at its
 structural indentation. Comment-only overflow is similarly exempt when the same literal
 comment line occurs in the source, even if formatting moves it to a deeper structural
 indentation. New or changed overflowing comment text remains actionable.
@@ -1880,10 +1890,11 @@ reports a movable quotation or isolated token that fit in source but was shifted
 the limit, without reporting the same pre-existing source overflow. Proof, compound
 proof-layout, and protected tactic islands remain exempt: their text is emitted as an
 indivisible source-layout unit, so no internal rule boundary is available to resolve an
-overflow introduced by a required structural move. For an isolated token, the
-comparison maps its token index back to the source and retains the exemption only when
-that token's original physical line already overflowed; this covers an unbreakable
-declaration name split away from an already-long command prefix.
+overflow introduced by a required structural move. A line headed by one indivisible
+atomic tree uses the same exemption as a line headed by one token. Otherwise, the
+comparison maps token indexes back to the source and retains a movable atom's
+exemption only when its original physical line already overflowed; this covers an
+unbreakable declaration name split away from an already-long command prefix.
 An otherwise fitting source line that becomes too wide only because a protected island
 receives its required structural indentation is also exempt when the normalized line text
 is unchanged. A line consisting of opening delimiters followed by one indivisible token
