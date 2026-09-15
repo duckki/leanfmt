@@ -1144,6 +1144,11 @@ Rules and regroupings should preserve these cross-syntax relationships:
   same two-level indentation as match-alternative bodies. For `cases`, the alternatives
   break after the attached `with` suffix; an unlabeled default alternative uses the
   same body indentation before later labeled alternatives return to the tactic base.
+  A labeled alternative requires a break after its arrow only when the body contains
+  an implicit tactic-sequence boundary. `SyntaxTree` exposes that fact from Lean's
+  empty separator nodes, separately from the existing multiple-tactic predicate.
+  Explicit semicolon sequences keep an optional body break and retain ordinary fit
+  and source-break handling; the rule does not inspect source text or token spelling.
   A named discriminant keeps its name attached to `cases` and may break before its `:`,
   aligned with that name's base indentation. `induction` uses the same header and body
   ownership; a long `generalizing` clause wraps between identifiers without stranding

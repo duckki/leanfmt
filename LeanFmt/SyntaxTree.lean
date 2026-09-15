@@ -497,22 +497,40 @@ partial def protectNestedTacticSequences : Tree → Tree
       .node kind (children.map protectNestedTacticSequences)
   | tree => tree
 
-private partial def tacticSequenceHasMultipleEntries : Tree → Bool
+private partial def tacticSequenceAny (predicate : Array Tree → Bool) : Tree → Bool
   | .node (.tactic kind _ _ _ _) children
   | .node (.raw kind) children =>
       if isTacticSequenceKind kind then
-        children.any tacticSequenceHasMultipleEntries
+        children.any (tacticSequenceAny predicate)
       else if kind == `Lean.Parser.Tactic.paren then
-        children.any tacticSequenceHasMultipleEntries
+        children.any (tacticSequenceAny predicate)
       else if kind == `null then
-        2 <= (children.filter fun child => (firstTacticToken? child).isSome).size
-        || children.any tacticSequenceHasMultipleEntries
+        predicate children || children.any (tacticSequenceAny predicate)
       else
         false
   | _ => false
 
 def proofBodyHasMultipleTactics : Tree → Bool
-  | .node (.proofBody _) children => children.any tacticSequenceHasMultipleEntries
+  | .node (.proofBody _) children =>
+      children.any
+        (tacticSequenceAny
+          fun entries =>
+            2 <= (entries.filter fun child => (firstTacticToken? child).isSome).size)
+  | _ => false
+
+/-- Empty parser separators between tactics denote indentation-sensitive boundaries. -/
+def proofBodyHasImplicitTacticBoundary : Tree → Bool
+  | .node (.proofBody _) children =>
+      children.any
+        (tacticSequenceAny
+          fun entries =>
+            Id.run do
+              for index in [1:entries.size] do
+                if (entries[index]? >>= firstTacticToken?).isNone
+                    && (entries[index - 1]? >>= firstTacticToken?).isSome
+                    && (entries[index + 1]? >>= firstTacticToken?).isSome then
+                  return true
+              return false)
   | _ => false
 
 private def hasInternalLineBreakTrivia (tree : Tree) : Bool :=

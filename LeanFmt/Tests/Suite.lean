@@ -3120,6 +3120,10 @@ def assertInlineMultitacticAlternativeBreaksBeforeBody (env : Lean.Environment)
     ++ "  | succ n => trivial\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source "inline-multitactic-alternative.lean"
+  let parsed ← SyntaxTree.parseModuleStringWithEnv env source "implicit-alternative.lean"
+  assertTrue "implicit tactic separators remain visible through sequence wrappers"
+    ((findTreeNode? (.proofBody false) parsed.tree).any
+      SyntaxTree.Tree.proofBodyHasImplicitTacticBoundary)
   assertTrue "inline multitactic alternative does not fall back" (!result.fellBack)
   assertEq "a multitactic alternative breaks before its entire body" expected
     result.formatted
@@ -3131,12 +3135,17 @@ def assertInlineMultitacticAlternativeBreaksBeforeBody (env : Lean.Environment)
   assertEq "multitactic alternative is idempotent" result.formatted again
   let semicolonSource :=
     source.replace "apply id\n            trivial" "apply id; trivial"
-  let semicolonExpected := expected.replace "apply id\n      trivial" "apply id; trivial"
   let semicolonResult ←
     Formatter.formatSourceWithEnvDetailed env semicolonSource "semicolon-alternative.lean"
+  let semicolonParsed ←
+    SyntaxTree.parseModuleStringWithEnv env semicolonSource "semicolon-alternative.lean"
+  assertTrue "explicit separators do not require implicit tactic layout"
+    ((findTreeNode? (.proofBody false) semicolonParsed.tree).any
+      fun body =>
+        body.proofBodyHasMultipleTactics && !body.proofBodyHasImplicitTacticBoundary)
   assertTrue "a semicolon alternative does not fall back" (!semicolonResult.fellBack)
-  assertEq "multiple tactics keep their body boundary even when semicolon-joined"
-    semicolonExpected semicolonResult.formatted
+  assertEq "a fitting semicolon-joined alternative remains inline"
+    semicolonSource semicolonResult.formatted
   assertTrue "a semicolon alternative preserves code"
     (← codePreservedIgnoringWhitespace env semicolonSource semicolonResult.formatted)
   let combinatorSource :=
@@ -18788,6 +18797,48 @@ def assertMvcgenAlternativesPreserveLayout (env : Lean.Environment) : IO Unit :=
     assertEq s!"{name} is idempotent" result.formatted
       (← Formatter.formatSourceWithEnv env result.formatted name { lineWidth := 100 })
 
+def assertSemicolonAlternativeFitsLine (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "private theorem checked_bind (a b : Except Nat Unit)\n"
+    ++ "    : (a >>= fun _ => b) = .ok () ↔ a = .ok () ∧ b = .ok () := by\n"
+    ++ "  cases a with\n"
+    ++ "  | error e => simp [bind, Except.bind]\n"
+    ++ "  | ok u => cases u; simp [bind, Except.bind]\n"
+  let check (label source expected : String) (width : Nat := 100) := do
+    assertFrontendElaborates env source label
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source label { lineWidth := width }
+    assertTrue s!"{label} does not fall back" (!result.fellBack)
+    assertEq label expected result.formatted
+    assertTrue s!"{label} preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    assertTrue s!"{label} fits" (Formatter.linesFit result.formatted width)
+    assertFrontendElaborates env result.formatted label
+    assertEq s!"{label} is idempotent" result.formatted
+      (← Formatter.formatSourceWithEnv env result.formatted label { lineWidth := width })
+  check "fitting-semicolon-alternative.lean" source source
+  let inductionSource := source.replace "cases a with" "induction a with"
+  check "fitting-semicolon-induction-alternative.lean" inductionSource inductionSource
+  let broken := source.replace "=> cases u;" "=>\n      cases u;"
+  check "source-broken-semicolon-alternative.lean" broken broken
+  let multiline := source.replace "cases u; simp" "cases u;\n            simp"
+  check "multiline-semicolon-alternative.lean" multiline multiline
+  let mixedSource := source.replace "cases u; simp" "skip; cases u\n            simp"
+  let mixedExpected := broken.replace "cases u; simp" "skip; cases u\n      simp"
+  check "mixed-tactic-separators-alternative.lean" mixedSource mixedExpected
+  let commented :=
+    source.replace "cases u; simp" "cases u; -- Reduce the unit value.\n            simp"
+  let commentedExpected :=
+    broken.replace "cases u; simp" "cases u; -- Reduce the unit value.\n      simp"
+  check "commented-semicolon-alternative.lean" commented commentedExpected
+  let longSource :=
+    source.replace "ok u => cases u;"
+      "ok unitValueWithALongerName => cases unitValueWithALongerName;"
+  let longExpected :=
+    longSource.replace "=> cases unitValueWithALongerName;"
+      "=>\n      cases unitValueWithALongerName;"
+  check "wrapping-semicolon-alternative.lean" longSource longExpected 80
+
 def assertNestedPreservedRecordUsesDelimiterBase (env : Lean.Environment) : IO Unit := do
   let declarations :=
     "structure RecordFields where\n"
@@ -23167,6 +23218,7 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertStructureSpreadStaysAfterProofField env
   assertRecordPatternEllipsisKeepsCommaBoundary env
   assertInlineMultitacticAlternativeBreaksBeforeBody env
+  assertSemicolonAlternativeFitsLine env
   assertBinderSuffixStaysWithMultilineBody env
   assertBinderBodyBreaksBeforeDelimitedSuffix env
   assertMultitokenChildKeepsStructuralBase env

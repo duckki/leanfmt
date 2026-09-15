@@ -4033,7 +4033,11 @@ def tacticAlternativeContainerRule : LineBreakRule :=
 def tacticAlternativeRule : LineBreakRule :=
   {
     name := "tacticAlternative"
-    mandatory := fun _ segment => segmentHasMultipleTacticBody segment
+    mandatory :=
+      fun _ segment =>
+        segment.indexes.any
+          fun index =>
+            (segment.child? index).any SyntaxTree.Tree.proofBodyHasImplicitTacticBoundary
     useExistingBreaks := fun _ _ => true
     flow := fun _ _ => true
     inheritBase := fun _ _ => true

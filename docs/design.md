@@ -1915,9 +1915,17 @@ also stays attached to `=>`, and its nested body owns subsequent breaks.
 Equation-style declaration arms follow the same alternative layout.
 
 Tactic alternatives that own a body after `=>` use the same two-level body
-indentation. Multiple tactics require a break immediately after `=>`, even when
-the first tactic was written inline or the tactics are semicolon-joined. A
-single fitting tactic or tactic combinator can remain inline.
+indentation. A semicolon-joined sequence may remain inline when the complete arm
+fits on one line, just like a single tactic or tactic combinator. A sequence with
+implicit, indentation-sensitive tactic boundaries starts after `=>` on the following
+line, even when its first tactic was written inline. Explicit semicolons retain their
+authored continuation layout, and authored breaks after `=>` remain in place.
+
+```lean
+  | error e => simp [bind, Except.bind]
+  | ok u => cases u; simp [bind, Except.bind]
+```
+
 An arrowless tactic alternative owns only its pattern; subsequent
 tactics remain peers in the surrounding tactic sequence because indenting them
 under the alternative changes Lean's parse. The owned indentation remains
