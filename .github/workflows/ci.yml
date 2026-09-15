@@ -34,10 +34,14 @@ jobs:
           done &
           heartbeat=$!
           trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
-          lake exe testSuite \
+          for group in \
             syntax-tree documented-examples layout-architecture \
             basic-formatting expression-renderer control-flow \
-            collection-declaration
+            collection-declaration; do
+            echo "Running testSuite $group"
+            lake exe testSuite "$group"
+            echo "Passed testSuite $group"
+          done
       - name: Run CLI and architecture tests
         run: |
           while sleep 20; do

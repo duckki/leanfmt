@@ -98,11 +98,14 @@ added to a baseline.
 
 leanfmt supports one source and release line across our current toolchain and
 supported previous minor versions. The current-toolchain CI job runs the complete
-maintenance gate. Compatibility jobs select each previous minor version in a
-disposable checkout, build the released library and executable, then run the
-isolated `compatibilityTest` smoke executable. The compatibility smoke
-module does not import the comprehensive current-toolchain test suite, so growth
-in that suite cannot increase the elaboration cost of compatibility testing.
+maintenance gate. It runs each core test group in a fresh `testSuite` process so
+the runner releases that group's memory before starting the next one; CI logs
+name each group as it starts and passes. Compatibility jobs select each previous
+minor version in a disposable checkout, build the released library and
+executable, then run the isolated `compatibilityTest` smoke executable. The
+compatibility smoke module does not import the comprehensive current-toolchain
+test suite, so growth in that suite cannot increase the elaboration cost of
+compatibility testing.
 The smoke suite checks parsing, formatting, preservation, idempotency, CLI
 parsing, exact environment loading, and executable configuration without
 asserting parser-version-specific layouts. Linting, fixtures, comprehensive
