@@ -200,9 +200,12 @@ Formatting a file follows this pipeline:
 
    The automatic worker count follows the machine's hardware concurrency for both
    default and imported environments. The scheduler keeps the configured number of
-   one-environment workers active until its queue is empty. Worker output is buffered
-   and reported in batch order so diagnostics remain readable and deterministic. `-j`
-   or `--jobs` overrides the automatic worker count.
+   one-environment workers active until its queue is empty. `Driver.Status` owns
+   synchronized terminal output: when progress is active, worker stdout and stderr
+   are drained concurrently and relayed line by line, clearing and restoring progress
+   under the same lock as parent diagnostics. Output is not buffered by batch or
+   reordered into batch order. Non-interactive workers inherit the streams directly.
+   `-j` or `--jobs` overrides the automatic worker count.
    Setting `--env-cache-size` to a positive value enables the incremental
    prefix-state path for compatibility testing; zero is the normal direct-import path.
 

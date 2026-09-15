@@ -716,10 +716,14 @@ is never split across workers, even when it contains many files, and every group
 one worker process. The work-conserving queue keeps the configured job count active.
 Each imported worker skips leanfmt's default environment, imports its one exact header
 with `leakEnv := true`, shares that environment across the group's files, and exits.
-Worker stdout and stderr are inherited by the parent so formatting messages and
-diagnostics are visible while workers run; concurrent worker output may interleave.
-When stderr is a terminal, the parent also renders a Lake-style in-place status
-line for worker file and batch progress. Files with a `module` header use exported
+When stderr is a terminal, the parent pipes and concurrently drains worker stdout
+and stderr, forwarding complete lines to their original destinations. One shared
+status writer clears the in-place progress line before each message and restores
+it afterward; parent batch diagnostics use the same lock. Output is not retained
+for an entire batch, and ordering between workers or streams is not guaranteed.
+A final unterminated message gets a newline only on a terminal destination.
+Without terminal progress, workers inherit stdout and stderr directly as before.
+Files with a `module` header use exported
 `.olean` data; scripts use private data, matching Lean's frontend.
 Lean itself computes every transitive import, IR phase, initializer, and persistent
 extension; leanfmt does not derive environments from a superset. Lowering the worker-job

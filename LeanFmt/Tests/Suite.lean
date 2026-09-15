@@ -7,6 +7,7 @@ import LeanFmt.Tests.LayoutArchitecture
 import LeanFmt.Tests.MetaImportRoot
 import LeanFmt.Tests.ProjectSyntax
 import LeanFmt.Tests.RegisteredFormatAudit
+import LeanFmt.Tests.WorkerOutput
 
 open System
 
@@ -23367,6 +23368,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertLeanEnvironmentKeyIncludesImportSemantics
   assertDefaultEnvironmentPartition env
   assertFormattingFilesAreSpread
+  WorkerOutput.run
   assertWorkersUseInputLakeRoot
   assertImportFilesGroupByHeader
   assertRecursiveWorkerChecksTargetToolchain

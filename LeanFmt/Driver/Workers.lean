@@ -398,8 +398,22 @@ def workerProgressMessage
     : String :=
   s!"leanfmt: formatting {environment.description} environments: {completedFiles}/{totalFiles} files, {completedBatches}/{totalBatches} batches, {runningBatches} running"
 
+def relayWorkerOutput
+    (status : StatusRenderer) (out : IO.FS.Stream) (input : IO.FS.Handle)
+    : IO Unit := do
+  let terminal ← out.isTty
+  repeat
+    let line ← input.getLine
+    if line.isEmpty then return
+    status.withOutput do
+      out.putStr line
+      if terminal && !line.endsWith "\n" then
+        out.putStr "\n"
+      out.flush
+
 def runEnvironmentWorkerBatch
     (process : WorkerProcessContext)
+    (status : StatusRenderer) (stdout : IO.FS.Stream)
     (options : Options) (environment : WorkerEnvironment)
     (cwd? : Option FilePath)
     (inputFiles : List FilePath)
@@ -408,18 +422,37 @@ def runEnvironmentWorkerBatch
   let (exitCode, elapsedMs) ←
     timeIO
     <| do
-      let child ←
-        IO.Process.spawn
-          {
-            cmd := process.executable.toString
-            args := options.workerArgs environment files
-            cwd := cwd?
-            env := process.environment
-            stdin := .null
-            stdout := .inherit
-            stderr := .inherit
-          }
-      child.wait
+      let args : IO.Process.SpawnArgs :=
+        {
+          cmd := process.executable.toString
+          args := options.workerArgs environment files
+          cwd := cwd?
+          env := process.environment
+          stdin := .null
+          stdout := .inherit
+          stderr := .inherit
+        }
+      if !status.enabled then
+        return ← (← IO.Process.spawn args).wait
+      let child ← IO.Process.spawn { args with stdout := .piped, stderr := .piped }
+      let relay (out : IO.FS.Stream) (input : IO.FS.Handle) := do
+        try
+          relayWorkerOutput status out input
+        catch error =>
+          try
+            child.kill
+          catch _ =>
+            pure ()
+          throw error
+      -- Drain both pipes while the worker runs; never retain a complete batch log.
+      let output ← IO.asTask (prio := .dedicated) (relay stdout child.stdout)
+      let errors ← (relay status.out child.stderr).toBaseIO
+      -- A failed reader may still terminate the child; join both before reaping it.
+      let output ← IO.wait output
+      let exitCode ← child.wait
+      IO.ofExcept output
+      IO.ofExcept errors
+      pure exitCode
   pure { exitCode, elapsedMs }
 
 def reportWorkerBatchResult
@@ -453,46 +486,48 @@ def runEnvironmentWorkerBatches
   let mut completedFiles := 0
   let mut completedBatches := 0
   let mut failed := false
-  let mut status ← StatusRenderer.create
-  while !remaining.isEmpty || !active.isEmpty do
-    while active.length < workerJobs && !remaining.isEmpty do
-      match remaining with
-      | [] => pure ()
-      | (batch, batchIndex) :: rest =>
-          let task ←
-            IO.asTask (prio := .dedicated)
-              (runEnvironmentWorkerBatch process options environment cwd? batch.files)
-          active :=
-            (task.map (sync := true)
-              fun result =>
-                {
-                  batchIndex
-                  fileCount := batch.files.length
-                  environmentCount := batch.environmentCount
-                  result
-                })
-            :: active
-          remaining := rest
-    status ←
+  let status ← StatusRenderer.create (← IO.getStderr)
+  let stdout ← IO.getStdout
+  try
+    while !remaining.isEmpty || !active.isEmpty do
+      while active.length < workerJobs && !remaining.isEmpty do
+        match remaining with
+        | [] => pure ()
+        | (batch, batchIndex) :: rest =>
+            let task ←
+              IO.asTask (prio := .dedicated)
+                (runEnvironmentWorkerBatch process status stdout options environment cwd?
+                  batch.files)
+            active :=
+              (task.map (sync := true)
+                fun result =>
+                  {
+                    batchIndex
+                    fileCount := batch.files.length
+                    environmentCount := batch.environmentCount
+                    result
+                  })
+              :: active
+            remaining := rest
       status.render
       <| workerProgressMessage environment completedFiles totalFiles
           completedBatches batches.length active.length
-    match active with
-    | [] => pure ()
-    | task :: rest =>
-        let (result, unfinished) ← IO.waitAny' (task :: rest)
-        status ← status.clear
-        failed :=
-          (← reportWorkerBatchResult options
-              environment
-              (result.batchIndex + 1) batches.length result.fileCount
-              result.environmentCount result.result)
-          || failed
-        completedFiles := completedFiles + result.fileCount
-        completedBatches := completedBatches + 1
-        active := unfinished
-  status ← status.clear
-  pure <| if failed then 1 else 0
+      match active with
+      | [] => pure ()
+      | task :: rest =>
+          let (result, unfinished) ← IO.waitAny' (task :: rest)
+          failed :=
+            (← status.withOutput
+                <| reportWorkerBatchResult options
+                    environment
+                    (result.batchIndex + 1) batches.length result.fileCount
+                    result.environmentCount result.result)
+            || failed
+          completedFiles := completedFiles + result.fileCount
+          completedBatches := completedBatches + 1
+          active := unfinished
+    pure <| if failed then 1 else 0
+  finally status.clear
 
 def runExactEnvironmentWorkerBatches
     (process : WorkerProcessContext)
