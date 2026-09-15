@@ -75,9 +75,12 @@ lake exe fmt --check --check-exception --check-idempotent -r LeanFmt
 git diff --check
 ```
 
-Review all generated fixture and self-format changes. Use automatic worker
-counts; do not pass `--jobs`. Lightweight checkpoints use recorded GraphQL,
-quantum, and CSLib build baselines plus pristine Mathlib safety regressions.
+Review all generated fixture and self-format changes. Normal validation uses
+automatic worker counts. For memory-constrained validation or isolated profiling,
+explicitly set `--jobs 1` or `LEANFMT_VALIDATION_FORMATTER_JOBS=1`; this does not
+change the default. Serialize heavy runs and monitor compressed-inclusive memory.
+Lightweight checkpoints use recorded GraphQL, quantum, and CSLib build baselines
+plus pristine Mathlib safety regressions.
 Report scope and omitted builds. Compare performance on identical inputs without
 concurrent validation. Enable missing-rule checks for Mathlib only.
 
