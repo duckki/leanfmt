@@ -718,7 +718,10 @@ private partial def splitTrailingOwnedProofBodyCore?
             else
               let body ← children[index]?
               match body with
-              | .node (.proofBody true) _ =>
+              | body@(.node (.proofBody true) _) =>
+                  if exposesSimpleBody && !body.containsIntrinsicTacticLayoutOwner then
+                    return splitNodeAroundChild kind children index
+                      { before := .missing, body, after := .missing }
                   some
                     {
                       before := .missing
@@ -4361,8 +4364,9 @@ private partial def regroupTrailingProofArgumentsWithSummary : Tree → Tree × 
               match Tree.splitTrailingOwnedProofBody? tree true with
               | some split =>
                   match split.body with
-                  | .node (.proofBody false) _ =>
-                      if split.before.firstToken?.isSome then
+                  | body@(.node (.proofBody _) _) =>
+                      if !body.containsIntrinsicTacticLayoutOwner
+                          && split.before.firstToken?.isSome then
                         .node .suffixGroup #[split.before, split.body, split.after]
                       else
                         tree

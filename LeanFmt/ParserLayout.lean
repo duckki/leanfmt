@@ -247,12 +247,18 @@ private def parserDescrIsBodyLayoutConstraint : ParserDescr -> Bool
       && parserDescrIsBodyLayoutConstraint right
   | _ => false
 
+private def isTacticSequenceParser (parser : Name) : Bool :=
+  parser == `tacticSeq
+  || parser == `tacticSeqIndentGt
+  || parser == `Lean.Parser.Tactic.tacticSeq
+  || parser == `Lean.Parser.Tactic.tacticSeqIndentGt
+  || parser == `convSeq
+  || parser == `Lean.Parser.Tactic.Conv.convSeq
+
 private partial def parserDescrIsOwnedTacticBody : ParserDescr -> Bool
-  | .const parser =>
-      parser == `tacticSeq
-      || parser == `tacticSeqIndentGt
-      || parser == `Lean.Parser.Tactic.tacticSeq
-      || parser == `Lean.Parser.Tactic.tacticSeqIndentGt
+  | .const parser => isTacticSequenceParser parser
+  | .node kind _ _ => isTacticSequenceParser kind
+  | .nodeWithAntiquot _ kind _ => isTacticSequenceParser kind
   | .unary _ parser => parserDescrIsOwnedTacticBody parser
   | .binary combinator constraint body =>
       combinator == `andthen
@@ -262,11 +268,9 @@ private partial def parserDescrIsOwnedTacticBody : ParserDescr -> Bool
 
 private partial def parserDescrIsOwnedBody : ParserDescr -> Bool
   | .cat category _ => category == `term
-  | .const parser =>
-      parser == `tacticSeq
-      || parser == `tacticSeqIndentGt
-      || parser == `Lean.Parser.Tactic.tacticSeq
-      || parser == `Lean.Parser.Tactic.tacticSeqIndentGt
+  | .const parser => isTacticSequenceParser parser
+  | .node kind _ _ => isTacticSequenceParser kind
+  | .nodeWithAntiquot _ kind _ => isTacticSequenceParser kind
   | .unary combinator parser =>
       combinator != `optional && parserDescrIsOwnedBody parser
   | _ => false
@@ -283,18 +287,28 @@ private def parserDescrKeywordSuffixes : ParserDescr -> List String
           if symbol.toList.any (·.isAlphanum) then some symbol else none
   | _ => []
 
+private def parserDescrBodySuffixes (suffix body : ParserDescr) : List String :=
+  match suffix with
+  | .symbol symbol
+  | .nonReservedSymbol symbol _ =>
+      if symbol.trimAscii.toString == "=>" && parserDescrIsOwnedTacticBody body then
+        ["=>"]
+      else
+        parserDescrKeywordSuffixes suffix
+  | _ => parserDescrKeywordSuffixes suffix
+
 private def parserDescrSuffixOwnedBodyClauseSuffixes (parser : ParserDescr)
     : List String :=
   match parserDescrSequence parser with
   | [suffix, body] =>
-      if parserDescrIsOwnedBody body then parserDescrKeywordSuffixes suffix else []
+      if parserDescrIsOwnedBody body then parserDescrBodySuffixes suffix body else []
   | _ => []
 
 private def parserDescrTrailingTacticBodySuffixes (parser : ParserDescr) : List String :=
   match parserDescrSequence parser |>.reverse with
   | body :: suffix :: _ =>
       if parserDescrIsOwnedTacticBody body then
-        parserDescrKeywordSuffixes suffix
+        parserDescrBodySuffixes suffix body
       else
         []
   | _ => []
@@ -306,7 +320,7 @@ private def parserDescrTrailingBodySuffixes (parser : ParserDescr) : List String
       match sequence.reverse with
       | body :: suffix :: preceding =>
           if !preceding.isEmpty && parserDescrIsOwnedBody body then
-            parserDescrKeywordSuffixes suffix
+            parserDescrBodySuffixes suffix body
           else
             match body with
             | .unary combinator clause =>
@@ -389,7 +403,9 @@ private def ownedBodyPolicy? (env : Environment) (kind : SyntaxNodeKind)
         {
           suffixes
           headerClauseKeywords := parserDescrHeaderClauseKeywords parser
-          suffixOwnsBody := parserKindOwnsCategory env `tactic kind
+          suffixOwnsBody :=
+            parserKindOwnsCategory env `tactic kind
+            && suffixes.all fun suffix => suffix.toList.any (·.isAlphanum)
         }
 
 unsafe def kindFactsUnsafe (env : Environment) (options : Options) (kind : SyntaxNodeKind)

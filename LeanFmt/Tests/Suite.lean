@@ -20961,6 +20961,220 @@ def assertStructuralHeadersOwnAttachedBodies (env : Lean.Environment) : IO Unit 
       ++ "    proofHead <| by exact witness\n"
       ++ "  exact True.intro\n")
 
+def assertExtractedProofBodyKeepsSequenceBase (env : Lean.Environment) : IO Unit := do
+  let declaration := "structure CalcProofs where\n" ++ "  proof : (n : Nat) -> n = n\n\n"
+  let check (name source : String) (bodyIndent : Nat) : IO Unit := do
+    let fileName := s!"extracted-calc-{name}.lean"
+    assertFrontendElaborates env source fileName
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source fileName { lineWidth := 100 }
+    assertTrue s!"{name} extracted proof does not fall back" (!result.fellBack)
+    let indent := String.ofList (List.replicate bodyIndent ' ')
+    let expectedBody :=
+      "by\n"
+      ++ indent
+      ++ "calc\n"
+      ++ indent
+      ++ "  n = n := ?_\n"
+      ++ indent
+      ++ "  _ = n := by rfl\n"
+      ++ indent
+      ++ "· rfl\n"
+    assertTextContains s!"{name} calc and following tactics share the proof base"
+      result.formatted expectedBody
+    let before ← SyntaxTree.parseModuleStringWithEnv env source fileName
+    let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted fileName
+    assertTrue s!"{name} extracted proof has no formatting exceptions"
+      (Formatter.Diagnostics.formattingExceptions before after
+        { lineWidth := 100 }).isEmpty
+    assertFrontendElaborates env result.formatted s!"extracted-calc-{name}-formatted.lean"
+    let again ←
+      Formatter.formatSourceWithEnv env result.formatted fileName { lineWidth := 100 }
+    assertEq s!"{name} extracted proof is idempotent" result.formatted again
+  check "lambda"
+    ("def p := fun (n : Nat) => by\n"
+      ++ "  calc\n"
+      ++ "    n = n := ?_\n"
+      ++ "    _ = n := by rfl\n"
+      ++ "  · rfl\n") 4
+  check "field"
+    (declaration
+      ++ "def p : CalcProofs :=\n"
+      ++ "  { proof := fun n => by\n"
+      ++ "      calc\n"
+      ++ "        n = n := ?_\n"
+      ++ "        _ = n := by rfl\n"
+      ++ "      · rfl }\n") 8
+  check "update"
+    (declaration
+      ++ "variable (prior : CalcProofs)\n\n"
+      ++ "def p : CalcProofs :=\n"
+      ++ "  { prior with\n"
+      ++ "    proof := fun n => by\n"
+      ++ "      calc\n"
+      ++ "        n = n := ?_\n"
+      ++ "        _ = n := by rfl\n"
+      ++ "      · rfl }\n") 10
+
+def assertTrailingParserOwnedProofConverges (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def pipeProofCycle :=\n"
+    ++ "  ⟨fun h_eq => (comp_inj <| Nat.add_left_cancel (n := p₂.length) <|\n"
+    ++ "    by simpa [h] using congr_arg length h_eq).1 h_eq,\n"
+    ++ "   by rintro ⟨rfl, rfl⟩; rfl⟩\n"
+  let expected :=
+    "def pipeProofCycle :=\n"
+    ++ "  ⟨\n"
+    ++ "    fun h_eq =>\n"
+    ++ "      (comp_inj <| Nat.add_left_cancel (n := p₂.length) <| by\n"
+    ++ "        simpa [h] using congr_arg length h_eq).1\n"
+    ++ "        h_eq,\n"
+    ++ "    by rintro ⟨rfl, rfl⟩; rfl\n"
+    ++ "  ⟩\n"
+  for input in [source, source.replace "by simpa" "by\n      simpa", expected] do
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env input "trailing-parser-proof.lean"
+        { lineWidth := 100 }
+    assertTrue "a trailing parser-owned proof does not cycle" (!result.fellBack)
+    assertEq "a trailing parser-owned proof retains the same header ownership"
+      expected result.formatted
+    let before ← SyntaxTree.parseModuleStringWithEnv env input
+    let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted
+    assertTrue "a trailing parser-owned proof has no safety exceptions"
+      (Formatter.Diagnostics.formattingSafetyExceptions before after
+        { lineWidth := 100 }).isEmpty
+    let again ←
+      Formatter.formatSourceWithEnv env result.formatted "trailing-parser-proof.lean"
+        { lineWidth := 100 }
+    assertEq "a trailing parser-owned proof is independently idempotent"
+      result.formatted again
+
+def assertDetachedCalcUsesRenderedBase (env : Lean.Environment) : IO Unit := do
+  for (name, source, expected)
+      in [
+        (
+          "comment",
+          "example : 1 = 1 :=\n  -- Keep this comment.\n  calc\n"
+          ++ "    1 = 1 := rfl\n    _ = 1 := rfl\n",
+          "example : 1 = 1 := -- Keep this comment.\n  calc\n"
+          ++ "    1 = 1 := rfl\n    _ = 1 := rfl\n"
+        ),
+        (
+          "proofless-comment",
+          "example : 1 = 1 :=\n  -- Keep this comment.\n  calc 1\n"
+          ++ "    _ = 1 := rfl\n",
+          "example : 1 = 1 := -- Keep this comment.\n  calc 1\n" ++ "    _ = 1 := rfl\n"
+        )
+      ] do
+    let fileName := s!"detached-calc-{name}.lean"
+    assertFrontendElaborates env source fileName
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source fileName { lineWidth := 100 }
+    assertTrue s!"{name} detached calc does not fall back" (!result.fellBack)
+    assertEq s!"{name} calc rows indent below the rendered introducer"
+      expected result.formatted
+    assertFrontendElaborates env result.formatted fileName
+    let again ← Formatter.formatSourceWithEnv env result.formatted fileName
+    assertEq s!"{name} detached calc is idempotent" result.formatted again
+
+def assertMultilineProofAttachmentChecksWholeIsland (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "def preservedProof :=\n"
+    ++ "  .of_algebraMap_eq <| by\n"
+    ++ "    simp [IsScalarTower.algebraMap_apply R A (Localization.AtPrime p),\n"
+    ++ "      Localization.localRingHom_to_map, IsScalarTower.algebraMap_apply R B (Localization.AtPrime P),\n"
+    ++ "      IsScalarTower.algebraMap_apply R A B, IsLiesOverAlgebra.algebraMap_eq]\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "whole-multiline-proof-fit.lean"
+      { lineWidth := 100 }
+  assertTrue "a multiline proof attachment does not fall back" (!result.fellBack)
+  assertEq "a fitting multiline proof stays below its attached introducer"
+    source result.formatted
+  let before ← SyntaxTree.parseModuleStringWithEnv env source
+  let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted
+  assertTrue "a multiline proof attachment preserves code and width"
+    (Formatter.Diagnostics.formattingSafetyExceptions before after
+      { lineWidth := 100 }).isEmpty
+  let again ←
+    Formatter.formatSourceWithEnv env result.formatted "whole-multiline-proof-fit.lean"
+      { lineWidth := 100 }
+  assertEq "a multiline proof attachment is independently idempotent"
+    result.formatted again
+
+def assertParserOwnedConversionBodies (_env : Lean.Environment) : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  for kind in [`projectConversionLeft, `projectConversionRight] do
+    let policy := (ParserLayout.kindFacts env {} kind).ownedBody?
+    assertTrue s!"{kind} exposes its conversion body through parser metadata"
+      (policy.any fun policy => policy.suffixes == ["=>"] && !policy.suffixOwnsBody)
+  let cases :=
+    [
+      (
+        "inline",
+        "theorem conversion : True := by\n"
+        ++ "  project_lhs => enter [2]; tactic => exact proof\n",
+      "theorem conversion : True := by project_lhs => enter [2]; tactic => exact proof\n"
+      ),
+      (
+        "bracketed",
+        "theorem conversion : True := by\n"
+        ++ "  project_lhs => { enter [2]; tactic => exact proof }\n",
+        "theorem conversion : True := by project_lhs => { enter [2]; tactic => exact proof }\n"
+      ),
+      (
+        "optional-header",
+        "theorem conversion : True := by\n"
+        ++ "  project_rhs at h in (occs := 1) value =>"
+        ++ " enter [2]; tactic => exact proof\n",
+        "theorem conversion : True := by\n"
+        ++ "  project_rhs at h in (occs := 1) value =>"
+        ++ " enter [2]; tactic => exact proof\n"
+      ),
+      (
+        "multiline-sequence",
+        "theorem conversion : True := by\n"
+        ++ "  project_lhs =>\n"
+        ++ "    enter [2]\n"
+        ++ "    tactic =>\n"
+        ++ "      exact proof\n",
+        "theorem conversion : True := by\n"
+        ++ "  project_lhs =>\n"
+        ++ "    enter [2]\n"
+        ++ "    tactic => exact proof\n"
+      ),
+      (
+        "detached-body",
+        "theorem conversion : True := by\n"
+        ++ "  project_rhs at hypothesis in value =>\n"
+        ++ "    enter [2]; tactic => exact proof\n",
+        "theorem conversion : True := by\n"
+        ++ "  project_rhs at hypothesis in value =>\n"
+        ++ "    enter [2]; tactic => exact proof\n"
+      )
+    ]
+  for (name, source, expected) in cases do
+    let fileName := s!"conversion-{name}.lean"
+    let tree ← SyntaxTree.parseModuleStringWithEnv env source fileName
+    assertTrue s!"{name} conversion source has complete rule coverage"
+      (Formatter.Diagnostics.missingRuleOccurrencesForModule tree).isEmpty
+    assertTrue s!"{name} conversion has a normalized parser-owned header"
+      ((findTreeNodeStartingWith? .parserOwnedHeader "project_lhs" tree.tree).isSome
+        || (findTreeNodeStartingWith? .parserOwnedHeader "project_rhs" tree.tree).isSome)
+    let result ←
+      Formatter.formatSourceWithEnvDetailed env source fileName { lineWidth := 100 }
+    assertTrue s!"{name} conversion does not fall back" (!result.fellBack)
+    assertEq s!"{name} conversion retains the expected body layout" expected
+      result.formatted
+    assertTrue s!"{name} conversion preserves code"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    let formattedTree ← SyntaxTree.parseModuleStringWithEnv env result.formatted fileName
+    assertTrue s!"{name} formatted conversion has complete rule coverage"
+      (Formatter.Diagnostics.missingRuleOccurrencesForModule formattedTree).isEmpty
+    let again ←
+      Formatter.formatSourceWithEnv env result.formatted fileName { lineWidth := 100 }
+    assertEq s!"{name} conversion is idempotent" result.formatted again
+
 def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
   let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
   let source :=
@@ -21588,8 +21802,13 @@ def assertTacticHeaderCollectionOwnership (env : Lean.Environment) : IO Unit := 
   let conversion := "example : 0 + 0 = 0 := by\n  conv =>\n    rw [Nat.add_zero]\n"
   let parsed ← SyntaxTree.parseModuleStringWithEnv env conversion
   assertTrue "conversion tactic sequences expose their delimited headers"
-    (countTreeNodes .parserOwnedHeader parsed.tree == 1)
+    (findTreeNodeStartingWith? .parserOwnedHeader "rw" parsed.tree).isSome
   assertFrontendElaborates env conversion "conversion-header.lean"
+  let formattedConversion ←
+    Formatter.formatSourceWithEnvDetailed env conversion "conversion-header.lean"
+  assertTrue "conversion headers do not fall back" (!formattedConversion.fellBack)
+  assertFrontendElaborates env formattedConversion.formatted
+    "conversion-header-formatted.lean"
   for tactic
       in ["simp +instances only", "simp (config := {}) only", "simpa +contextual only"] do
     let source := s!"example : True := by {tactic} [proof]\n"
@@ -22742,6 +22961,11 @@ def runControlFlowTests (env : Lean.Environment) : IO Unit := do
   assertReviewedProtectedLayouts env
   assertOwnedTerminalSuffixesStayAttached env
   assertStructuralHeadersOwnAttachedBodies env
+  assertExtractedProofBodyKeepsSequenceBase env
+  assertTrailingParserOwnedProofConverges env
+  assertDetachedCalcUsesRenderedBase env
+  assertMultilineProofAttachmentChecksWholeIsland env
+  assertParserOwnedConversionBodies env
   assertParserOwnedClauseBodies env
   assertParserOwnedSuffixAndPipeBoundaries env
   assertTacticHeaderCollectionOwnership env

@@ -45,6 +45,12 @@ declare_syntax_cat projectProofSeq
 syntax (name := projectProofStep) "project_step " ident : projectProofSeq
 syntax (name := projectOpaqueArrowTactic)
   "project_conv_lhs" " => " projectProofSeq : tactic
+syntax (name := projectConversionLeft)
+  "project_lhs" (" at " ident)? (" in " (Lean.Parser.Tactic.Conv.occs)? term)?
+  " => " Lean.Parser.Tactic.Conv.convSeq : tactic
+syntax (name := projectConversionRight)
+  "project_rhs" (" at " ident)? (" in " (Lean.Parser.Tactic.Conv.occs)? term)?
+  " => " Lean.Parser.Tactic.Conv.convSeq : tactic
 syntax (name := projectTryTactic) "project_try? " term : tactic
 syntax (name := projectOptionalSaysTactic)
   tactic " project_says" (colGt tacticSeq)? : tactic

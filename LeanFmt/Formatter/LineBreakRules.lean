@@ -990,9 +990,12 @@ def nullInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   || wrappedByDoLetFallbackSequence context
 
 def attachedBodyStart (segment : Segment) (index : Nat) : Bool :=
-  childStartsWithLexeme segment index "do"
-  || childStartsWithLexeme segment index "by"
-  || childStartsWithLexeme segment index "calc"
+  match segment.child? index with
+  | some (.node (.proofBody _) _) => false
+  | _ =>
+      childStartsWithLexeme segment index "do"
+      || childStartsWithLexeme segment index "by"
+      || childStartsWithLexeme segment index "calc"
 
 def attachedBodyFollowsDelimiter (context : RuleContext) (delimiter : String) : Bool :=
   match context.ancestors with
@@ -1543,8 +1546,7 @@ def tacticAlternativeSequenceBreaks (context : RuleContext) (segment : Segment)
 
 def tacticSequenceItemBreaks (context : RuleContext) (segment : Segment)
     : List BreakPoint :=
-  if (parentIsRawKind context `Lean.Parser.Tactic.tacticSeq1Indented
-        || parentIsRawKind context `Lean.Parser.Tactic.tacticSeqBracketed)
+  if context.parentRawKind?.any SyntaxTree.Tree.isTacticSequenceKind
       && context.ancestors.any
           fun frame =>
             frame.nodeKind?.any
@@ -3771,6 +3773,7 @@ def suffixGroupChildFirstLineStaysAttached
     : Bool :=
   segment.start < index
   && match segment.child? index with
+      | some (.node (.proofBody true) _) => false
       | some child =>
           child.isProofBodyEnvelope
           || (match child with
@@ -3972,6 +3975,7 @@ def calcRule : LineBreakRule :=
     useExistingBreaks := fun _ _ => true
     flow := fun _ _ => true
     inheritBase := fun _ _ => true
+    roundUpBaseIndentation := true
     breakPoints := calcBreaks
   }
 
@@ -4726,9 +4730,12 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Termination.inductiveFixpoint) _ => some defaultRule
   | .node (.raw `Lean.Parser.Term.whereFinally) _ => some whereFinallyRule
   | .node (.proofBody _) _ => some defaultRule
-  | .node (.raw `Lean.Parser.Tactic.tacticSeq) _ => some defaultRule
-  | .node (.raw `Lean.Parser.Tactic.tacticSeq1Indented) _ => some defaultRule
-  | .node (.raw `Lean.Parser.Tactic.tacticSeqBracketed) _ => some transparentRule
+  | .node (.raw `Lean.Parser.Tactic.tacticSeq) _
+  | .node (.raw `Lean.Parser.Tactic.Conv.convSeq) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Tactic.tacticSeq1Indented) _
+  | .node (.raw `Lean.Parser.Tactic.Conv.convSeq1Indented) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Tactic.tacticSeqBracketed) _
+  | .node (.raw `Lean.Parser.Tactic.Conv.convSeqBracketed) _ => some transparentRule
   | .node (.raw `Lean.Parser.Tactic.tacticRwa__) _ => some defaultRule
   | .node (.raw `Lean.Parser.Tactic.rwRule) _ => some defaultRule
   | .node (.raw `Lean.Parser.Tactic.location) _ => some defaultRule
