@@ -132,9 +132,11 @@ lake exe fmt --jobs 8 -r MyProject
 lake exe fmt --version
 ```
 
-Multi-file package invocations use concurrent workers by default. leanfmt follows
-the selected Lake environment for each file group, including imported syntax
-extensions.
+Multi-file invocations use concurrent workers by default. leanfmt follows the
+selected Lake environment for each file group, including imported syntax
+extensions. Inputs without a common Lake root use the caller's environment.
+Each exact import group runs in a short-lived worker, even with `--jobs 1`.
+Use a lower worker count for memory-heavy imports.
 
 ### Leave Code Alone
 

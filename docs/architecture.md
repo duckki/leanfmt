@@ -58,7 +58,7 @@ The test-only executable is separate:
 | --- | --- |
 | `LeanFmt.Tests.Cli` | Fixture update/check mode, renderer trace printing, and profile output. |
 | `LeanFmt.Tests.Main` | Minimal `fmt-test` executable entry point. |
-| `LeanFmt.Tests.Run` | Minimal `testSuite` executable entry point for `lake test`. |
+| `LeanFmt.Tests.Run` | `testSuite` entry point for `lake test`; sequential subprocess isolation bounds each test group's imported-environment lifetime. |
 | `LeanFmt.Tests.Suite` | Root of the test library, containing unit-style formatter checks grouped into syntax-tree, basic formatting, expression/renderer, control-flow, collection/declaration, and CLI/architecture suites. |
 
 Every imported test module is rooted at `LeanFmt.Tests`. A downstream package may
@@ -161,13 +161,19 @@ Formatting a file follows this pipeline:
    A successful parse with fewer imports cannot establish equivalent syntax: an
    imported keyword can otherwise parse as an identifier and an operator. Only
    scripts with no imports beyond implicit `Init` use the default environment.
-   For multi-file package formatting, a bounded parallel classification pass reads
+   For multi-file formatting, a bounded parallel classification pass reads
    each file once, selects its environment from the header, and records its source
    size. Files that use the default environment are sorted by size and spread across
    worker processes, keeping large files from collecting in one batch. Imported files are grouped by exact
    normalized import header, and every file in one group stays in the same worker. The parent
    obtains the target package's augmented environment from Lake once, then starts all
-   formatter workers directly with that process environment. When imported parser-state
+   formatter workers directly with that process environment. Isolation does not
+   require a Lake root: temporary inputs and files without a common package root
+   use the caller's working directory and complete inherited process environment,
+   without invoking Lake again. This preserves externally supplied search paths,
+   package overrides, and runtime-library requests. Even `--jobs 1` starts a fresh
+   worker for each exact import group; it limits concurrency, not isolation.
+   When imported parser-state
    commands require downstream native implementations, the driver loads the symbol
    libraries listed in `LEANFMT_LOAD_DYNLIBS` through Lean's dynamic-library API. It
    initializes parser plugins listed in `LEANFMT_LOAD_PLUGINS` inside Lean's importing
@@ -183,6 +189,9 @@ Formatting a file follows this pipeline:
    Lean's opaque `ImportState` after the first direct import when explicitly enabled;
    the normal one-environment worker path uses Lean's direct importer. LeanFmt never
    inspects or reconstructs the state.
+   Dropping the last cached environment is not an imported-region reclamation
+   guarantee when Lean extensions are loaded. Process exit bounds that lifetime;
+   the driver does not manually free regions that extensions may still reference.
    Files with a `module` header use exported `.olean` data; scripts use private data,
    matching Lean's frontend. Lean therefore remains responsible for its import fixed
    point, public/private data selection, IR phases, user initializers, and persistent

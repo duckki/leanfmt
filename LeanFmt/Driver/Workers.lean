@@ -269,9 +269,8 @@ def workerExecutable : IO FilePath := do
   else
     pure executable
 
-def shouldUseWorker (options : Options) (cwd? : Option FilePath) (fileCount : Nat)
-    : Bool :=
-  !options.worker && cwd?.isSome && fileCount > 1
+def shouldUseWorker (options : Options) (fileCount : Nat) : Bool :=
+  !options.worker && fileCount > 1
 
 def defaultWorkerJobs (hardwareConcurrency : Nat) : Nat :=
   max 1 hardwareConcurrency
@@ -357,8 +356,10 @@ structure WorkerProcessContext where
   environment : Array (String × Option String)
 
 def loadWorkerProcessContext (cwd? : Option FilePath) : IO WorkerProcessContext := do
+  let some cwd := cwd?
+  | return { executable := ← workerExecutable, environment := #[] }
   let lake := (← IO.getEnv "LAKE").getD "lake"
-  let output ← IO.Process.output { cmd := lake, args := #["env"], cwd := cwd? }
+  let output ← IO.Process.output { cmd := lake, args := #["env"], cwd := some cwd }
   if output.exitCode != 0 then
     let detail := output.stderr.trimAscii.toString
     throw

@@ -111,6 +111,13 @@ Summarize the build, test, fixture, preservation, overflow, and idempotency resu
 for review. Do not commit generated or handwritten changes
 until the reviewer explicitly asks for a commit.
 
+Serialize heavy validation, baseline/candidate profiling, and test-suite runs.
+On memory-constrained machines, start import-heavy formatting with `--jobs 1`
+(or `LEANFMT_VALIDATION_FORMATTER_JOBS=1` in the validator), including temporary
+input copies. This still isolates every exact import group in a fresh worker.
+`lake test` runs groups in sequential subprocesses; keep that lifetime boundary.
+On macOS, monitor physical footprint including compressed memory, not RSS alone.
+
 ## Commit messages
 
 Use a single-line summary, followed by a blank line and a few bullet points.

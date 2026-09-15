@@ -260,10 +260,19 @@ lake build LeanFmt.Tests
 ```
 
 `LeanFmt.Tests.Suite` is the test library root. `LeanFmt.Tests.Run` is the
-`testSuite` executable used by `lake test`; it invokes the broad suite runners from
-`main` so editor language-server checks can elaborate the test library without running
-side-effectful tests. Syntax environments shared by multiple groups are loaded before
-the groups start, so tests do not repeat environment setup.
+`testSuite` executable used by `lake test`. It runs groups sequentially in fresh
+subprocesses, so imported regions cannot accumulate across the whole suite.
+Editor language-server checks only elaborate the test library, without running
+side-effectful tests. Each group loads only its required environments. Tests share
+one lazily loaded `ProjectSyntax` environment within their process; import-loader
+checks keep their independent imports and run in separate subgroups.
+
+Select a group with `lake exe testSuite basic-formatting` or
+`lake exe testSuite cli-architecture`. Selecting a parent also runs all its
+subgroups; an exact subgroup such as `cli-architecture/rootless-workers` runs
+alone. Unknown selections fail before any group starts, and a failing group
+stops the suite. The internal `--run-group NAME` dispatch runs exactly one group
+in the child process, without recursively spawning more test runners.
 
 `LeanFmt.Tests.LayoutArchitecture` contains stable contract tests for source-boundary
 classification, resolved layout plans, original-island policies, and source/output
@@ -693,14 +702,16 @@ the corresponding existing clone there. Set
 `LEANFMT_VALIDATION_BATCH_SIZE` to change the validation batch size.
 `LEANFMT_VALIDATION_FORMATTER_JOBS` passes `--jobs` to limit concurrent workers;
 the automatic worker count uses the machine's hardware concurrency for both default
-and imported environments. Multi-file package formatter invocations first process
+and imported environments. Multi-file formatter invocations first process
 scripts with only implicit `Init` imports in leanfmt's default Lean environment, then
 process files with explicit imports in short-lived workers. Classification uses import
 headers, not speculative parsing without the declared extensions. It runs in
 bounded parallel batches and records source sizes from the same file reads; the worker
 scheduler spreads large files across its batches. The parent asks Lake
 for the target package's augmented process environment once and launches workers
-directly with it. Imported files are grouped by exact normalized import header. A group
+directly with it. Without a common input Lake root, including temporary staged
+copies, workers inherit the caller's current directory and process environment
+without another Lake invocation. Imported files are grouped by exact normalized import header. A group
 is never split across workers, even when it contains many files, and every group gets
 one worker process. The work-conserving queue keeps the configured job count active.
 Each imported worker skips leanfmt's default environment, imports its one exact header
@@ -724,6 +735,13 @@ workers on the target machine with
 `LEANFMT_VALIDATION_FORMATTER_JOBS=2`. Lean's own memory ceiling is a soft,
 per-process runtime check rather than a total budget for all workers, so worker count
 is the reliable control for avoiding system-wide memory pressure.
+Worker isolation also applies with `--jobs 1`; imported environments are released
+when each worker exits rather than accumulating across unrelated import groups.
+Serialize heavy validation, baseline, candidate, and test-suite runs on
+memory-constrained machines. Start with one worker for import-heavy projects,
+including direct CLI runs over temporary copies (`fmt --jobs 1 ...`). On macOS,
+monitor physical footprint including compressed memory, not RSS alone; swapped
+processes can report small RSS while still causing severe memory pressure.
 
 For example, mathlib and CSLib can be validated at their 100-column convention
 while continuing to use fresh scratch clones:

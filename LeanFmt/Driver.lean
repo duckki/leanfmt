@@ -15,7 +15,7 @@ def runOptionsWithLoader (loader : EnvironmentLoader) (options : Options)
     s!"inputs: files={files.length} expand={expandMs}ms worker-cwd={cwd?.isSome} cwd-check={cwdMs}ms"
   if options.workerDefaultEnvironment then
     formatDefaultEnvironmentFiles loader options files
-  else if shouldUseWorker options cwd? files.length then
+  else if shouldUseWorker options files.length then
     if (← checkWorkerToolchain cwd?) then
       runMixedWorkerBatches loader options cwd? files
     else

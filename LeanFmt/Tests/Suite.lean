@@ -14,6 +14,16 @@ namespace LeanFmt.Tests
 
 syntax "TestIndexed[" term "]" term : term
 
+private initialize projectSyntaxEnvironmentRef : IO.Ref (Option Lean.Environment) ←
+  IO.mkRef none
+
+private def projectSyntaxEnvironment : IO Lean.Environment := do
+  if let some env ← projectSyntaxEnvironmentRef.get then
+    return env
+  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  projectSyntaxEnvironmentRef.set (some env)
+  pure env
+
 def assertEq (label expected actual : String) : IO Unit := do
   unless actual == expected do
     throw <| IO.userError s!"{label} mismatch\nexpected:\n{expected}\nactual:\n{actual}"
@@ -1256,7 +1266,7 @@ def assertRegisterOptionValueUsesDeclarationLayout (env : Lean.Environment)
     (Formatter.linesFit formatted 90)
 
 def assertAliasCommandRetainsSourceLayout (_env : Lean.Environment) : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let source :=
     "alias ⟨_root_.Function.Injective.surjective_of_finite,\n"
     ++ "    _root_.Function.Surjective.injective_of_finite⟩ :=\n"
@@ -3382,7 +3392,7 @@ def assertAttributesFlowBeforeDeclarations (env : Lean.Environment) : IO Unit :=
     ++ "  l\n"
   let wrappedNotationFormatted ←
     Formatter.formatSourceWithEnv
-      (← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }])
+      (← projectSyntaxEnvironment)
       wrappedNotationSource
       "wrapped-annotated-notation.lean" { lineWidth := 100 }
   assertEq "wrapped custom commands preserve annotation breaks"
@@ -4697,7 +4707,7 @@ def assertAssignedProofKeepsByWithAssignment (env : Lean.Environment) : IO Unit 
     quantifiedResult.formatted quantifiedAgain
 
 def assertTermTakingTacticsAttachOperandHead (baseEnv : Lean.Environment) : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let source :=
     "theorem termTakingTactics (value : Nat) : True := by\n"
     ++ "  cases value with\n"
@@ -5535,7 +5545,7 @@ def assertMovedChildrenUseLogicalLayoutBases (env : Lean.Environment) : IO Unit 
   assertEq "where finally uses the declaration base" whereExpected whereFormatted
 
 def assertStructuralBasesAndClosingDelimiters (_env : Lean.Environment) : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let declarationSource :=
     "@[to_additive]\n"
     ++ "instance (priority := 100) UniformContinuousConstSMul.instContinuousConstSMul\n"
@@ -9002,7 +9012,7 @@ def assertDeclarationParametersUseCommandBase (env : Lean.Environment) : IO Unit
 
 def assertExtensionDeclarationParametersUseCommandBase (_env : Lean.Environment)
     : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let source :=
     "project_lemma declarationNameLongEnoughToForceAParameterContinuation\n"
     ++ "                           (first : Nat) (second : Nat) : first = first := by\n"
@@ -15250,13 +15260,13 @@ def assertWorkersUseInputLakeRoot : IO Unit := do
       assertTrue "recursive external package uses workers for multiple files"
         (LeanFmt.Driver.shouldUseWorker
           { recursive := true, files := [project / "QuantumComputing"] }
-          cwd? 2)
+          2)
       assertTrue "explicit multi-file package invocation uses workers"
-        (LeanFmt.Driver.shouldUseWorker { files := [file, otherFile] } explicitCwd? 2)
+        (LeanFmt.Driver.shouldUseWorker { files := [file, otherFile] } 2)
       assertTrue "single-file package invocation stays in process"
-        (!LeanFmt.Driver.shouldUseWorker { files := [file] } explicitCwd? 1)
+        (!LeanFmt.Driver.shouldUseWorker { files := [file] } 1)
       assertTrue "worker subprocess does not spawn nested workers"
-        (!LeanFmt.Driver.shouldUseWorker { worker := true } explicitCwd? 2)
+        (!LeanFmt.Driver.shouldUseWorker { worker := true } 2)
       assertTrue "exact worker leaks its sole imported environment"
         (LeanFmt.Driver.isExactEnvironmentWorker { worker := true })
       assertTrue "default-environment worker does not leak an exact environment"
@@ -15279,8 +15289,12 @@ def assertWorkersUseInputLakeRoot : IO Unit := do
         LeanFmt.Driver.workerCwd? { files := [file, otherProjectFile] }
       assertTrue "files from different packages do not share a worker cwd"
         crossPackageCwd?.isNone
-      assertTrue "invocation without a package root stays in process"
-        (!LeanFmt.Driver.shouldUseWorker { recursive := true } none 100)
+      assertTrue "multi-file isolation does not require a package root"
+        (LeanFmt.Driver.shouldUseWorker { recursive := true } 100)
+      assertTrue "serial scheduling still isolates imported environments"
+        (LeanFmt.Driver.shouldUseWorker { workerJobs? := some 1 } 100)
+      assertTrue "empty input does not spawn workers"
+        (!LeanFmt.Driver.shouldUseWorker {} 0)
       let manyFiles :=
         List.range 20 |>.map fun index => project / s!"Imported{index}.lean"
       let manyGroups : List LeanFmt.Driver.ImportHeaderGroup :=
@@ -15353,6 +15367,92 @@ def assertWorkersUseInputLakeRoot : IO Unit := do
                 "/first/library;/second/library"
               else
                 "/first/library:/second/library")))
+
+def assertRootlessWorkersKeepAmbientEnvironment : IO Unit := do
+  let currentDir ← IO.currentDir
+  let executable := currentDir / ".lake/build/bin/fmt"
+  let searchPath ← Lean.searchPathRef.get
+  let searchPath :=
+    searchPath.map
+      fun path =>
+        if path.isAbsolute then path else currentDir / path
+  let separator := if System.Platform.isWindows then ";" else ":"
+  IO.FS.withTempDir
+    fun root => do
+      let sources :=
+        [
+          (
+            "First.lean",
+            "import LeanFmt.Tests.ExportedModuleSyntax\n\ndef first := exported_keyword% 1\n"
+          ),
+          (
+            "Second.lean",
+            "import LeanFmt.Tests.ProjectSyntax\n\ndef second := project_syntax\n"
+          ),
+          (
+            "Third.lean",
+            "import LeanFmt.Tests.ExportedModuleSyntax\n\ndef third := exported_keyword% 2\n"
+          ),
+          ("Ordinary.lean", "def ordinary := 0\n")
+        ]
+      let files := sources.map fun (name, _) => root / name
+      for (name, source) in sources do
+        IO.FS.writeFile (root / name) (source.replace "def " "def  ")
+      assertTrue "temporary inputs have no Lake root"
+        (← LeanFmt.Driver.workerCwd? { files }).isNone
+      let context ← LeanFmt.Driver.loadWorkerProcessContext none
+      assertTrue "rootless workers inherit the complete ambient environment"
+        context.environment.isEmpty
+      let run (args : Array String) :=
+        IO.Process.output
+          {
+            cmd := executable.toString
+            args := args ++ files.toArray.map (fun path => path.fileName.get!)
+            cwd := some root
+            env :=
+              #[
+                ("LAKE", some (root / "must-not-run-lake").toString),
+                (
+                  "LEAN_PATH",
+                  some (String.intercalate separator (searchPath.map toString))
+                )
+              ]
+          }
+      for jobs in [1, 2] do
+        let output ←
+          run
+            #[
+              "--check",
+              "--check-exception",
+              "--check-idempotent",
+              "--profile",
+              "--jobs",
+              toString jobs
+            ]
+        assertEq "rootless multi-file validation succeeds" "0" (toString output.exitCode)
+        assertTextContains "rootless inputs use exact-environment workers" output.stderr
+          s!"environment=exact files=3 environments=2 batches=2 jobs={jobs} environments-per-worker=1"
+        let completed :=
+          output.stderr.splitOn "\n"
+          |>.filter (fun line => textContains line "worker-batch:")
+        assertTrue "each exact environment has one completed worker"
+          ((completed.filter (fun line => textContains line "environment=exact")).length
+            == 2)
+        for (name, source) in sources do
+          assertEq "rootless check keeps source unchanged" (source.replace "def " "def  ")
+            (← IO.FS.readFile (root / name))
+      let output ← run #["--check-exception", "--check-idempotent", "--jobs", "1"]
+      assertEq "rootless workers apply formatting" "0" (toString output.exitCode)
+      for (name, source) in sources do
+        assertEq "rootless workers preserve imported syntax and format every file" source
+          (← IO.FS.readFile (root / name))
+      let missingSource := "import Missing.RootlessWorkerModule\n\ndef second := 0\n"
+      IO.FS.writeFile (root / "Second.lean") missingSource
+      let failure ← run #["--check-exception", "--jobs", "1"]
+      assertTrue "rootless worker import failure reaches the parent"
+        (failure.exitCode != 0)
+      assertEq "failed rootless input remains unchanged" missingSource
+        (← IO.FS.readFile (root / "Second.lean"))
 
 def assertImportFilesGroupByHeader : IO Unit := do
   IO.FS.withTempDir
@@ -20373,7 +20473,7 @@ def assertParserDescribedSpacedTermsBecomeApplications (env : Lean.Environment)
 
 def assertParserDescribedSpacedIdentifierBecomesApplication (_env : Lean.Environment)
     : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let source := "#project_clause in ExampleProject\n"
   let moduleTree ←
     SyntaxTree.parseModuleStringWithEnv env source
@@ -20388,7 +20488,7 @@ def assertParserDescribedSpacedIdentifierBecomesApplication (_env : Lean.Environ
 
 def assertParserDescribedDelimitedSyntaxUsesStructuralRules (_env : Lean.Environment)
     : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let source :=
     "def projectConfig := project_config(first := second)\n"
     ++ "def projectMatrix := #pm[first, second; third, fourth]\n"
@@ -20461,7 +20561,7 @@ def assertParserDescribedDelimitedSyntaxUsesStructuralRules (_env : Lean.Environ
 
 def assertTightIndexedExtensionUsesStructuralRule (_env : Lean.Environment)
     : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let source := "def tightIndexedExtension := receiver[index]\n"
   let moduleTree ←
     SyntaxTree.parseModuleStringWithEnv env source "tight-indexed-extension.lean"
@@ -20477,7 +20577,7 @@ def assertTightIndexedExtensionUsesStructuralRule (_env : Lean.Environment)
   assertEq "fitting tight indexed extension syntax stays compact" source formatted
 
 def assertOwnedTerminalSuffixesStayAttached (_env : Lean.Environment) : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let directCommandSource :=
     "#project_term sample buildResult { first := longFirstValue, second := longSecondValue }\n"
   let directCommandExpected :=
@@ -21306,7 +21406,7 @@ def assertMultilineProofAttachmentChecksWholeIsland (env : Lean.Environment)
     result.formatted again
 
 def assertParserOwnedConversionBodies (_env : Lean.Environment) : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   for kind in [`projectConversionLeft, `projectConversionRight] do
     let policy := (ParserLayout.kindFacts env {} kind).ownedBody?
     assertTrue s!"{kind} exposes its conversion body through parser metadata"
@@ -21379,7 +21479,7 @@ def assertParserOwnedConversionBodies (_env : Lean.Environment) : IO Unit := do
     assertEq s!"{name} conversion is idempotent" result.formatted again
 
 def assertParserOwnedClauseBodies (_env : Lean.Environment) : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let source :=
     "#project_where sampleGeneratorWithLongName\n"
     ++ "where\n"
@@ -22022,7 +22122,7 @@ def assertTacticHeaderCollectionOwnership (env : Lean.Environment) : IO Unit := 
       (children.size == 1)
 
 def assertCompactAndProtectedLayoutConsistency (_env : Lean.Environment) : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let check (name source expected : String) (lineWidth : Nat := 100) : IO Unit := do
     let result ←
       Formatter.formatSourceWithEnvDetailed env source s!"{name}.lean" { lineWidth }
@@ -22291,7 +22391,7 @@ def assertFallbackAndConditionalSuffixesStayAttached (env : Lean.Environment)
     conditionalFormatted conditionalAgain
 
 def assertReviewedMathlibContinuationAndSuffixes (_env : Lean.Environment) : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let check (name source expected : String) (lineWidth : Nat := 100) : IO Unit := do
     let result ←
       Formatter.formatSourceWithEnvDetailed env source s!"{name}.lean" { lineWidth }
@@ -22475,7 +22575,7 @@ def assertOptionalAccessSuffixPropagatesApplicationFit (env : Lean.Environment)
     result.formatted formattedAgain
 
 def assertReviewedMathlibConsistencyShapes (_env : Lean.Environment) : IO Unit := do
-  let env ← SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
+  let env ← projectSyntaxEnvironment
   let equationSource :=
     "private lemma le_mkStrictMonoAux (x : Nat -> Nat) : forall n, x n <= x n\n"
     ++ "  | 0 => by simp\n"
@@ -23265,11 +23365,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertEnvironmentLoaderKeepsOnlyLastExact env
   assertSourceImportsUseLeanHeaderLevel
   assertLeanEnvironmentKeyIncludesImportSemantics
-  assertImportPrefixCacheMatchesLeanEnvironment
-  assertExportedEnvironmentSkipsPrivateTransitiveImports
-  assertExportedEnvironmentIncludesMetaIrClosure
   assertDefaultEnvironmentPartition env
-  assertImportedKeywordUsesExactEnvironment env
   assertFormattingFilesAreSpread
   assertWorkersUseInputLakeRoot
   assertImportFilesGroupByHeader
@@ -23298,7 +23394,6 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertGeneratedSpacedSyntaxOwnsApplicationArguments projectSyntaxEnv
   assertStructuralExtensionShapesReuseExistingOwners projectSyntaxEnv
   assertQqApplicationArgumentUsesStructuralBoundary projectSyntaxEnv
-  assertLakeDslFormatting
   assertMathlibLowRiskSyntaxKindsHaveRules
   assertMissingRuleCheckUsesDispatch env projectSyntaxEnv
   RegisteredFormatAudit.run env
@@ -23340,25 +23435,55 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertIgnoreNextPreservesNestedTerm env
   assertCslibStyleCoreSyntaxHasRules env
 
-def runTestGroups (env : Lean.Environment) (selected : List String := []) : IO Unit := do
-  let projectSyntaxEnv ←
-    SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ProjectSyntax }]
-  let groups :=
-    #[
-      ("syntax-tree", runSyntaxTreeTests env),
-      ("documented-examples", DocumentedExamples.run env),
-      ("layout-architecture", LayoutArchitecture.run),
-      ("basic-formatting", runBasicFormattingTests env),
-      ("expression-renderer", runExpressionAndRendererTests projectSyntaxEnv),
-      ("control-flow", runControlFlowTests projectSyntaxEnv),
-      ("collection-declaration", runCollectionAndDeclarationTests env),
-      ("cli-architecture", runCliAndArchitectureTests env projectSyntaxEnv)
-    ]
+private def withDefaultEnvironment (test : Lean.Environment → IO Unit) : IO Unit := do
+  test (← Formatter.defaultEnvironment)
+
+def testGroups : Array (String × IO Unit) :=
+  #[
+    ("syntax-tree", withDefaultEnvironment runSyntaxTreeTests),
+    ("documented-examples", withDefaultEnvironment DocumentedExamples.run),
+    ("layout-architecture", LayoutArchitecture.run),
+    ("basic-formatting", withDefaultEnvironment runBasicFormattingTests),
+    (
+      "expression-renderer",
+      do
+        runExpressionAndRendererTests (← projectSyntaxEnvironment)
+    ),
+    (
+      "control-flow",
+      do
+        runControlFlowTests (← projectSyntaxEnvironment)
+    ),
+    ("collection-declaration", withDefaultEnvironment runCollectionAndDeclarationTests),
+    (
+      "cli-architecture",
+      withDefaultEnvironment
+        fun env => do
+          runCliAndArchitectureTests env (← projectSyntaxEnvironment)
+    ),
+    ("cli-architecture/import-prefix", assertImportPrefixCacheMatchesLeanEnvironment),
+    (
+      "cli-architecture/exported-imports",
+      assertExportedEnvironmentSkipsPrivateTransitiveImports
+    ),
+    ("cli-architecture/meta-imports", assertExportedEnvironmentIncludesMetaIrClosure),
+    (
+      "cli-architecture/imported-keywords",
+      withDefaultEnvironment assertImportedKeywordUsesExactEnvironment
+    ),
+    ("cli-architecture/rootless-workers", assertRootlessWorkersKeepAmbientEnvironment),
+    ("cli-architecture/lake-dsl", assertLakeDslFormatting)
+  ]
+
+def selectedTestGroups (selected : List String)
+    : Except String (Array (String × IO Unit)) := do
+  let includes (selected name : String) :=
+    name == selected || name.startsWith (selected ++ "/")
   for name in selected do
-    unless groups.any (fun (groupName, _) => groupName == name) do
-      throw <| IO.userError s!"unknown test group: {name}"
-  for (name, group) in groups do
-    if selected.isEmpty || selected.contains name then
-      group
+    unless testGroups.any (fun (groupName, _) => includes name groupName) do
+      throw s!"unknown test group: {name}"
+  pure
+    (testGroups.filter
+      fun (name, _) => selected.isEmpty || selected.any (includes · name))
 
 end LeanFmt.Tests
