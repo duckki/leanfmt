@@ -488,46 +488,45 @@ def runEnvironmentWorkerBatches
   let mut failed := false
   let status ← StatusRenderer.create (← IO.getStderr)
   let stdout ← IO.getStdout
-  try
-    while !remaining.isEmpty || !active.isEmpty do
-      while active.length < workerJobs && !remaining.isEmpty do
-        match remaining with
-        | [] => pure ()
-        | (batch, batchIndex) :: rest =>
-            let task ←
-              IO.asTask (prio := .dedicated)
-                (runEnvironmentWorkerBatch process status stdout options environment cwd?
-                  batch.files)
-            active :=
-              (task.map (sync := true)
-                fun result =>
-                  {
-                    batchIndex
-                    fileCount := batch.files.length
-                    environmentCount := batch.environmentCount
-                    result
-                  })
-              :: active
-            remaining := rest
-      status.render
-      <| workerProgressMessage environment completedFiles totalFiles
-          completedBatches batches.length active.length
-      match active with
+  while !remaining.isEmpty || !active.isEmpty do
+    while active.length < workerJobs && !remaining.isEmpty do
+      match remaining with
       | [] => pure ()
-      | task :: rest =>
-          let (result, unfinished) ← IO.waitAny' (task :: rest)
-          failed :=
-            (← status.withOutput
-                <| reportWorkerBatchResult options
-                    environment
-                    (result.batchIndex + 1) batches.length result.fileCount
-                    result.environmentCount result.result)
-            || failed
-          completedFiles := completedFiles + result.fileCount
-          completedBatches := completedBatches + 1
-          active := unfinished
-    pure <| if failed then 1 else 0
-  finally status.clear
+      | (batch, batchIndex) :: rest =>
+          let task ←
+            IO.asTask (prio := .dedicated)
+              (runEnvironmentWorkerBatch process status stdout options environment cwd?
+                batch.files)
+          active :=
+            (task.map (sync := true)
+              fun result =>
+                {
+                  batchIndex
+                  fileCount := batch.files.length
+                  environmentCount := batch.environmentCount
+                  result
+                })
+            :: active
+          remaining := rest
+    status.render
+    <| workerProgressMessage environment completedFiles totalFiles
+        completedBatches batches.length active.length
+    match active with
+    | [] => pure ()
+    | task :: rest =>
+        let (result, unfinished) ← IO.waitAny' (task :: rest)
+        failed :=
+          (← status.withOutput
+              <| reportWorkerBatchResult options
+                  environment
+                  (result.batchIndex + 1) batches.length result.fileCount
+                  result.environmentCount result.result)
+          || failed
+        completedFiles := completedFiles + result.fileCount
+        completedBatches := completedBatches + 1
+        active := unfinished
+  status.clear
+  pure <| if failed then 1 else 0
 
 def runExactEnvironmentWorkerBatches
     (process : WorkerProcessContext)
