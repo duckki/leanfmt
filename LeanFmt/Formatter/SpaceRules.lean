@@ -54,24 +54,30 @@ def cleanWhitespaceTrivia (text : String) : String :=
 def collapseWhitespaceTrivia (text : String) : String :=
   if text.isEmpty then "" else " "
 
+private def lineCommentStop (bytes : ByteArray) (start : Nat) : Nat :=
+  Id.run do
+    let mut index := start
+    while index < bytes.size do
+      if bytes[index]! == '\n'.toUInt8 then return index
+      index := index + 1
+    return bytes.size
+
 private def blockCommentStop (bytes : ByteArray) (start : Nat) : Nat :=
   Id.run do
     let mut cursor := start
     let mut depth := 1
-    while let some index :=
-            bytes.findIdx? (fun byte => byte == '/'.toUInt8 || byte == '-'.toUInt8)
-              cursor do
-      let byte := bytes[index]!
-      let next := bytes[index + 1]?.getD 0
+    while cursor < bytes.size do
+      let byte := bytes[cursor]!
+      let next := bytes[cursor + 1]?.getD 0
       if byte == '/'.toUInt8 && next == '-'.toUInt8 then
         depth := depth + 1
-        cursor := index + 2
+        cursor := cursor + 2
       else if byte == '-'.toUInt8 && next == '/'.toUInt8 then
         depth := depth - 1
-        if depth == 0 then return index + 2
-        cursor := index + 2
+        if depth == 0 then return cursor + 2
+        cursor := cursor + 2
       else
-        cursor := index + 1
+        cursor := cursor + 1
     return bytes.size
 
 def normalizeTrivia (normalizeWhitespace : String → String) (text : String) : String :=
@@ -82,24 +88,22 @@ def normalizeTrivia (normalizeWhitespace : String → String) (text : String) : 
     let mut cursor := 0
     let mut pieces := #[]
     -- ASCII comment delimiters are UTF-8 boundaries; retain comment slices verbatim.
-    while let some index :=
-            bytes.findIdx? (fun byte => byte == '/'.toUInt8 || byte == '-'.toUInt8)
-              cursor do
-      let byte := bytes[index]!
-      let next := bytes[index + 1]?.getD 0
+    while cursor < bytes.size do
+      let byte := bytes[cursor]!
+      let next := bytes[cursor + 1]?.getD 0
       if next == '-'.toUInt8 && (byte == '/'.toUInt8 || byte == '-'.toUInt8) then
         let stop :=
           if byte == '/'.toUInt8 then
-            blockCommentStop bytes (index + 2)
+            blockCommentStop bytes (cursor + 2)
           else
-            (bytes.findIdx? (· == '\n'.toUInt8) (index + 2)).getD bytes.size
+            lineCommentStop bytes (cursor + 2)
         pieces :=
-          pieces.push (normalizeWhitespace (SyntaxTree.sourceText text ⟨start⟩ ⟨index⟩))
-        pieces := pieces.push (SyntaxTree.sourceText text ⟨index⟩ ⟨stop⟩)
+          pieces.push (normalizeWhitespace (SyntaxTree.sourceText text ⟨start⟩ ⟨cursor⟩))
+        pieces := pieces.push (SyntaxTree.sourceText text ⟨cursor⟩ ⟨stop⟩)
         start := stop
         cursor := stop
       else
-        cursor := index + 1
+        cursor := cursor + 1
     pieces :=
       pieces.push (normalizeWhitespace (SyntaxTree.sourceText text ⟨start⟩ ⟨bytes.size⟩))
     return String.join pieces.toList
@@ -115,27 +119,21 @@ def commentForcesLineBreak (text : String) : Bool :=
     let bytes := text.toByteArray
     let mut start := 0
     let mut depth := 0
-    while let some index :=
-            bytes.findIdx?
-              (fun byte =>
-                byte == '/'.toUInt8
-                || byte == '-'.toUInt8
-                || byte == '\n'.toUInt8
-                || byte == '\r'.toUInt8) start do
-      let byte := bytes[index]!
-      let next := bytes[index + 1]?.getD 0
+    while start < bytes.size do
+      let byte := bytes[start]!
+      let next := bytes[start + 1]?.getD 0
       if depth > 0 && (byte == '\n'.toUInt8 || byte == '\r'.toUInt8) then
         return true
       else if byte == '/'.toUInt8 && next == '-'.toUInt8 then
         depth := depth + 1
-        start := index + 2
+        start := start + 2
       else if depth == 0 && byte == '-'.toUInt8 && next == '-'.toUInt8 then
         return true
       else if depth > 0 && byte == '-'.toUInt8 && next == '/'.toUInt8 then
         depth := depth - 1
-        start := index + 2
+        start := start + 2
       else
-        start := index + 1
+        start := start + 1
     return false
 
 def stripLeadingHorizontalWhitespace (line : String) : String :=
