@@ -33,6 +33,8 @@ def usage : String :=
       "            Run at most N workers concurrently; defaults to hardware concurrency.",
       "            Each imported worker handles one exact import header and then exits.",
       "            Reduce this when imported environments cause memory pressure.",
+      "  --parser-integration NAME",
+      "            Enable an audited parser-effect integration (lean-bench).",
       "  -h, --help",
       "  --version",
       "            Print the leanfmt version.",
@@ -71,6 +73,19 @@ def parseArgs (args : List String) : ParseResult :=
         loop { options with checkIdempotent := true } files rest
     | "--profile" :: rest =>
         loop { options with profile := true } files rest
+    | "--parser-integration" :: name :: rest =>
+        match LeanFmt.ParserEffects.Integration.ofName? name with
+        | some integration =>
+            loop
+              {
+                options with
+                  parserIntegrations :=
+                    (options.parserIntegrations ++ [integration]).eraseDups
+              }
+              files rest
+        | none => .error s!"unknown parser integration: {name}"
+    | "--parser-integration" :: [] =>
+        .error "--parser-integration requires a name"
     | "--import-env-first" :: rest =>
         loop { options with importEnvFirst := true } files rest
     | "--env-cache-size" :: value :: rest =>

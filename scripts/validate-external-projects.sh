@@ -12,6 +12,7 @@ readonly WORK_DIR="${LEANFMT_VALIDATION_DIR:-$REPO_ROOT/.scratch/external-valida
 readonly VALIDATION_FILES_PER_BATCH="${LEANFMT_VALIDATION_BATCH_SIZE:-100}"
 readonly BUILD_FILES_PER_BATCH=1000
 readonly FORMATTER_WORKER_JOBS="${LEANFMT_VALIDATION_FORMATTER_JOBS:-}"
+readonly PARSER_INTEGRATION="${LEANFMT_VALIDATION_PARSER_INTEGRATION:-}"
 readonly FORMATTER_LINE_WIDTH="${LEANFMT_VALIDATION_LINE_WIDTH:-}"
 readonly DEFAULT_FILE_SELECTOR="${LEANFMT_VALIDATION_FILE_PATTERN:-*.lean}"
 readonly FORMATTER_BUILD_ROOT="$WORK_DIR/formatter-toolchains"
@@ -65,6 +66,8 @@ invocation. For example, validate mathlib at width 100 with:
 
 Set LEANFMT_VALIDATION_FORMATTER_JOBS=N to limit concurrent formatter workers.
 The automatic default uses the hardware count for every formatter worker group.
+Set LEANFMT_VALIDATION_PARSER_INTEGRATION=lean-bench to opt into the audited
+LeanBench parser-effect integration. Unknown versions fail closed.
 
 The validator reads each project's lean-toolchain. When it differs from
 leanfmt's toolchain, the current formatter source is built automatically with
@@ -599,6 +602,9 @@ run_formatter_file_group() {
   if [[ -n "$FORMATTER_WORKER_JOBS" ]]; then
     formatter_command+=(--jobs "$FORMATTER_WORKER_JOBS")
   fi
+  if [[ -n "$PARSER_INTEGRATION" ]]; then
+    formatter_command+=(--parser-integration "$PARSER_INTEGRATION")
+  fi
   if [[ -n "$runtime_dynlibs" ]]; then
     runtime_environment+=("LEANFMT_LOAD_DYNLIBS=$runtime_dynlibs")
   fi
@@ -644,6 +650,7 @@ run_logged_formatter_file_list() {
     printf 'Project directory: %s\n' "$project_dir"
     printf 'File list: %s\n' "$list_file"
     printf 'Formatter: %s\n' "$formatter"
+    printf 'Parser integration: %s\n' "${PARSER_INTEGRATION:-none}"
     printf 'Formatter invocations: serial; formatter workers: concurrent\n'
     run_formatter_file_group "$project_dir" "$list_file" "$formatter" \
       "$runtime_dynlibs" "$runtime_plugins" "$@"
@@ -856,6 +863,7 @@ run_project_validation_batches() {
     "$([[ -n "$runtime_dynlibs" ]] && printf enabled || printf none)" \
     "$([[ -n "$runtime_plugins" ]] && printf enabled || printf none)"
   printf 'Staged formatter output: %s\n' "$stage_dir"
+  printf 'Parser integration: %s\n' "${PARSER_INTEGRATION:-none}"
   printf 'Missing-rule diagnostics: %s\n' \
     "$([[ "$project_name" == "mathlib" ]] && printf enabled || printf disabled)"
   if [[ -n "$FORMATTER_WORKER_JOBS" ]]; then

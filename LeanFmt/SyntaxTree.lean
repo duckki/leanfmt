@@ -1,5 +1,6 @@
 import LeanFmt.LeanEnvironment
 import LeanFmt.ParserLayout
+import LeanFmt.ParserEffects
 
 namespace LeanFmt
 namespace SyntaxTree
@@ -4486,11 +4487,17 @@ def commandHandlers (env : Environment) (kind : SyntaxNodeKind) : List Name :=
 
 def commandKindParseAction (env : Environment) (kind : SyntaxNodeKind)
     : CommandParseAction :=
+  let handlerAction (handler : Name) :=
+    let builtinAction := commandHandlerParseAction handler
+    if builtinAction == .frontend && ParserEffects.isNeutralHandler env handler then
+      .postpone
+    else
+      builtinAction
   match commandHandlers env kind with
   | [] => .frontend
   | first :: rest =>
-      let action := commandHandlerParseAction first
-      if rest.any (fun handler => commandHandlerParseAction handler != action) then
+      let action := handlerAction first
+      if rest.any (fun handler => handlerAction handler != action) then
         .frontend
       else
         action
@@ -4511,13 +4518,17 @@ partial def commandParseAction (env : Environment) (command : Syntax)
     else
       action
   if command.isOfKind `Lean.Parser.Command.in then
+    let localScopeIsAudited :=
+      (command[0].isOfKind `Lean.Parser.Command.set_option
+        && directAction command[0] == .scope)
+      || (command[0].isOfKind `Lean.Parser.Command.open
+          && commandHandlers env command[0].getKind == [`Lean.Elab.Command.elabOpen])
     if commandHandlers env command.getKind == [`Lean.Elab.Command.expandInCmd]
         && commandKindParseAction env `Lean.Parser.Command.section == .scope
         && commandKindParseAction env `Lean.Parser.Command.end == .scope
         && commandHandlers env `Lean.Parser.Command.InternalSyntax.end_local_scope
             == [`Lean.Elab.Command.elabEndLocalScope]
-        && command[0].isOfKind `Lean.Parser.Command.set_option
-        && directAction command[0] == .scope
+        && localScopeIsAudited
         && commandParseAction env command[2] == .postpone then
       .postpone
     else

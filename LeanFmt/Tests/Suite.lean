@@ -8,6 +8,7 @@ import LeanFmt.Tests.MetaImportRoot
 import LeanFmt.Tests.ProjectSyntax
 import LeanFmt.Tests.RegisteredFormatAudit
 import LeanFmt.Tests.WorkerOutput
+import LeanFmt.Tests.ParserEffects
 
 open System
 
@@ -20139,7 +20140,7 @@ def assertParserCommandActions (env : Lean.Environment) : IO Unit := do
         "set_option maxHeartbeats 2000000 in\nset_option pp.universes true in\ndef value := 0",
         .postpone
       ),
-      ("open Nat in\ndef value := 0", .frontend)
+      ("open Nat in\ndef value := 0", .postpone)
     ]
   for (source, expected) in cases do
     let command ← IO.ofExcept <| Lean.Parser.runParserCategory env `command source
@@ -23844,6 +23845,8 @@ def testGroups : Array (String × IO Unit) :=
         fun env => do
           runCliAndArchitectureTests env (← projectSyntaxEnvironment)
     ),
+    ("cli-architecture/parser-effects", ParserEffects.run),
+    ("cli-architecture/parser-effects-exported", ParserEffects.run .exported),
     ("cli-architecture/import-prefix", assertImportPrefixCacheMatchesLeanEnvironment),
     (
       "cli-architecture/exported-imports",

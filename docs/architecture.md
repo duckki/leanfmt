@@ -36,6 +36,8 @@ The implementation is split by responsibility:
 | Module | Responsibility |
 | --- | --- |
 | `LeanFmt.ParserLayout` | Evaluate imported parser descriptions once per occurring syntax kind and compile formatter availability, printing annotations, precedence, application shape, and trailing-body ownership into conservative syntax-layout facts. |
+| `LeanFmt.ParserEffects` | Store explicit parser-neutral handler contracts in an environment-scoped persistent registry. |
+| `LeanFmt.ParserEffects.Integrations` | Opt-in adapters for audited third-party handlers, guarded by imported implementation fingerprints. No formatting rules live here. |
 | `LeanFmt.RegisteredFormatAudit` | Inspect one registered Lean formatter's symbolic document, align it exactly with source-backed syntax, and propose a stable structural rule candidate. This module is not imported by the production formatter. |
 | `LeanFmt.SyntaxTree` | Parse Lean source, keep token/trivia spans, classify delimiter envelopes, build the raw tree, and regroup selected raw syntax into logical nodes. |
 | `LeanFmt.Formatter.SpaceRules` | Perform low-level token spacing and lossless trivia cleanup/reindentation. |
@@ -122,15 +124,33 @@ Formatting a file follows this pipeline:
    Standard namespace, section, end, and standalone `set_option` commands update the
    quiet parser scope. The audited option handler uses registered option declarations
    and literal values, updating scope options and the cached recursion limit without
-   observing pending declarations. A `set_option ... in ...` wrapper can be postponed
-   when its body can be postponed, including nested wrappers and ordinary mutual
-   blocks. Lean's parser already applies the temporary option while parsing that
-   body. The wrapper macro, option handler, and generated section/end/local-scope
+   observing pending declarations. A `set_option ... in ...` or `open ... in ...`
+   wrapper can be postponed when its body can be postponed, including nested
+   wrappers and ordinary mutual blocks. Lean's parser already applies the temporary
+   option or open declaration while parsing that body. Standalone opens still need
+   complete preceding state.
+   The wrapper macro, option/open handler, and generated section/end/local-scope
    handlers must retain their audited implementations; otherwise it uses full
-   replay. The temporary scope has no persistent parser effect. Every other command,
-   including local syntax declarations, `run_cmd`, other wrappers, standalone attributes,
-   and custom commands, runs through Lean's frontend with the complete preceding
-   source state. The frontend processes only the pending prefix through that command;
+   replay. The temporary scope has no persistent parser effect.
+   An explicit `leanfmt_parser_neutral` annotation can also postpone an active command
+   elaborator or macro handler. This is a trusted implementation contract: the handler
+   must not change grammar, token tables, or persistent parser scopes. Generated
+   declarations and runtime registrations may remain deferred. Every active handler
+   for the syntax kind must agree; an unregistered replacement retains full replay.
+   Existing scope actions and structural wrapper checks retain precedence. The
+   environment-scoped registry survives imports and uses the existing postpone
+   action, without a new parser path or cross-file state reuse.
+   Optional integrations are applied after exact imports, identically for direct and
+   prefix-cached imports, and retained in the exact-environment cache. The `lean-bench`
+   adapter checks the audited Core, Env, and Setup declaration fingerprints before
+   registering its two benchmark setup handlers. Unimported integrations are no-ops;
+   an imported but unaudited version is an explicit error. These fingerprints are
+   compatibility guards, not cryptographic proofs of safety. There is no implicit
+   project-name or command-keyword opt-in.
+   Every other command, including local syntax declarations, `run_cmd`, other
+   wrappers, standalone attributes, and custom commands, runs through Lean's frontend
+   with the complete preceding source state. The frontend processes only the pending
+   prefix through that command;
    its result becomes the next checkpoint, and quiet parsing resumes. A successful
    command is not assumed independent of skipped declarations: environment absence
    queries are observations too. Earlier prefixes are not elaborated again, and the

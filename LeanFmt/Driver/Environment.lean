@@ -16,6 +16,7 @@ structure EnvironmentLoader where
   lastExact : IO.Ref (Option (String × Lean.Environment))
   importPrefixes? : Option ImportPrefixCache := none
   leakExact : Bool := false
+  parserIntegrations : List ParserEffects.Integration := []
 
 inductive EnvironmentOrigin where
   | default
@@ -106,7 +107,14 @@ def loadEnvironmentLoader (options : Options) : IO EnvironmentLoader := do
       some <$> ImportPrefixCache.create options.importPrefixCacheSize
     else
       pure none
-  pure { default, lastExact, importPrefixes?, leakExact := exactWorker }
+  pure
+    {
+      default,
+      lastExact,
+      importPrefixes?,
+      leakExact := exactWorker
+      parserIntegrations := options.parserIntegrations
+    }
 
 def EnvironmentLoader.lastExactEnvironment? (loader : EnvironmentLoader) (key : String)
     : IO (Option Lean.Environment) := do
@@ -134,6 +142,9 @@ def EnvironmentLoader.environmentForSpec
           match loader.importPrefixes? with
           | some prefixes => prefixes.importEnvironment spec loader.leakExact
           | none => LeanEnvironment.importEnvironment spec loader.leakExact
+        let environment ←
+          IO.ofExcept
+            (ParserEffects.applyIntegrations environment loader.parserIntegrations)
         loader.rememberExactEnvironment key environment
         pure { environment, origin := .importedExact }
 

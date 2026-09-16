@@ -138,6 +138,12 @@ extensions. Inputs without a common Lake root use the caller's environment.
 Each exact import group runs in a short-lived worker, even with `--jobs 1`.
 Use a lower worker count for memory-heavy imports.
 
+`--parser-integration lean-bench` explicitly enables an audited LeanBench adapter
+that postpones benchmark setup commands during parsing. It accepts only audited
+imported implementations; other versions report an error. No integration is enabled
+by default. See the [parser-effect contract](docs/development.md#parser-neutral-command-contracts)
+for supported versions and library-provided annotations.
+
 ### Leave Code Alone
 
 Preserve the next complete syntax node:

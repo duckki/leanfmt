@@ -418,6 +418,13 @@ then verifies that a later observer receives the theorem and its simp registrati
 It also checks full-frontend syntax parity, formatted elaboration, preservation,
 and independent idempotency. `assertParserDeferralRejectsOverriddenMetadata` keeps
 attribute macros and replaced wrapper/scope handlers on the complete replay path.
+`LeanFmt.Tests.ParserEffects` checks imported neutral-handler annotations, macro and
+elaborator overrides, complete proof replay for later observers, frontend parity,
+formatted elaboration, independent idempotency, and integration option forwarding.
+Private and exported import checks run in separate test subprocesses.
+The same groups cover temporary simple, scoped, selected, and renamed opens around
+deferred declarations, scope restoration, later proof observers, and overridden
+open handlers. Standalone opens remain on the full replay path.
 For external performance checks, Hex's `HexGF2/Clmul.lean` exercises this policy
 with `expose`, `simp`, `grind`, `extern`, and option-wrapped expensive proofs.
 Use its exact import environment, width 100, preservation, and idempotency checks.
@@ -427,6 +434,33 @@ file; unchanged sources produce no such message.
 `assertReviewedHeaderAndContinuationOwnership` covers empty assignment headers,
 absent `finally` continuations before a suffix, and quantified `suffices` continuations,
 with preservation and idempotency checks.
+
+### Parser-neutral command contracts
+
+Libraries may import `LeanFmt.ParserEffects` and annotate an audited command
+elaborator or macro implementation with `@[leanfmt_parser_neutral]`. The global
+annotation promises no persistent changes to grammar, token tables, or parser
+scope, including parser options and changes made by generated commands. Ordinary
+declaration and runtime-registry generation can be postponed. This is an explicit trusted contract,
+not automatic effect inference. Unknown or additional unregistered handlers still
+trigger complete original-prefix replay, including deferred commands and proofs.
+
+For libraries without annotations, opt-in adapters can register imported handlers
+through `registerNeutralHandler`. `--parser-integration lean-bench` currently audits
+LeanBench revision `fa30c2763cf523f3ac8e46dc3a1dad0845a40098` with Lean
+`v4.33.0-rc1`: setup handlers generate ordinary definitions and runtime registry
+initializers; `register` and `registerFixed` update IO references. Core, Env, and
+Setup fingerprints accept the audited private/exported import views. Other imported
+versions fail explicitly and need another audit; spelling alone never enables the
+adapter. Disable the option to retain conservative full replay.
+
+Use `bench/HexGFqField/Bench.lean` as the isolated memory regression control with
+width 100, preservation, idempotency, one worker, and compressed-inclusive memory
+measurement. This avoids an unnecessary proof replay, not the cost of an arbitrary
+proof that a later genuine observer requires. Do not replace such proofs or suppress
+diagnostics when a bounded validation run stops.
+
+### Local performance controls
 
 The repository also includes a stable local workload that covers regrouping,
 original-layout emission, layout search, and convergence. Record a baseline before an
@@ -584,6 +618,11 @@ mirror's incremental `.lake` build, builds `fmt` with the target toolchain, and
 runs the resulting executable from the target project's `lake env`. Neither the
 main checkout's build artifacts nor the target repository's package declaration
 is changed.
+
+Set `LEANFMT_VALIDATION_PARSER_INTEGRATION=lean-bench` to explicitly enable the
+audited adapter in every formatter worker. The default enables no adapter; the
+validator does not infer one from the repository name. Record this setting with
+timings, since it changes which command effects can be postponed.
 
 The current release checkpoints and known external-formatting issues are tracked
 in [plan.md](plan.md).

@@ -233,6 +233,8 @@ def Options.workerArgs
       args := args.push "--import-env-first"
     if options.includeHidden then
       args := args.push "--include-hidden"
+    for integration in options.parserIntegrations do
+      args := args.push "--parser-integration" |>.push integration.name
     args := args.push "--env-cache-size"
     args := args.push s!"{options.importPrefixCacheSize}"
     args := args.push "--line-width"

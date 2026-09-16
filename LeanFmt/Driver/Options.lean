@@ -1,4 +1,5 @@
 import LeanFmt.Formatter
+import LeanFmt.ParserEffects.Integrations
 
 open System
 
@@ -18,6 +19,7 @@ structure Options where
   hardwareConcurrency : Nat := 1
   formatterOptions : Formatter.Options := {}
   workerJobs? : Option Nat := none
+  parserIntegrations : List ParserEffects.Integration := []
   importPrefixCacheSize : Nat := 0
   files : List FilePath := []
 deriving Repr

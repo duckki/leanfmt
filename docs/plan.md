@@ -6,35 +6,40 @@ release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Custom-command replay resource cost
+### Required command replay memory
 
 ```lean
-theorem certificate_check : certificateValid = true := by
-  expensiveProof
-setup_benchmark runChecksum n => n * n
+private theorem packedCert_check : certificateValid = true := by decide
+-- More certificate definitions follow.
+#guard checkCertificate certificate = true
 ```
 
-Hex's `bench/HexGFqField/Bench.lean` triggers complete-prefix replay at its first
-`LeanBench.setupBenchmark` command (line 805). An isolated run reaches 6 GiB in
-50s even with one worker. Full Hex formatter validation therefore remains blocked
-in batch 7 of 9; no formatter diagnostic preceded the memory stop. Unknown handlers
-must still receive the complete preceding declarations and proofs. This needs a
-reviewed custom-command effect contract, not a project-specific skip rule.
+Hex's `conformance/HexGFq/CrossCheck.lean` still exceeds the 6 GiB validation
+budget. An isolated parser trace reaches 6.16 GiB in 18.8s during the prefix replay
+from line 974 through the `#guard` at line 1110. The resumed formatter stops in
+batch 9 of 9; the other 72 files pass independently. Source files remain untouched
+and output remains staged. No formatter
+diagnostic precedes the resource stop. `#guard` and unknown handlers still receive
+complete preceding declarations and proofs. Do not bypass them or substitute
+incomplete proof state to claim a passing validation.
 
 ## Progress
 
-### Custom-command effect contract
+### Required replay memory checkpoint
 
-Establish how external commands can safely expose parser effects before expanding
-postponement beyond audited handlers. Preserve complete observer state, overridden
-handler behavior, and independent idempotency parsing. Use the isolated Hex
-benchmark file as the resource control, then resume complete Hex validation under
-a compressed-inclusive memory bound.
+Profile the remaining cross-check prefix against native Lean elaboration to
+separate unavoidable proof cost from retained frontend state. Reduce retention only
+with equivalent observer state and independent idempotency parsing. Any broader
+effect classification needs a separate audit; do not add a blanket `#guard`
+exemption. Complete batch 9 under a compressed-inclusive memory bound before
+claiming the Hex checkpoint.
 
 ### Release validation
 
 Run the complete release gate after review of the parser-classification change.
 Formatter-only Hex checks do not replace changed-module and post-format builds.
+Use `LEANFMT_VALIDATION_PARSER_INTEGRATION=lean-bench` for the audited Hex
+dependency version; the adapter is explicit and is not enabled by default.
 Retain `HexGF2/Clmul.lean` as an isolated performance control and compare with
 identical inputs, exact imports, diagnostics, and worker limits. The old 469s
 full-project timing covered a different file set and is not a comparable baseline.
@@ -46,7 +51,7 @@ not validate later changes.
 These opportunities remain deferred. They are performance costs, not known
 formatting-correctness failures.
 
-### Required prefix elaboration cost
+### Required prefix elaboration and evaluation cost
 
 ```lean
 theorem evidence : True := by trivial
@@ -60,6 +65,13 @@ extending the neutral-effect classifier; attribute spelling alone is insufficien
 Unknown handlers must still observe complete declarations, proofs, and attributes.
 Native snapshots require unchanged syntax and positions, so do not share final
 state with independent idempotency parses or guess source dependencies.
+Explicit parser-neutral contracts can avoid unnecessary replay but cannot bound
+arbitrary proof elaboration that a later unaudited observer requires.
+Hex's `conformance/HexNumberFieldTower/Conformance.lean` passes formatting and
+diagnostics but takes 429s with one worker. A stack sample shows `#guard` expression
+evaluation through Lean's IR interpreter during convergence replay, not layout
+search. Establish a same-input baseline before calling this a regression; retain
+independent parsing and complete state when investigating reuse.
 
 ### Cascading join retry cost
 
@@ -82,7 +94,7 @@ performance issue, not a known formatting failure.
 Resolve the reuse contract before adding a render cache. Require equivalent
 output, diagnostics, feedback, and traces across placement and suffix changes,
 plus improved scaling in the stress controls. Prefix replay remains separately
-blocked on an audited native API or a reviewed parser contract change.
+subject to complete-state equivalence for commands without a neutral contract.
 
 ## Validation Standard
 
