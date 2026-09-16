@@ -6,20 +6,60 @@ release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-No known unresolved formatting blockers.
+### Custom-command replay resource cost
+
+```lean
+theorem certificate_check : certificateValid = true := by
+  expensiveProof
+setup_benchmark runChecksum n => n * n
+```
+
+Hex's `bench/HexGFqField/Bench.lean` triggers complete-prefix replay at its first
+`LeanBench.setupBenchmark` command (line 805). An isolated run reaches 6 GiB in
+50s even with one worker. Full Hex formatter validation therefore remains blocked
+in batch 7 of 9; no formatter diagnostic preceded the memory stop. Unknown handlers
+must still receive the complete preceding declarations and proofs. This needs a
+reviewed custom-command effect contract, not a project-specific skip rule.
 
 ## Progress
 
-### Release preparation
+### Custom-command effect contract
 
-No further corrective checkpoint is scheduled. Review and commit the validated
-candidate, then complete release packaging. Any subsequent formatter change
-requires a fresh release gate; earlier results do not validate later changes.
+Establish how external commands can safely expose parser effects before expanding
+postponement beyond audited handlers. Preserve complete observer state, overridden
+handler behavior, and independent idempotency parsing. Use the isolated Hex
+benchmark file as the resource control, then resume complete Hex validation under
+a compressed-inclusive memory bound.
+
+### Release validation
+
+Run the complete release gate after review of the parser-classification change.
+Formatter-only Hex checks do not replace changed-module and post-format builds.
+Retain `HexGF2/Clmul.lean` as an isolated performance control and compare with
+identical inputs, exact imports, diagnostics, and worker limits. The old 469s
+full-project timing covered a different file set and is not a comparable baseline.
+A formatting or parser change requires a fresh release gate; earlier results do
+not validate later changes.
 
 ## Deferred Optimization Opportunities
 
-These are deferred beyond the current release gate. Neither is a known formatting
-correctness failure; they do not block this release candidate.
+These opportunities remain deferred. They are performance costs, not known
+formatting-correctness failures.
+
+### Required prefix elaboration cost
+
+```lean
+theorem evidence : True := by trivial
+attribute [local simp] evidence
+```
+
+Standalone attributes, deriving, and unaudited declaration metadata retain
+complete-prefix replay. Hex's `HexGF2/Basic.lean` exercises
+remaining `ext` and `inline` metadata costs. Audit active implementations before
+extending the neutral-effect classifier; attribute spelling alone is insufficient.
+Unknown handlers must still observe complete declarations, proofs, and attributes.
+Native snapshots require unchanged syntax and positions, so do not share final
+state with independent idempotency parses or guess source dependencies.
 
 ### Cascading join retry cost
 
@@ -36,20 +76,6 @@ source facts reduce cost but do not establish linear scaling. Retain the
 32/64/128-clause controls. Accepted-piece reuse needs a contract covering placement,
 suffix fit, comments, feedback, and trace equivalence. This is a worst-case
 performance issue, not a known formatting failure.
-
-### Required prefix elaboration cost
-
-```lean
-theorem evidence : True := by trivial
-attribute [local simp] evidence
-```
-
-Attributes, deriving handlers, wrappers, and unclassified commands need the
-complete preceding source state. No duplicate completed-prefix replay was found
-within one parse. Native snapshots require unchanged syntax and positions;
-commands may inspect the complete file source. Do not guess dependencies, skip
-proof bodies, add attribute exceptions, or share final command state with the
-independent idempotency pass. No safe general shortcut has been identified.
 
 ### Future design review: accepted-piece reuse
 

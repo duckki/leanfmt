@@ -412,7 +412,18 @@ scope overrides on the authoritative replay path. These state assertions test th
 optimization independently of machine-dependent timing thresholds.
 `assertOptionScopeDoesNotReplayDeclarations` checks immediate option and recursion-limit
 updates without declaration replay, later observer state, and scope-exit parity with
-the frontend. Overridden option handlers and scoped wrappers retain replay coverage.
+the frontend. `assertParserNeutralDeclarationsStayDeferred` checks that audited
+declaration metadata and scoped option wrappers do not elaborate ordinary proofs,
+then verifies that a later observer receives the theorem and its simp registration.
+It also checks full-frontend syntax parity, formatted elaboration, preservation,
+and independent idempotency. `assertParserDeferralRejectsOverriddenMetadata` keeps
+attribute macros and replaced wrapper/scope handlers on the complete replay path.
+For external performance checks, Hex's `HexGF2/Clmul.lean` exercises this policy
+with `expose`, `simp`, `grind`, `extern`, and option-wrapped expensive proofs.
+Use its exact import environment, width 100, preservation, and idempotency checks.
+Compare the file separately from worker/import startup, then run the complete
+containing batch. A `formatted` message counts a changed file, not every completed
+file; unchanged sources produce no such message.
 `assertReviewedHeaderAndContinuationOwnership` covers empty assignment headers,
 absent `finally` continuations before a suffix, and quantified `suffices` continuations,
 with preservation and idempotency checks.

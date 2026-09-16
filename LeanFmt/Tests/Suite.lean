@@ -20115,23 +20115,135 @@ def assertParserCommandActions (env : Lean.Environment) : IO Unit := do
       ("namespace Example", .scope),
       ("set_option pp.universes true", .scope),
       ("def value := 0", .postpone),
-      ("@[simp] theorem value : True := by trivial", .frontend),
+      ("@[simp] theorem value : True := by trivial", .postpone),
+      ("@[simp, grind =] theorem value : 0 = 0 := rfl", .postpone),
+      ("@[expose] def value := 0", .postpone),
+      ("@[extern \"external_value\", expose] def value := 0", .postpone),
+      ("@[simp, customAttribute] theorem value : True := by trivial", .frontend),
       ("structure Example where\n  value : Nat\nderiving Repr", .frontend),
       ("set_option maxRecDepth 2048 in\nrun_cmd pure ()", .frontend),
       ("attribute [simp] value", .frontend),
       ("mutual\n  def first := 0\n  theorem second : True := by trivial\nend", .postpone),
       ("mutual\n  def Example.first := 0\n  def Example.second := 1\nend", .postpone),
-      ("mutual\n  @[simp] theorem value : True := by trivial\nend", .frontend),
+      ("mutual\n  @[simp] theorem value : True := by trivial\nend", .postpone),
       ("mutual\n  inductive Example where | mk\n  deriving Repr\nend", .frontend),
       ("mutual\n  variable (n : Nat)\n  def value := n\nend", .frontend),
       ("mutual\n  open Nat\n  def value := 0\nend", .frontend),
       ("mutual\n  set_option pp.universes true\n  def value := 0\nend", .frontend),
-      ("set_option maxRecDepth 2048 in\nmutual\n  def value := 0\nend", .frontend)
+      ("set_option maxRecDepth 2048 in\nmutual\n  def value := 0\nend", .postpone),
+      (
+        "set_option maxHeartbeats 2000000 in\ntheorem value : True := by trivial",
+        .postpone
+      ),
+      (
+        "set_option maxHeartbeats 2000000 in\nset_option pp.universes true in\ndef value := 0",
+        .postpone
+      ),
+      ("open Nat in\ndef value := 0", .frontend)
     ]
   for (source, expected) in cases do
     let command ← IO.ofExcept <| Lean.Parser.runParserCategory env `command source
     assertTrue s!"command parser action: {source}"
       (SyntaxTree.commandParseAction env command == expected)
+
+def assertParserNeutralDeclarationsStayDeferred (env : Lean.Environment) : IO Unit := do
+  let sourcePrefix :=
+    "namespace DeferredMetadata\n"
+    ++ "@[expose] def value := 0\n"
+    ++ "set_option maxHeartbeats 2000000 in\n"
+    ++ "@[simp, grind =] theorem evidence : value = 0 := by rfl\n"
+    ++ "@[extern \"deferred_value\"] def externalValue := 0\n"
+    ++ "end DeferredMetadata\n"
+  let fileName := "deferred-parser-metadata.lean"
+  let input := Lean.Parser.mkInputContext sourcePrefix fileName
+  let (_, parserState, _) ← Lean.Parser.parseHeader input
+  let initial : SyntaxTree.ModuleParseState :=
+    { parserState, commandState := Lean.Elab.Command.mkState env }
+  let parsed ← SyntaxTree.parseModuleCommandsQuiet input initial true initial
+  for name
+      in [
+        `DeferredMetadata.value,
+        `DeferredMetadata.evidence,
+        `DeferredMetadata.externalValue
+      ] do
+    assertTrue "parser-neutral attributes and wrappers leave declarations unelaborated"
+      (!parsed.commandState.env.contains name)
+  assertTrue "deferred option wrappers do not leak options"
+    ((SyntaxTree.parserModuleContext parsed.commandState).options
+      == (SyntaxTree.parserModuleContext initial.commandState).options)
+  let source :=
+    sourcePrefix
+    ++ "open Lean Elab Command\n"
+    ++ "run_cmd do\n"
+    ++ "  let some (.thmInfo evidence) := (← getEnv).find? `DeferredMetadata.evidence\n"
+    ++ "    | throwError \"missing deferred theorem\"\n"
+    ++ "  if evidence.value.hasSorry then\n"
+    ++ "    throwError \"missing deferred proof\"\n"
+    ++ "  let attrs ← liftCoreM Meta.getSimpTheorems\n"
+    ++ "  unless attrs.isLemma (.decl `DeferredMetadata.evidence) do\n"
+    ++ "    throwError \"missing deferred simp attribute\"\n"
+    ++ "  elabCommand (← `(notation:max \"deferredMetadata%\" => DeferredMetadata.value))\n"
+    ++ "example : deferredMetadata% = 0 := by simp\n"
+  assertFrontendElaborates env source fileName
+  let input := Lean.Parser.mkInputContext source fileName
+  let parsed ← SyntaxTree.parseModuleCommandsQuiet input initial true initial
+  let reference ← SyntaxTree.replayModulePrefix input initial source.rawEndPos
+  assertTrue "metadata deferral agrees with the complete frontend"
+    (Formatter.Diagnostics.syntaxSignature (Lean.mkListNode parsed.commands)
+      == Formatter.Diagnostics.syntaxSignature (Lean.mkListNode reference.commands))
+  let result ← Formatter.formatSourceWithEnvDetailed env source fileName
+  assertTrue "deferred metadata formatting does not fall back" (!result.fellBack)
+  assertFrontendElaborates env result.formatted fileName
+  assertTrue "deferred metadata formatting preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  assertEq "deferred metadata formatting is idempotent" result.formatted
+    (← Formatter.formatSourceWithEnv env result.formatted fileName)
+
+def assertParserDeferralRejectsOverriddenMetadata (env : Lean.Environment) : IO Unit := do
+  let simpImpl ← IO.ofExcept <| Lean.getAttributeImpl env `simp
+  let attributes := Lean.attributeExtension.getState env
+  let replaced :=
+    Lean.attributeExtension.setState env
+      {
+        attributes with
+          map := attributes.map.insert `simp { simpImpl with ref := `Custom.simp }
+      }
+  let stx ←
+    IO.ofExcept
+    <| Lean.Parser.runParserCategory env `command
+        "@[simp] theorem evidence : True := by trivial"
+  assertTrue "attribute spelling does not establish parser-neutral implementation"
+    (SyntaxTree.commandParseAction replaced stx == .frontend)
+  let setups :=
+    [
+      (
+        "attribute macro",
+        "macro_rules\n  | `(attr| simp) => Lean.Macro.throwUnsupported\n",
+        "@[simp] theorem evidence : True := by trivial"
+      ),
+      (
+        "option wrapper macro",
+        "macro_rules\n"
+        ++ "  | `($cmd:command in $body:command) => Lean.Macro.throwUnsupported\n",
+        "set_option pp.universes true in def value := 0"
+      ),
+      (
+        "option wrapper scope",
+        "elab_rules : command\n  | `(section) => Lean.Elab.throwUnsupportedSyntax\n",
+        "set_option pp.universes true in def value := 0"
+      )
+    ]
+  for (label, setup, command) in setups do
+    let input := Lean.Parser.mkInputContext setup "overridden-parser-metadata.lean"
+    let (_, parserState, _) ← Lean.Parser.parseHeader input
+    let initial : SyntaxTree.ModuleParseState :=
+      { parserState, commandState := Lean.Elab.Command.mkState env }
+    let parsed ← SyntaxTree.replayModulePrefix input initial setup.rawEndPos
+    let stx ←
+      IO.ofExcept
+      <| Lean.Parser.runParserCategory parsed.commandState.env `command command
+    assertTrue s!"{label}: overridden metadata requires complete frontend state"
+      (SyntaxTree.commandParseAction parsed.commandState.env stx == .frontend)
 
 def assertParserCommandsObserveCompletePrefix (env : Lean.Environment) : IO Unit := do
   let declaration := "def parserSwitch := 0\n"
@@ -23684,6 +23796,8 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertFrontendReplayPreservesParserFacts env
   assertParserReplayStopsAtRequiredPrefix env
   assertParserCommandActions env
+  assertParserNeutralDeclarationsStayDeferred env
+  assertParserDeferralRejectsOverriddenMetadata env
   assertParserCommandsObserveCompletePrefix env
   assertOptionScopeDoesNotReplayDeclarations env
   assertMutualParserReplayIsDeferred env

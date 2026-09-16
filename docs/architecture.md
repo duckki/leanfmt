@@ -94,9 +94,17 @@ Formatting a file follows this pipeline:
    `ModuleParseState` keeps the parser position, command state, syntax, and let-body
    facts together. A fully elaborated checkpoint begins at the header. Quiet parsing
    postpones ordinary declarations, variable/universe declarations, include/omit
-   commands, and module documentation. Declaration attributes and deriving handlers
-   prevent postponement. The standard Mathlib and Batteries `lemma` implementations
-   share the ordinary-declaration policy; unknown command implementations do not.
+   commands, and module documentation. Deriving handlers and unaudited declaration
+   attributes prevent postponement. Core `simp`, `grind` (including its diagnostic
+   variants), and `extern` metadata can be postponed when their registered
+   implementation references match the audited core registrations and no attribute
+   syntax has a macro handler. The ordinary declaration elaborator's `expose` and
+   `no_expose` modifiers can likewise be postponed: it consumes them before running
+   attribute handlers. This is a bounded parser-effect classification, not a guess
+   based on attribute spelling or a general analysis of executable code. Unknown
+   attributes, attribute macros, and deriving hooks retain full replay. The standard
+   Mathlib and Batteries `lemma` implementations share the ordinary-declaration
+   policy; unknown command implementations do not.
    The classifier uses audited macro and command elaborator implementation names,
    not syntax names or Lean's `isBuiltin` flag (which also marks some local entries).
    Missing, replaced, and mixed-policy handlers use the frontend.
@@ -106,17 +114,21 @@ Formatting a file follows this pipeline:
    and macros must be the audited Lean implementations. Declaration-only membership
    leaves its element-expansion and preamble macros inactive; namespace/end handlers
    must also retain their standard scope policy because qualified names can expand to
-   a namespace wrapper. Attributes, deriving hooks, preambles, custom member macros,
-   and replaced handlers keep the block on the frontend path. Postponement does not
-   discard declarations or their proof bodies: the next environment-observing command
-   still replays the complete pending prefix.
+   a namespace wrapper. Parser-active attributes, deriving hooks, preambles, custom
+   member macros, and replaced handlers keep the block on the frontend path.
+   Postponement does not discard declarations or their proof bodies: the next
+   environment-observing command still replays the complete pending prefix.
 
    Standard namespace, section, end, and standalone `set_option` commands update the
    quiet parser scope. The audited option handler uses registered option declarations
    and literal values, updating scope options and the cached recursion limit without
-   observing pending declarations. `set_option ... in ...` is a separate wrapper and
-   retains frontend replay, as do replaced option handlers. Every other command,
-   including local syntax declarations, `run_cmd`, wrappers, attributes,
+   observing pending declarations. A `set_option ... in ...` wrapper can be postponed
+   when its body can be postponed, including nested wrappers and ordinary mutual
+   blocks. Lean's parser already applies the temporary option while parsing that
+   body. The wrapper macro, option handler, and generated section/end/local-scope
+   handlers must retain their audited implementations; otherwise it uses full
+   replay. The temporary scope has no persistent parser effect. Every other command,
+   including local syntax declarations, `run_cmd`, other wrappers, standalone attributes,
    and custom commands, runs through Lean's frontend with the complete preceding
    source state. The frontend processes only the pending prefix through that command;
    its result becomes the next checkpoint, and quiet parsing resumes. A successful
@@ -139,8 +151,9 @@ Formatting a file follows this pipeline:
    elaborator can inspect a theorem's proof term before registering syntax. Lean's
    asynchronous elaboration still computes those bodies and requires ownership of its
    tasks and diagnostics; it is not a selective source-dependency API. Replacing
-   declarations with headers, skipping attributes, or guessing dependencies is not
-   part of the parser recovery contract.
+   declarations with headers or guessing dependencies is not part of the parser
+   recovery contract. Postponed metadata is not discarded: an environment-observing
+   command replays the complete original prefix, including attributes and proofs.
    Info-tree collection is also observable through command state. Disabling it
    is not an assumed semantics-preserving optimization. Lean's minimal command-line
    snapshots discard the parsed syntax, parser state, and command scopes that

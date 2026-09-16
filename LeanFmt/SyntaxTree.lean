@@ -4424,7 +4424,7 @@ inductive CommandParseAction where
   | postpone
   | scope
   | frontend
-deriving BEq
+deriving BEq, Inhabited
 
 def commandHandlerParseAction : Name → CommandParseAction
   | `Lean.Elab.Command.elabNamespace
@@ -4442,11 +4442,42 @@ def commandHandlerParseAction : Name → CommandParseAction
   | `Lean.Elab.Command.elabModuleDoc => .postpone
   | _ => .frontend
 
-partial def syntaxHasElaborationHooks : Syntax → Bool
+private partial def syntaxHasAttributeMacro (env : Environment) : Syntax → Bool
   | Syntax.node _ kind children =>
-      kind == `Lean.Parser.Term.attributes
+      !(Elab.macroAttribute.getEntries env kind).isEmpty
+      || children.any (syntaxHasAttributeMacro env)
+  | _ => false
+
+private def attributeCanPostpone (env : Environment) (attrInstance : Syntax) : Bool :=
+  Id.run do
+    if syntaxHasAttributeMacro env attrInstance then
+      return false
+    let attr := attrInstance[1]
+    let name :=
+      if attr.isOfKind `Lean.Parser.Attr.simple then
+        attr[0].getId.eraseMacroScopes
+      else
+        match attr.getKind with
+        | .str _ name => Name.mkSimple name
+        | _ => .anonymous
+    -- These declaration modifiers are consumed by Lean before attribute handlers run.
+    if name == `expose || name == `no_expose then
+      return true
+    let .ok impl := getAttributeImpl env name | return false
+    -- Only audited core registrations qualify; similarly named extension attributes do not.
+    match name with
+    | `simp => return impl.ref == `Lean.Meta.simpExtension
+    | `grind | `grind! | `grind? | `grind!? =>
+        return impl.ref == `Lean.Meta.Grind.grindExt
+    | `extern => return impl.ref == `Lean.externAttr
+    | _ => return false
+
+partial def syntaxHasElaborationHooks (env : Environment) : Syntax → Bool
+  | Syntax.node _ kind children =>
+      (kind == `Lean.Parser.Term.attributes
+        && !(children[1]!.getSepArgs.all (attributeCanPostpone env)))
       || kind == `Lean.Parser.Command.derivingClass
-      || children.any syntaxHasElaborationHooks
+      || children.any (syntaxHasElaborationHooks env)
   | _ => false
 
 def commandHandlers (env : Environment) (kind : SyntaxNodeKind) : List Name :=
@@ -4471,11 +4502,27 @@ def isMutualCommandHandler : Name → Bool
   | `Lean.Elab.Command.expandMutualPreamble => true
   | _ => false
 
-def commandParseAction (env : Environment) (command : Syntax) : CommandParseAction :=
+partial def commandParseAction (env : Environment) (command : Syntax)
+    : CommandParseAction :=
   let directAction (command : Syntax) :=
     let action := commandKindParseAction env command.getKind
-    if action != .frontend && syntaxHasElaborationHooks command then .frontend else action
-  if command.isOfKind `Lean.Parser.Command.mutual then
+    if action != .frontend && syntaxHasElaborationHooks env command then
+      .frontend
+    else
+      action
+  if command.isOfKind `Lean.Parser.Command.in then
+    if commandHandlers env command.getKind == [`Lean.Elab.Command.expandInCmd]
+        && commandKindParseAction env `Lean.Parser.Command.section == .scope
+        && commandKindParseAction env `Lean.Parser.Command.end == .scope
+        && commandHandlers env `Lean.Parser.Command.InternalSyntax.end_local_scope
+            == [`Lean.Elab.Command.elabEndLocalScope]
+        && command[0].isOfKind `Lean.Parser.Command.set_option
+        && directAction command[0] == .scope
+        && commandParseAction env command[2] == .postpone then
+      .postpone
+    else
+      .frontend
+  else if command.isOfKind `Lean.Parser.Command.mutual then
     let handlers := commandHandlers env command.getKind
     let declarations := command[1].getArgs
     -- The namespace macro can emit scope commands; element and preamble macros must stay inactive.
