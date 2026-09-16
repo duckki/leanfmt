@@ -267,6 +267,11 @@ side-effectful tests. Each group loads only its required environments. Tests sha
 one lazily loaded `ProjectSyntax` environment within their process; import-loader
 checks keep their independent imports and run in separate subgroups.
 
+Negative tests capture and assert their expected stderr with `withExpectedStderr`.
+Matching diagnostics stay quiet; missing or extra output fails the test, and an
+unexpected exception replays captured diagnostics before propagating. Do not suppress
+stderr for a whole test group or change production diagnostics to quiet a test.
+
 Select a group with `lake exe testSuite basic-formatting` or
 `lake exe testSuite cli-architecture`. Selecting a parent also runs all its
 subgroups; an exact subgroup such as `cli-architecture/rootless-workers` runs

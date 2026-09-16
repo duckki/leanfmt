@@ -33,6 +33,47 @@ def assertTrue (label : String) (value : Bool) : IO Unit := do
   unless value do
     throw <| IO.userError s!"assertion failed: {label}"
 
+def withExpectedStderr (label expected : String) (action : IO α) : IO α := do
+  let buffer ← IO.mkRef ({} : IO.FS.Stream.Buffer)
+  let result ←
+    try
+      IO.withStderr (IO.FS.Stream.ofBuffer buffer) action
+    catch error =>
+      IO.eprint (String.fromUTF8! (← buffer.get).data)
+      throw error
+  assertEq label expected (String.fromUTF8! (← buffer.get).data)
+  return result
+
+def assertExpectedStderrCapture : IO Unit := do
+  let outer ← IO.mkRef ({} : IO.FS.Stream.Buffer)
+  IO.withStderr (IO.FS.Stream.ofBuffer outer) do
+    let result ←
+      withExpectedStderr "expected diagnostic" "expected\n" do
+        IO.eprintln "expected"
+        pure 7
+    assertTrue "stderr capture retains the result" (result == 7)
+    assertEq "expected diagnostics stay quiet" "" (String.fromUTF8! (← outer.get).data)
+    for actual in ["", "expected\nunexpected\n"] do
+      let rejected ←
+        try
+          withExpectedStderr "mismatched diagnostic" "expected\n" (IO.eprint actual)
+          pure false
+        catch error =>
+          pure (error.toString.startsWith "mismatched diagnostic mismatch")
+      assertTrue "missing or extra diagnostics fail the assertion" rejected
+    let failed ←
+      try
+        withExpectedStderr "failing action" "expected\n" do
+          IO.eprintln "before failure"
+          throw <| IO.userError "action failed"
+        pure false
+      catch error =>
+        pure (error.toString == "action failed")
+    assertTrue "stderr capture propagates action failures" failed
+    IO.eprintln "after capture"
+  assertEq "failures replay diagnostics and restore stderr"
+    "before failure\nafter capture\n" (String.fromUTF8! (← outer.get).data)
+
 partial def findTreeNode? (target : SyntaxTree.NodeKind)
     : SyntaxTree.Tree → Option SyntaxTree.Tree
   | tree@(.node kind children) =>
@@ -1199,8 +1240,11 @@ def assertDoBodyRetainsSourceLayoutToAvoidOverflow (env : Lean.Environment)
     ++ "\n"
     ++ "  | none => pure ()\n"
   let formatted ←
-    Formatter.formatSourceWithEnv env source "do-body-atomic-overflow.lean"
-      { lineWidth := 60 }
+    withExpectedStderr "atomic-overflow preservation warning"
+      "leanfmt: warning: using original source for do-body-atomic-overflow.lean: an intermediate result changed parsed syntax\n"
+        do
+      Formatter.formatSourceWithEnv env source "do-body-atomic-overflow.lean"
+        { lineWidth := 60 }
   assertTrue "do body source layout avoids introduced atomic overflow"
     (Formatter.linesFit formatted 60)
   assertTrue "do body source layout fallback preserves code"
@@ -1554,8 +1598,11 @@ def assertFormatterConvergencePassLimit : IO Unit := do
 
 def assertFormatterFallbackResultIsObservable (env : Lean.Environment) : IO Unit := do
   let result ←
-    Formatter.Internal.convergeSourceWithEnv env "def x := 1\n"
-      "forced-format-fallback.lean" 0
+    withExpectedStderr "convergence fallback warning"
+      "leanfmt: warning: using original source for forced-format-fallback.lean: formatting did not converge within 4 passes\n"
+        do
+      Formatter.Internal.convergeSourceWithEnv env "def x := 1\n"
+        "forced-format-fallback.lean" 0
   assertEq "formatter fallback returns original source" "def x := 1\n" result.formatted
   assertTrue "formatter fallback is observable" result.fellBack
 
@@ -15492,8 +15539,14 @@ def assertRecursiveWorkerChecksTargetToolchain : IO Unit := do
       IO.FS.createDirAll mismatching
       IO.FS.writeFile (mismatching / "lean-toolchain")
         s!"{LeanFmt.Driver.expectedLeanToolchain}-mismatch\n"
-      assertTrue "recursive worker rejects mismatching Lean toolchain"
-        (!(← LeanFmt.Driver.checkWorkerToolchain (some mismatching)))
+      let toolchain := LeanFmt.Driver.expectedLeanToolchain
+      let accepted ←
+        withExpectedStderr "worker toolchain mismatch diagnostic"
+          (s!"leanfmt: target package uses {toolchain}-mismatch, but this formatter was built with {toolchain}\n"
+            ++ "leanfmt: rebuild/run leanfmt with the target package's Lean toolchain, or rebuild the target package with this Lean version\n")
+            do
+          LeanFmt.Driver.checkWorkerToolchain (some mismatching)
+      assertTrue "recursive worker rejects mismatching Lean toolchain" (!accepted)
 
 def assertFormattingExceptionChecks (env : Lean.Environment) : IO Unit := do
   assertTrue "whitespace-only edits preserve code"
@@ -16293,19 +16346,29 @@ def assertCliChecksStillFormatUnlessCheck
   let afterExceptionFile := root / "AfterException.lean"
   let afterExceptionSource := "def  afterException  : Nat := 0\n"
   IO.FS.writeFile afterExceptionFile afterExceptionSource
+  let fallbackWarning :=
+    s!"leanfmt: warning: using original source for {overflowFile}: an intermediate result changed parsed syntax\n"
+  let fallbackCounts : LeanFmt.Driver.ExceptionCounts := { formatFallback := 1 }
+  let fallbackDiagnostics :=
+    fallbackWarning
+    ++ s!"format fallback: {overflowFile}\n"
+    ++ fallbackCounts.summary
+    ++ "\n"
   let overflowExitCode ←
-    LeanFmt.Driver.runOptionsWithLoader loader
-      {
-        checkException := true
-        workerDefaultEnvironment := true
-        formatterOptions := { lineWidth := 60 }
-        includeHidden := true
-        files := [overflowFile, afterExceptionFile]
-      }
+    withExpectedStderr "CLI fallback diagnostics" fallbackDiagnostics do
+      LeanFmt.Driver.runOptionsWithLoader loader
+        {
+          checkException := true
+          workerDefaultEnvironment := true
+          formatterOptions := { lineWidth := 60 }
+          includeHidden := true
+          files := [overflowFile, afterExceptionFile]
+        }
   assertTrue "CLI exception check rejects a format fallback" (overflowExitCode == 1)
   let overflowFormatted ←
-    Formatter.formatSourceWithEnv env overflowSource overflowFile.toString
-      { lineWidth := 60 }
+    withExpectedStderr "direct formatting fallback warning" fallbackWarning do
+      Formatter.formatSourceWithEnv env overflowSource overflowFile.toString
+        { lineWidth := 60 }
   assertEq "CLI exception failure writes the checked candidate"
     overflowFormatted (← IO.FS.readFile overflowFile)
   let afterExceptionFormatted ←
@@ -16314,15 +16377,16 @@ def assertCliChecksStillFormatUnlessCheck
     afterExceptionFormatted (← IO.FS.readFile afterExceptionFile)
   IO.FS.writeFile overflowFile overflowSource
   let checkedOverflowExitCode ←
-    LeanFmt.Driver.runOptionsWithLoader loader
-      {
-        check := true
-        checkException := true
-        workerDefaultEnvironment := true
-        formatterOptions := { lineWidth := 60 }
-        includeHidden := true
-        files := [overflowFile]
-      }
+    withExpectedStderr "dry-run fallback diagnostics" fallbackDiagnostics do
+      LeanFmt.Driver.runOptionsWithLoader loader
+        {
+          check := true
+          checkException := true
+          workerDefaultEnvironment := true
+          formatterOptions := { lineWidth := 60 }
+          includeHidden := true
+          files := [overflowFile]
+        }
   assertTrue "CLI checked exception still fails" (checkedOverflowExitCode == 1)
   assertEq "explicit check prevents writing a failing candidate"
     overflowSource (← IO.FS.readFile overflowFile)
@@ -18586,16 +18650,22 @@ def assertFrontendFallbackRejectsParserErrors (env : Lean.Environment) : IO Unit
       let file := root / "Invalid.lean"
       let loader : LeanFmt.Driver.EnvironmentLoader :=
         { default := env, lastExact := ← IO.mkRef none }
-      for source
+      for (source, diagnostic)
           in [
-            "namespace Int\ndef negative (n : Nat) : Int := -[n + 1]\nend Int\n",
-            droppedProofTail
+            (
+              "namespace Int\ndef negative (n : Nat) : Int := -[n + 1]\nend Int\n",
+              "2:39: error: unexpected token ']'; expected '+1]'"
+            ),
+            (droppedProofTail, "3:4: error: unexpected identifier; expected command")
           ] do
         for checkException in [false, true] do
           IO.FS.writeFile file source
           let before ← IO.FS.readBinFile file
           let exitCode ←
-            LeanFmt.Driver.runOptionsWithLoader loader { files := [file], checkException }
+            withExpectedStderr "invalid-source CLI diagnostic"
+              s!"leanfmt: {file}: failed to parse file:\n{file}:{diagnostic}\n\n" do
+              LeanFmt.Driver.runOptionsWithLoader loader
+                { files := [file], checkException }
           assertTrue "the CLI rejects parser recovery with or without diagnostics"
             (exitCode == 1)
           assertTrue "the CLI preserves every byte, including the unparsed proof tail"
@@ -20418,7 +20488,10 @@ def assertIgnoredChunksCannotChangeWholeFileSyntax (env : Lean.Environment)
         "def text := \"first\n-- leanfmt: off\nlast\"\n"
       ] do
     let result ←
-      Formatter.formatSourceWithEnvDetailed env source "unsafe-ignore-chunks.lean"
+      withExpectedStderr "ignored-region preservation warning"
+        "leanfmt: warning: using original source for unsafe-ignore-chunks.lean: ignored-region chunks did not preserve the complete source\n"
+          do
+        Formatter.formatSourceWithEnvDetailed env source "unsafe-ignore-chunks.lean"
     assertTrue "unsafe ignore chunks report the preservation fallback" result.fellBack
     assertEq "unsafe ignore chunks retain the complete original source" source
       result.formatted
@@ -23157,6 +23230,7 @@ def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertDelimitedCollectionsFlattenOnlySeparatedItems
 
 def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
+  assertExpectedStderrCapture
   assertUnaryPrefixPreservesSourceTightness env
   assertUnaryPrefixOperandWrapsStructurally env
   assertReviewedMathlibConsistencyShapes env
