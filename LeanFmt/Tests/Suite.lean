@@ -326,6 +326,61 @@ def assertPreservationDetectsSyntaxChange (env : Lean.Environment) : IO Unit := 
   assertTrue "preservation rejects syntax-significant whitespace changes"
     (!(← codePreservedIgnoringWhitespace env source changed))
 
+def assertPreservationCommentCursor (env : Lean.Environment) : IO Unit := do
+  let moduleComment := "/-! Module α. -/"
+  let blocks :=
+    (List.range 32).map
+      fun index =>
+        s!"/-- Value {index}: /- nested -/. -/\ndef value{index} : String := \"/-- literal -/\" -- tail {index}\n"
+  let source := moduleComment ++ "\n" ++ String.join blocks
+  let parsed ← SyntaxTree.parseModuleStringWithEnv env source "comment-cursor.lean"
+  let fragments :=
+    Formatter.Diagnostics.preservationSyntaxComment moduleComment
+    :: (List.range 32).flatMap
+        fun index =>
+          [
+            Formatter.Diagnostics.preservationSyntaxComment
+              s!"/-- Value {index}: /- nested -/. -/",
+            .code "def",
+            .code s!"value{index}",
+            .code ":",
+            .code "String",
+            .code ":=",
+            .code "\"/-- literal -/\"",
+            .comment s!"-- tail {index}" s!"-- tail {index}"
+          ]
+  let expected := fragments.intersperse .space
+  assertTrue "comment cursors preserve ordered code, nested comments, and string literals"
+    (Formatter.Diagnostics.preservationFragments parsed == expected)
+  let comments :=
+    parsed.tree.syntaxCommentSpans.map
+      fun span =>
+        SyntaxTree.Tree.node (.raw `Lean.Parser.Command.moduleDoc)
+          ((parsed.tokens.filter
+              fun token =>
+                span.start <= token.span.start && token.span.stop <= span.stop).map
+            .leaf)
+  for reordered
+      in [
+        comments.reverse,
+        comments ++ comments,
+        comments.flatMap (fun tree => [tree, tree])
+      ] do
+    let reorderedModule := { parsed with tree := .node (.raw `null) reordered.toArray }
+    assertTrue "unordered or overlapping comment spans retain first-match behavior"
+      (Formatter.Diagnostics.preservationFragments reorderedModule == expected)
+  let outer :=
+    SyntaxTree.Tree.node (.raw `Lean.Parser.Command.moduleDoc)
+      #[comments[0]!, comments[1]!]
+  let overlapping :=
+    { parsed with tree := .node (.raw `null) (outer :: comments).toArray }
+  let combined :=
+    Formatter.Diagnostics.preservationSyntaxComment
+      (moduleComment ++ "\n/-- Value 0: /- nested -/. -/")
+  assertTrue "overlapping spans prefer the first containing comment, not the smallest"
+    (Formatter.Diagnostics.preservationFragments overlapping
+      == (combined :: fragments.drop 2).intersperse .space)
+
 def assertOverlappingQuotationTokensRemoved (env : Lean.Environment) : IO Unit := do
   let source :=
     "syntax \"field \" str \"{\" term,* \"}\" : term\n"
@@ -23320,6 +23375,7 @@ def runSyntaxTreeTests (env : Lean.Environment) : IO Unit := do
   assertUnifHintChildrenRegrouped
   assertLocalDeclarationSignatureRegrouped env
   assertPreservationDetectsSyntaxChange env
+  assertPreservationCommentCursor env
   assertOverlappingQuotationTokensRemoved env
   assertTacticQuotationAntiquotationPreserved env
   assertFullyQualifiedQuotedNamesStayTight env

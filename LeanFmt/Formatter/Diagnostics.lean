@@ -397,13 +397,27 @@ def commentSpanForToken? (spans : List SyntaxTree.Span) (token : SyntaxTree.Toke
 def preservationFragments (moduleTree : SyntaxTree.Module) : List PreservationFragment :=
   let tokens := (sourceLexicalTokens moduleTree).toList
   let syntaxCommentSpans := moduleTree.tree.syntaxCommentSpans
-  let (fragments, consumedUntil, consumedColumn) :=
+  let orderedComments :=
+    (syntaxCommentSpans.zip (syntaxCommentSpans.drop 1)).all
+      fun (previous, next) => previous.stop <= next.start
+  let (fragments, consumedUntil, consumedColumn, _) :=
     tokens.foldl
-      (fun (fragments, consumedUntil, consumedColumn) token =>
+      (fun (fragments, consumedUntil, consumedColumn, commentSpans) token =>
         if token.span.stop <= consumedUntil then
-          (fragments, consumedUntil, consumedColumn)
+          (fragments, consumedUntil, consumedColumn, commentSpans)
         else
-          match commentSpanForToken? syntaxCommentSpans token with
+          -- Unconsumed token ends advance monotonically, so expired spans cannot match again.
+          let commentSpans :=
+            if orderedComments then
+              commentSpans.dropWhile (fun span => span.stop < token.span.stop)
+            else
+              commentSpans
+          let commentSpan? :=
+            if orderedComments then
+              commentSpanForToken? (commentSpans.take 1) token
+            else
+              commentSpanForToken? commentSpans token
+          match commentSpan? with
           | some span =>
               let leadingText :=
                 if consumedUntil < span.start then
@@ -419,7 +433,12 @@ def preservationFragments (moduleTree : SyntaxTree.Module) : List PreservationFr
                     fragments)
                   |>.push
                 <| preservationSyntaxComment commentText
-              (fragments, span.stop, columnAfterText commentColumn commentText)
+              (
+                fragments,
+                span.stop,
+                columnAfterText commentColumn commentText,
+                commentSpans
+              )
           | none =>
               let leadingText :=
                 if consumedUntil < token.span.start then
@@ -436,8 +455,13 @@ def preservationFragments (moduleTree : SyntaxTree.Module) : List PreservationFr
                 else
                   fragments.push (.code token.lexeme)
               let tokenColumn := columnAfterText consumedColumn leadingText
-              (fragments, token.span.stop, columnAfterText tokenColumn token.lexeme))
-      (#[], 0, 0)
+              (
+                fragments,
+                token.span.stop,
+                columnAfterText tokenColumn token.lexeme,
+                commentSpans
+              ))
+      (#[], 0, 0, syntaxCommentSpans)
   let trailingSource :=
     SyntaxTree.sourceText moduleTree.source consumedUntil moduleTree.source.endPos.offset
   (fragments.toList ++ commentFragments trailingSource consumedColumn).intersperse .space

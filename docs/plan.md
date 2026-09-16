@@ -18,21 +18,22 @@ Hex's `conformance/HexGFq/CrossCheck.lean` still exceeds the 6 GiB validation
 budget. An isolated parser trace reaches 6.16 GiB in 18.8s during the prefix replay
 from line 974 through the `#guard` at line 1110. The resumed formatter stops in
 batch 9 of 9; the other 72 files pass independently. Source files remain untouched
-and output remains staged. No formatter
-diagnostic precedes the resource stop. `#guard` and unknown handlers still receive
-complete preceding declarations and proofs. Do not bypass them or substitute
-incomplete proof state to claim a passing validation.
+and output remains staged. Native Lean with one thread also exceeds 6 GiB on the
+same original file (6.14 GiB in 22.2s); the limit is not specific to leanfmt's replay
+path. No formatter diagnostic precedes the resource stop. `#guard` and unknown
+handlers still receive complete preceding declarations and proofs. Do not bypass
+them or substitute incomplete proof state to claim a passing validation.
 
 ## Progress
 
 ### Required replay memory checkpoint
 
-Profile the remaining cross-check prefix against native Lean elaboration to
-separate unavoidable proof cost from retained frontend state. Reduce retention only
-with equivalent observer state and independent idempotency parsing. Any broader
-effect classification needs a separate audit; do not add a blanket `#guard`
-exemption. Complete batch 9 under a compressed-inclusive memory bound before
-claiming the Hex checkpoint.
+Choose an explicit validation resource budget for the native Lean workload, or
+review a narrower parser-effect contract before changing which commands run.
+Do not assume a formatter-only retention fix can make this file fit 6 GiB.
+Preserve equivalent observer state and independent idempotency parsing; do not add
+a blanket `#guard` exemption. Complete batch 9 under the agreed compressed-inclusive
+memory bound before claiming the Hex checkpoint.
 
 ### Release validation
 

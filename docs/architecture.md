@@ -1804,6 +1804,12 @@ not stable rule targets. Diagnostic analysis and the exception model live in
 `Formatter.Diagnostics`; trace and profiling APIs live under `Formatter.Debug`;
 convergence and shared pipeline phases live under `Formatter.Internal`.
 
+The preservation scan advances a comment-span cursor alongside source-ordered tokens
+when syntax-comment spans are ordered and disjoint. Unordered or overlapping spans
+retain the original first-containing-span lookup. Convergence extracts each side's
+fragments once, then checks syntax separately; mismatch diagnostics use those same
+fragments. Neither optimization changes the preservation relation or parser replay.
+
 Ignored-region chunks also pass a whole-file parse and syntax-preservation check.
 Chunks can lose an enclosing namespace or split a declaration; if a chunk cannot be
 parsed or the assembled result differs structurally, formatting retains the complete
