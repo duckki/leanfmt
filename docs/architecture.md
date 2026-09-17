@@ -215,7 +215,11 @@ Formatting a file follows this pipeline:
    libraries listed in `LEANFMT_LOAD_DYNLIBS` through Lean's dynamic-library API. It
    initializes parser plugins listed in `LEANFMT_LOAD_PLUGINS` inside Lean's importing
    context and carries both requests into every worker, keeping worker and
-   single-process behavior equivalent.
+   single-process behavior equivalent. The public `fmt` executable links against
+   Lean's shared runtime through Lake's `moreLinkArgs`, so native plugins and the
+   executable use the same allocator, interpreter, and initialization state.
+   `supportInterpreter` alone uses a static runtime on non-Windows platforms and
+   is insufficient for this contract. Plugin requests are never discarded.
 
    An imported worker skips the formatter's default `Lean` environment, reads its
    group's header first, and asks Lean to construct that one exact environment with

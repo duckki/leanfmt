@@ -6,20 +6,6 @@ release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Native Lake plugin startup
-
-On macOS with Lean 4.34.0, the normal statically linked `fmt` crashes while
-loading `libLake_shared.dylib`, even when formatting `def smoke := 1`.
-Loading native FFI libraries alone succeeds. Importing Lake in a temporary
-launcher does not fix it. Relinking the same formatter objects with Lean's
-shared-runtime linker flags passes all three probes and completes CrossCheck.
-This is an executable/runtime integration issue, not a layout failure; its
-introduction has not been dated to a particular Lean version.
-
-The shared-runtime executable is an untracked experiment, not a production fix.
-Establish a supported plugin-compatible build configuration and add a real
-plugin-loading regression test before broader validation or release.
-
 ### Hex certificate proof memory
 
 ```lean
@@ -35,14 +21,18 @@ with a 12 GiB ceiling and critical-pressure/low-disk safeguards show:
 | Run | Time | Peak process-group footprint |
 | --- | --- | --- |
 | Native `lake build +HexGFq.CrossCheck`, dependencies already built | 31.3s | 6.383 GiB |
-| Width-100 formatting, preservation, overflow, and independent idempotency | 136.9s | 9.269 GiB |
+| Production width-100 formatting, preservation, overflow, and independent idempotency | 136.3s | 9.270 GiB |
+| Same checks, scratch control omitting the unused default import | 126.7s | 7.255 GiB |
 
-The formatter run used the temporary shared-runtime executable described above.
-All requested diagnostics passed, with the proof unchanged. Memory repeatedly
-returned to roughly 2.7 GiB between spikes; system pressure briefly reached warning,
-not critical. The previous 6 GiB stops were resource cutoffs, not completed-run
-peaks or proof failures. This comparison includes validation overhead and does
-not isolate layout memory or plain formatting alone.
+The production run uses the supported shared-runtime link configuration.
+Both formatter runs pass every requested diagnostic and produce byte-identical
+output, with the proof unchanged. Omitting only the unused default environment
+reduces the measured peak by 2.015 GiB (about 22%). The control retains the direct
+path's exact imports and `leakEnv := false` policy. Memory returns to roughly
+0.9 GiB between spikes instead of 2.7-2.8 GiB, and system pressure stays normal;
+the production run briefly reaches warning, not critical. These are single-run
+measurements, not a broad performance benchmark. The previous 6 GiB stops were
+resource cutoffs, not completed-run peaks or proof failures.
 
 Earlier command-by-command and isolated-proof controls located the spike in
 `N32.packedCert_check`, before the replay-triggering `#guard`. On Hex
@@ -52,17 +42,21 @@ in 72.7s / 2.60 GiB. This remains a possible target-project improvement, not a
 formatter transformation or a same-revision comparison with the current results.
 
 The completed run covers one file, not all of current Hex or a post-format build.
-Formatted output is under `.scratch/hex434-format-complete/CrossCheck.lean`;
+Production output is under `.scratch/hex434-runtime-fixed/CrossCheck.lean`, with
+the matching control under `.scratch/hex434-no-default/CrossCheck.lean`;
 the Hex checkout remains unchanged. Old validator manifests, staging, and batch
 logs belong to the previous revision and cannot resume this checkout's validation.
 
+An imports-only control with `import HexGFq.Basic` takes 6.5s / 2.371 GiB through
+the production direct path, versus 3.1s / 0.357 GiB when a scratch launcher omits
+only the unused default `Lean` import. Both use the same exact import policy,
+native libraries, plugins, and checks. The direct path currently constructs both
+environments eagerly; exact workers already omit the default environment. The
+control is not a production memory fix: make the default environment lazy and
+memoized per loader, preserving exact-header selection and the existing worker
+lifetime policy. Do not substitute an empty environment for default-only scripts.
+
 ## Progress
-
-### Plugin-compatible executable checkpoint
-
-Resolve the static/shared runtime startup failure with a supported build change,
-not by dropping required plugins. Validate the minimal Lake-plugin reproduction,
-existing compatibility toolchains, and Hex's full declared runtime load order.
 
 ### Required replay memory checkpoint
 
@@ -70,9 +64,13 @@ Lean 4.34.0 is installed, and the formatter's build, unit tests, linter, fixture
 preservation, overflow, and idempotency checks pass without fixture changes.
 The 4.33.1 compatibility smoke also passes with its import-heavy groups isolated
 in sequential processes (2.41 GiB peak; the combined runner exceeded 6 GiB).
-Current CrossCheck passes checked formatting under the larger experimental budget,
-but formatter validation uses about 45% more peak memory than native compilation.
-Profile the extra retained state separately from required proof reduction. Review
+Current CrossCheck passes checked formatting with the supported executable, but
+the eager default import adds approximately 2 GiB in the controlled comparison.
+Implement lazy default-environment loading first, with tests for unused defaults,
+default-only scripts, exact imports, and mixed workers. Repeat the local gate and
+the same CrossCheck comparison; require unchanged output and diagnostics. The
+control still peaks above native compilation (7.255 versus 6.383 GiB), so continue
+profiling remaining retained state separately from required proof reduction. Review
 and retest `decide +kernel` in Hex only as an explicit target-project change.
 Do not rewrite proofs during parsing, disable info trees, or add a blanket `#guard`
 exemption: unknown handlers must still observe
@@ -146,6 +144,13 @@ plus improved scaling in the stress controls. Prefix replay remains separately
 subject to complete-state equivalence for commands without a neutral contract.
 
 ## Validation Standard
+
+The native plugin startup fix links `fmt` against `libleanshared` through Lake's
+`moreLinkArgs`. The new direct/worker regression reproduces exit 139 without that
+setting and passes with it. The full local gate passes without fixture drift
+(220.3s / 4.055 GiB), and all compatibility suites pass on Lean 4.30.0, 4.31.0,
+4.32.0, and 4.33.1 (serially, 179.6s / 2.407 GiB). These are local macOS results;
+the added macOS CI job and existing Linux CI still need remote execution.
 
 Run focused checks, then the complete local gate:
 

@@ -78,3 +78,16 @@ jobs:
           use-github-cache: false
       - name: Run compatibility smoke tests
         run: lake exe compatibilityTest
+
+  runtime-loading:
+    name: Native plugin loading
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+        with:
+          build-args: --wfail
+          test: false
+          lint: false
+      - name: Check native runtime and worker plugin loading
+        run: lake exe compatibilityTest --run-group runtime-loading

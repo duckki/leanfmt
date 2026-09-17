@@ -9,6 +9,7 @@ import LeanFmt.Tests.ProjectSyntax
 import LeanFmt.Tests.RegisteredFormatAudit
 import LeanFmt.Tests.WorkerOutput
 import LeanFmt.Tests.ParserEffects
+import LeanFmt.Tests.RuntimeLoading
 
 open System
 
@@ -23926,6 +23927,7 @@ def testGroups : Array (String × IO Unit) :=
       "cli-architecture/imported-keywords",
       withDefaultEnvironment assertImportedKeywordUsesExactEnvironment
     ),
+    ("cli-architecture/runtime-loading", RuntimeLoading.run),
     ("cli-architecture/rootless-workers", assertRootlessWorkersKeepAmbientEnvironment),
     ("cli-architecture/lake-dsl", assertLakeDslFormatting)
   ]

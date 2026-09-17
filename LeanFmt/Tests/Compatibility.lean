@@ -3,6 +3,7 @@ import LeanFmt.Cli
 import LeanFmt.Tests.ExportedModuleSyntax
 import LeanFmt.Tests.MetaImportRoot
 import LeanFmt.Tests.ProjectSyntax
+import LeanFmt.Tests.RuntimeLoading
 
 namespace LeanFmt.Tests.Compatibility
 
@@ -151,6 +152,7 @@ private def runCore : IO Unit := do
 def testGroups : List (String × IO Unit) :=
   [
     ("core", runCore),
+    ("runtime-loading", RuntimeLoading.run),
     ("import-prefix", assertImportPrefixReuse),
     ("exported-imports", assertExportedEnvironment)
   ]

@@ -17,6 +17,8 @@ roots = ["LeanFmt.Tests.Suite"]
 name = "fmt"
 root = "LeanFmt.Main"
 supportInterpreter = true
+# Native plugins must share the executable's Lean runtime.
+moreLinkArgs = ["-lleanshared"]
 
 [[lean_exe]]
 name = "fmt-test"
