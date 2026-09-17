@@ -6,7 +6,8 @@ examples, see [design.md](design.md). For the implementation model, see
 
 ## Prerequisites
 
-leanfmt is a Lake package. Use the repository's pinned toolchain:
+leanfmt is a Lake package. The current development toolchain is Lean 4.34.0;
+use the repository's pin:
 
 ```sh
 cat lean-toolchain
@@ -106,6 +107,10 @@ executable, then run the isolated `compatibilityTest` smoke executable. The
 compatibility smoke module does not import the comprehensive current-toolchain
 test suite, so growth in that suite cannot increase the elaboration cost of
 compatibility testing.
+The smoke runner also uses sequential subprocesses for its core, import-prefix,
+and exported-import groups. Imported regions from one group must be released by
+process exit before the next group starts; dropping environment references alone
+does not bound their combined memory footprint.
 The smoke suite checks parsing, formatting, preservation, idempotency, CLI
 parsing, exact environment loading, and executable configuration without
 asserting parser-version-specific layouts. Linting, fixtures, comprehensive
@@ -459,6 +464,15 @@ width 100, preservation, idempotency, one worker, and compressed-inclusive memor
 measurement. This avoids an unnecessary proof replay, not the cost of an arbitrary
 proof that a later genuine observer requires. Do not replace such proofs or suppress
 diagnostics when a bounded validation run stops.
+
+For a remaining replay memory spike, compare native Lean on the unchanged source,
+then isolate the last elaborating command. A replay trigger can be later than the
+expensive declaration. Hex's `conformance/HexGFq/CrossCheck.lean`, for example,
+triggers replay at `#guard`, but its degree-32 `packedCert_check` proof is where
+plain `decide` exceeds the memory bound. A separate copy using `decide +kernel`
+builds with much less memory. Such a change belongs in the target project: it must
+not be applied silently by the formatter or counted as validation of the original
+revision. Native, original, and modified-source measurements are separate controls.
 
 ### Local performance controls
 

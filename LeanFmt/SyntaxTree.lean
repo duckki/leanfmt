@@ -4434,6 +4434,7 @@ def commandHandlerParseAction : Name → CommandParseAction
   | `Lean.Elab.Command.elabSetOption => .scope
   | `Lean.Elab.Command.elabDeclaration
   | `Lean.Elab.Command.expandNamespacedDeclaration
+  | `Lean.Elab.Tactic.Do.expandDefContract
   | `expandLemma
   | `Batteries.Tactic.Lemma.elabLemma
   | `Lean.Elab.Command.elabVariable
@@ -4478,6 +4479,8 @@ partial def syntaxHasElaborationHooks (env : Environment) : Syntax → Bool
       (kind == `Lean.Parser.Term.attributes
         && !(children[1]!.getSepArgs.all (attributeCanPostpone env)))
       || kind == `Lean.Parser.Command.derivingClass
+      -- Contract expansion generates an attributed spec theorem not present in the source tree.
+      || kind == `Lean.Parser.Command.contractDeclVal
       || children.any (syntaxHasElaborationHooks env)
   | _ => false
 

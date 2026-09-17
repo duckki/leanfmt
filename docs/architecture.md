@@ -107,6 +107,10 @@ Formatting a file follows this pipeline:
    attributes, attribute macros, and deriving hooks retain full replay. The standard
    Mathlib and Batteries `lemma` implementations share the ordinary-declaration
    policy; unknown command implementations do not.
+   Lean 4.34's `expandDefContract` macro is inactive on ordinary declarations, so
+   it does not prevent their postponement. Actual contract-bearing values retain
+   full replay: their expansion introduces an attributed specification theorem
+   whose metadata is not visible in the original declaration tree.
    The classifier uses audited macro and command elaborator implementation names,
    not syntax names or Lean's `isBuiltin` flag (which also marks some local entries).
    Missing, replaced, and mixed-policy handlers use the frontend.

@@ -139,20 +139,49 @@ private def assertExecutableConfiguration : IO Unit := do
   assertContains "compatibility smoke builds fmt first" lakefile
     "name = \"compatibilityTest\""
 
-def run : IO Unit := do
-  Lean.initSearchPath (← Lean.findSysroot)
+private def runCore : IO Unit := do
   let env ← Formatter.defaultEnvironment
   assertSyntaxTreeRoundTrip env
   assertFormattingInvariants env
   assertCliParsing
   assertSourceImportLevels
   assertEnvironmentKeys
-  assertImportPrefixReuse
-  assertExportedEnvironment
   assertExecutableConfiguration
+
+def testGroups : List (String × IO Unit) :=
+  [
+    ("core", runCore),
+    ("import-prefix", assertImportPrefixReuse),
+    ("exported-imports", assertExportedEnvironment)
+  ]
 
 end LeanFmt.Tests.Compatibility
 
-def main (_args : List String) : IO UInt32 := do
-  LeanFmt.Tests.Compatibility.run
-  pure 0
+def main (args : List String) : IO UInt32 := do
+  if let ["--run-group", name] := args then
+    let some (_, group) :=
+      LeanFmt.Tests.Compatibility.testGroups.find?
+        (fun (groupName, _) => groupName == name)
+    | throw <| IO.userError s!"unknown compatibility test group: {name}"
+    Lean.initSearchPath (← Lean.findSysroot)
+    group
+    return 0
+  unless args.isEmpty do
+    throw <| IO.userError "usage: compatibilityTest [--run-group NAME]"
+  let executable ← IO.appPath
+  for (name, _) in LeanFmt.Tests.Compatibility.testGroups do
+    IO.eprintln s!"compatibility test group: {name}"
+    let child ←
+      IO.Process.spawn
+        {
+          cmd := executable.toString
+          args := #["--run-group", name]
+          stdin := .null
+          stdout := .inherit
+          stderr := .inherit
+        }
+    let exitCode ← child.wait
+    if exitCode != 0 then
+      IO.eprintln s!"compatibility test group failed: {name} (exit {exitCode})"
+      return exitCode
+  return 0

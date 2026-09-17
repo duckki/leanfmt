@@ -20197,6 +20197,19 @@ def assertParserCommandActions (env : Lean.Environment) : IO Unit := do
       ),
       ("open Nat in\ndef value := 0", .postpone)
     ]
+  let cases :=
+    if env.contains `Lean.Elab.Tactic.Do.expandDefContract then
+      cases
+      ++ [
+        ("def value : Id Nat requires True := pure 0", .frontend),
+        ("def value : Id Nat ensures result => result = 0 := pure 0", .frontend),
+        (
+          "set_option maxRecDepth 2048 in\ndef value : Id Nat requires True := pure 0",
+          .frontend
+        )
+      ]
+    else
+      cases
   for (source, expected) in cases do
     let command ← IO.ofExcept <| Lean.Parser.runParserCategory env `command source
     assertTrue s!"command parser action: {source}"
