@@ -10,6 +10,7 @@ import LeanFmt.Tests.RegisteredFormatAudit
 import LeanFmt.Tests.WorkerOutput
 import LeanFmt.Tests.ParserEffects
 import LeanFmt.Tests.RuntimeLoading
+import LeanFmt.Tests.EnvironmentLoading
 
 open System
 
@@ -15175,7 +15176,8 @@ def assertLineWidthOptionAffectsFormatting (env : Lean.Environment) : IO Unit :=
 
 def assertEnvironmentLoaderKeepsOnlyLastExact (env : Lean.Environment) : IO Unit := do
   let lastExact ← IO.mkRef none
-  let loader : LeanFmt.Driver.EnvironmentLoader := { default := env, lastExact }
+  let loader : LeanFmt.Driver.EnvironmentLoader :=
+    { default := ← IO.mkRef (some env), lastExact }
   loader.rememberExactEnvironment "first" env
   assertTrue "environment loader reuses the last exact environment"
     (← loader.lastExactEnvironment? "first").isSome
@@ -15268,7 +15270,8 @@ def assertDefaultEnvironmentPartition (env : Lean.Environment) : IO Unit := do
   IO.FS.withTempDir
     fun root => do
       let lastExact ← IO.mkRef none
-      let loader : LeanFmt.Driver.EnvironmentLoader := { default := env, lastExact }
+      let loader : LeanFmt.Driver.EnvironmentLoader :=
+        { default := ← IO.mkRef (some env), lastExact }
       let ordinary := root / "Ordinary.lean"
       let importedOrdinary := root / "ImportedOrdinary.lean"
       let importedSyntax := root / "ImportedSyntax.lean"
@@ -15288,7 +15291,7 @@ def assertDefaultEnvironmentPartition (env : Lean.Environment) : IO Unit := do
 
 def assertImportedKeywordUsesExactEnvironment (env : Lean.Environment) : IO Unit := do
   let loader : LeanFmt.Driver.EnvironmentLoader :=
-    { default := env, lastExact := ← IO.mkRef none }
+    { default := ← IO.mkRef (some env), lastExact := ← IO.mkRef none }
   for header
       in [
         "import LeanFmt.Tests.ExportedModuleSyntax\n",
@@ -15507,7 +15510,8 @@ def assertRootlessWorkersKeepAmbientEnvironment : IO Unit := do
             "Third.lean",
             "import LeanFmt.Tests.ExportedModuleSyntax\n\ndef third := exported_keyword% 2\n"
           ),
-          ("Ordinary.lean", "def ordinary := 0\n")
+          ("Ordinary.lean", "def ordinary := 0\n"),
+          ("Another.lean", "def another := 1\n")
         ]
       let files := sources.map fun (name, _) => root / name
       for (name, source) in sources do
@@ -15546,6 +15550,9 @@ def assertRootlessWorkersKeepAmbientEnvironment : IO Unit := do
         assertEq "rootless multi-file validation succeeds" "0" (toString output.exitCode)
         assertTextContains "rootless inputs use exact-environment workers" output.stderr
           s!"environment=exact files=3 environments=2 batches=2 jobs={jobs} environments-per-worker=1"
+        if jobs == 2 then
+          assertTextContains "rootless default files also use isolated workers"
+            output.stderr "environment=default files=2 environments=1 batches=2 jobs=2"
         let completed :=
           output.stderr.splitOn "\n"
           |>.filter (fun line => textContains line "worker-batch:")
@@ -18706,7 +18713,7 @@ def assertFrontendFallbackRejectsParserErrors (env : Lean.Environment) : IO Unit
     fun root => do
       let file := root / "Invalid.lean"
       let loader : LeanFmt.Driver.EnvironmentLoader :=
-        { default := env, lastExact := ← IO.mkRef none }
+        { default := ← IO.mkRef (some env), lastExact := ← IO.mkRef none }
       for (source, diagnostic)
           in [
             (
@@ -23810,7 +23817,8 @@ def runCollectionAndDeclarationTests (env : Lean.Environment) : IO Unit := do
 def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Unit := do
   Lean.initSearchPath (← Lean.findSysroot)
   let lastExact ← IO.mkRef none
-  let loader : LeanFmt.Driver.EnvironmentLoader := { default := env, lastExact }
+  let loader : LeanFmt.Driver.EnvironmentLoader :=
+    { default := ← IO.mkRef (some env), lastExact }
   assertCliParsing
   assertEnvironmentLoaderKeepsOnlyLastExact env
   assertSourceImportsUseLeanHeaderLevel
@@ -23927,6 +23935,7 @@ def testGroups : Array (String × IO Unit) :=
       "cli-architecture/imported-keywords",
       withDefaultEnvironment assertImportedKeywordUsesExactEnvironment
     ),
+    ("cli-architecture/environment-loading", EnvironmentLoading.run),
     ("cli-architecture/runtime-loading", RuntimeLoading.run),
     ("cli-architecture/rootless-workers", assertRootlessWorkersKeepAmbientEnvironment),
     ("cli-architecture/lake-dsl", assertLakeDslFormatting)

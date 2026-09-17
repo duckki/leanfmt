@@ -557,7 +557,10 @@ def formatDefaultEnvironmentFiles
     (loader : EnvironmentLoader) (options : Options) (files : List FilePath)
     : IO UInt32 := do
   let (outcomes, elapsedMs) ←
-    timeIO <| files.mapM (formatFileWithEnv loader.default options)
+    timeIO do
+      if files.isEmpty then return []
+      let environment ← loader.defaultEnvironment
+      files.mapM (formatFileWithEnv environment options)
   profileLine options
     s!"default-environment-files: files={files.length} elapsed={elapsedMs}ms"
   summarizeOutcomes options outcomes

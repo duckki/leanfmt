@@ -12,7 +12,7 @@ structure ImportPrefixCache where
   entries : IO.Ref (List (String × LeanEnvironment.ImportPrefixState))
 
 structure EnvironmentLoader where
-  default : Lean.Environment
+  default : IO.Ref (Option Lean.Environment)
   lastExact : IO.Ref (Option (String × Lean.Environment))
   importPrefixes? : Option ImportPrefixCache := none
   leakExact : Bool := false
@@ -96,11 +96,7 @@ def ImportPrefixCache.importEnvironment
 def loadEnvironmentLoader (options : Options) : IO EnvironmentLoader := do
   Lean.initSearchPath (← Lean.findSysroot)
   let exactWorker := isExactEnvironmentWorker options
-  let default ←
-    if exactWorker then
-      Lean.mkEmptyEnvironment
-    else
-      Formatter.defaultEnvironment
+  let default ← IO.mkRef none
   let lastExact ← IO.mkRef none
   let importPrefixes? ←
     if shouldReuseImportPrefixes options then
@@ -115,6 +111,15 @@ def loadEnvironmentLoader (options : Options) : IO EnvironmentLoader := do
       leakExact := exactWorker
       parserIntegrations := options.parserIntegrations
     }
+
+def EnvironmentLoader.defaultEnvironment (loader : EnvironmentLoader)
+    : IO Lean.Environment := do
+  match ← loader.default.get with
+  | some environment => pure environment
+  | none =>
+      let environment ← Formatter.defaultEnvironment
+      loader.default.set (some environment)
+      pure environment
 
 def EnvironmentLoader.lastExactEnvironment? (loader : EnvironmentLoader) (key : String)
     : IO (Option Lean.Environment) := do
@@ -132,7 +137,7 @@ def EnvironmentLoader.environmentForSpec
     (loader : EnvironmentLoader) (spec : LeanEnvironment.Spec)
     : IO EnvironmentResult := do
   if !loader.leakExact && usesDefaultEnvironment spec then
-    pure { environment := loader.default, origin := .default }
+    pure { environment := ← loader.defaultEnvironment, origin := .default }
   else
     let key := spec.key
     match ← loader.lastExactEnvironment? key with

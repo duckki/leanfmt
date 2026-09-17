@@ -198,6 +198,11 @@ Formatting a file follows this pipeline:
    A successful parse with fewer imports cannot establish equivalent syntax: an
    imported keyword can otherwise parse as an identifier and an operator. Only
    scripts with no imports beyond implicit `Init` use the default environment.
+   The default `Lean` environment is created on first use and memoized per loader.
+   Loader construction, header classification, empty batches, and imported-only
+   formatting do not import it. Default and exact caches remain independent;
+   default-only scripts still receive the complete default environment. Environment
+   selection runs serially within each process, before formatting the selected files.
    For multi-file formatting, a bounded parallel classification pass reads
    each file once, selects its environment from the header, and records its source
    size. Files that use the default environment are sorted by size and spread across

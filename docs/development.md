@@ -108,9 +108,9 @@ compatibility smoke module does not import the comprehensive current-toolchain
 test suite, so growth in that suite cannot increase the elaboration cost of
 compatibility testing.
 The smoke runner also uses sequential subprocesses for its core, runtime-loading,
-import-prefix, and exported-import groups. Imported regions from one group must
-be released by process exit before the next group starts; dropping environment
-references alone does not bound their combined memory footprint.
+environment-loading, import-prefix, and exported-import groups. Imported regions
+from one group must be released by process exit before the next group starts;
+dropping environment references alone does not bound their combined memory footprint.
 The smoke suite checks parsing, formatting, preservation, idempotency, CLI
 parsing, exact environment loading, and executable configuration without
 asserting parser-version-specific layouts. Linting, fixtures, comprehensive
@@ -123,6 +123,11 @@ both native-library and plugin requests, separately and together, using the buil
 compatibility smoke suite, plus a focused macOS CI job. `fmt` links against
 `libleanshared`; run it through `lake exe` or the target project's `lake env` so
 the matching toolchain's shared libraries are available.
+
+The environment-loading group checks lazy default creation and reuse, exact-import
+selection, header-only classification, empty batches, and exact-worker isolation.
+Default import time is charged to the first default file or batch that needs it;
+imported-only runs never construct that environment.
 
 When adding or updating leanfmt in a project on an older supported Lean version,
 preserve the project's toolchain during dependency resolution:
