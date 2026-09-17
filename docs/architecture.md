@@ -107,6 +107,15 @@ Formatting a file follows this pipeline:
    attributes, attribute macros, and deriving hooks retain full replay. The standard
    Mathlib and Batteries `lemma` implementations share the ordinary-declaration
    policy; unknown command implementations do not.
+   Standard `#print`, `#print sig`, and `#print axioms` handlers also postpone:
+   their name inspection and diagnostic output do not establish parser syntax or
+   scopes. The classification uses the audited elaborator registrations, not the
+   `#print` spelling; any additional unaudited macro or elaborator forces replay.
+   Printing is postponed, not deleted: a later frontend command still executes
+   the original prefix, including these inspections and complete proof bodies.
+   `#print equations` retains the frontend path because it requests equation
+   generation. `#check`, `#eval`, and `#guard` are not covered: term elaboration
+   and evaluation can invoke user implementations.
    Lean 4.34's `expandDefContract` macro is inactive on ordinary declarations, so
    it does not prevent their postponement. Actual contract-bearing values retain
    full replay: their expansion introduces an attributed specification theorem
@@ -123,7 +132,7 @@ Formatting a file follows this pipeline:
    a namespace wrapper. Parser-active attributes, deriving hooks, preambles, custom
    member macros, and replaced handlers keep the block on the frontend path.
    Postponement does not discard declarations or their proof bodies: the next
-   environment-observing command still replays the complete pending prefix.
+   unaudited environment-observing command still replays the complete pending prefix.
 
    Standard namespace, section, end, and standalone `set_option` commands update the
    quiet parser scope. The audited option handler uses registered option declarations
@@ -225,6 +234,12 @@ Formatting a file follows this pipeline:
    executable use the same allocator, interpreter, and initialization state.
    `supportInterpreter` alone uses a static runtime on non-Windows platforms and
    is insufficient for this contract. Plugin requests are never discarded.
+   Generated C uses `mi_zalloc_small` in place of `mi_malloc_small`. Older Lean
+   shared libraries on macOS export the latter (and `mi_malloc`) weakly, allowing
+   the static runtime archive to supply a second allocator even with
+   `-lleanshared`. The zeroing entry point is strong and has the same allocation
+   size/alignment contract; Lean still initializes every object field normally.
+   The macOS runtime test rejects embedded allocator definitions in `fmt`.
 
    An imported worker skips the formatter's default `Lean` environment, reads its
    group's header first, and asks Lean to construct that one exact environment with

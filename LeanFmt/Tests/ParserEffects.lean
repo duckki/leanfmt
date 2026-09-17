@@ -216,6 +216,75 @@ private def assertIntegrationOptions : IO Unit := do
     | .error _ => pure ()
     | _ => throw <| IO.userError "invalid parser integration option accepted"
 
+private def assertInspectionCommands (env : Environment) : IO Unit := do
+  let inspections := ["#print evidence", "#print sig evidence", "#print axioms evidence"]
+  for command
+      in inspections
+          ++ ["#print \"message\"", "set_option pp.all true in #print evidence"] do
+    let stx ← IO.ofExcept (Parser.runParserCategory env `command command)
+    assertTrue "audited print handlers postpone"
+      (SyntaxTree.commandParseAction env stx == .postpone)
+  for command
+      in ["#print equations evidence", "#check evidence", "#eval 1", "#guard true"] do
+    let stx ← IO.ofExcept (Parser.runParserCategory env `command command)
+    assertTrue "unaudited inspection and evaluation handlers still replay"
+      (SyntaxTree.commandParseAction env stx == .frontend)
+  let sourcePrefix :=
+    (if env.header.isModule then "public section\n" else "")
+    ++ "namespace InspectionEffects\n"
+    ++ "theorem evidence : True := by exact True.intro\n"
+    ++ String.intercalate "\n" inspections
+    ++ "\n"
+    ++ "set_option pp.all true in #print evidence\n"
+    ++ "end InspectionEffects\n"
+  let input := Parser.mkInputContext sourcePrefix "inspection-prefix.lean"
+  let initial ← initialState env input
+  let deferred ← SyntaxTree.parseModuleCommandsQuiet input initial true initial
+  assertTrue "printing does not elaborate the preceding proof"
+    (!deferred.commandState.env.contains `InspectionEffects.evidence)
+  assertTrue "printing with local options does not change outer options"
+    ((SyntaxTree.parserModuleContext deferred.commandState).options
+      == (SyntaxTree.parserModuleContext initial.commandState).options)
+  let source :=
+    sourcePrefix
+    ++ "open Lean Elab Command\n"
+    ++ "run_cmd do\n"
+    ++ "  let some (.thmInfo proof) := (← getEnv).find? `InspectionEffects.evidence\n"
+    ++ "    | throwError \"missing theorem\"\n"
+    ++ "  unless proof.value.isConstOf `True.intro do\n"
+    ++ "    throwError \"missing complete proof\"\n"
+    ++ "  elabCommand (← `(notation:max \"inspectionEffects%\" => True))\n"
+    ++ "example : inspectionEffects% := InspectionEffects.evidence\n"
+  assertElaborates env source
+  let input := Parser.mkInputContext source "inspection-observer.lean"
+  let initial ← initialState env input
+  let parsed ← SyntaxTree.parseModuleCommandsQuiet input initial true initial
+  let reference ← SyntaxTree.replayModulePrefix input initial source.rawEndPos
+  assertTrue "deferred printing agrees with complete frontend parsing"
+    (Formatter.Diagnostics.syntaxSignature (mkListNode parsed.commands)
+      == Formatter.Diagnostics.syntaxSignature (mkListNode reference.commands))
+  let formatted ←
+    Formatter.formatSourceWithEnvDetailed env source "inspection-observer.lean"
+  assertTrue "deferred printing does not cause a safety fallback" (!formatted.fellBack)
+  assertElaborates env formatted.formatted
+  assertTrue "deferred printing is independently idempotent"
+    ((← Formatter.formatSourceWithEnv env formatted.formatted "inspection-again.lean")
+      == formatted.formatted)
+  for command in inspections do
+    for setup
+        in [
+          s!"elab_rules : command\n  | `({command}) => throwUnsupportedSyntax\n",
+          s!"macro_rules\n  | `({command}) => Macro.throwUnsupported\n"
+        ] do
+      let source := "open Lean Elab Command\n" ++ setup
+      let input := Parser.mkInputContext source "overridden-inspection.lean"
+      let initial ← initialState env input
+      let replaced ← SyntaxTree.replayModulePrefix input initial source.rawEndPos
+      let stx ←
+        IO.ofExcept (Parser.runParserCategory replaced.commandState.env `command command)
+      assertTrue "additional print handlers and macros require complete prefix replay"
+        (SyntaxTree.commandParseAction replaced.commandState.env stx == .frontend)
+
 def run (level : OLeanLevel := .private) : IO Unit := do
   let env ←
     SyntaxTree.importEnvironment #[{ module := `LeanFmt.Tests.ParserNeutralSyntax }]
@@ -224,5 +293,6 @@ def run (level : OLeanLevel := .private) : IO Unit := do
   assertDeferredObservers env
   assertScopedOpenDeclarations env
   assertIntegrationOptions
+  assertInspectionCommands env
 
 end LeanFmt.Tests.ParserEffects

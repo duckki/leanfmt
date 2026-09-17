@@ -82,8 +82,15 @@ jobs:
   runtime-loading:
     name: Native plugin loading
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lean: [current, v4.33.0-rc1]
     steps:
       - uses: actions/checkout@v4
+      - name: Select compatibility toolchain
+        if: matrix.lean != 'current'
+        run: echo "leanprover/lean4:${{ matrix.lean }}" > lean-toolchain
       - uses: leanprover/lean-action@v1
         with:
           build-args: --wfail

@@ -108,7 +108,7 @@ compatibility smoke module does not import the comprehensive current-toolchain
 test suite, so growth in that suite cannot increase the elaboration cost of
 compatibility testing.
 The smoke runner also uses sequential subprocesses for its core, runtime-loading,
-environment-loading, import-prefix, and exported-import groups. Imported regions
+environment-loading, parser-effects, import-prefix, and exported-import groups. Imported regions
 from one group must be released by process exit before the next group starts;
 dropping environment references alone does not bound their combined memory footprint.
 The smoke suite checks parsing, formatting, preservation, idempotency, CLI
@@ -123,6 +123,15 @@ both native-library and plugin requests, separately and together, using the buil
 compatibility smoke suite, plus a focused macOS CI job. `fmt` links against
 `libleanshared`; run it through `lake exe` or the target project's `lake env` so
 the matching toolchain's shared libraries are available.
+The macOS job also covers Lean 4.33.0-rc1's weak allocator exports. It checks the
+built binary with `nm -gU` and rejects embedded allocator definitions, then
+exercises kernel-proof replay with the native library loaded. Package C flags
+route small allocations through the strong `mi_zalloc_small` entry point;
+removing this flag can silently restore duplicate allocators on older toolchains.
+The replay trigger uses `run_cmd`, not `#print axioms`: audited print handlers
+are parser-neutral and must not force preceding proofs to elaborate. Parser-effect
+tests cover deferred inspection, overridden handlers, and later full-prefix replay
+against Lean's frontend, using both private and exported import environments.
 
 The environment-loading group checks lazy default creation and reuse, exact-import
 selection, header-only classification, empty batches, and exact-worker isolation.
@@ -625,9 +634,22 @@ For ordinary formatter checkpoints, `--checkpoint` reuses the clone, ownership
 classification, setup runtime, and imported artifacts from a previous successful
 complete validation. It still formats every selected source with preservation,
 exception, and idempotency checks and applies the output for review, but it runs no
-target-project Lake build. This keeps broad Hex and Mathlib formatting coverage
-cheap enough for intermediate checkpoints; it does not replace the complete gate
-before release.
+target-project Lake build. This keeps broad external formatting coverage cheap
+enough for intermediate checkpoints; it does not replace the complete gate before
+release. The active projects are GraphQL, quantum, CSLib, Mathlib, Chebyshev
+Ephemeris, and Flare. Hex is excluded; its profiling examples above are historical
+controls, not validation targets.
+
+Validate the Ephemeris and Flare additions with normal automatic worker counts.
+Ephemeris uses the default width (90); Flare uses width 100. Run them separately
+because the width override applies to every target in one invocation:
+
+```sh
+env -u LEANFMT_VALIDATION_LINE_WIDTH scripts/validate-external-projects.sh \
+  chebyshev-ephemeris=$HOME/work/formal-software-engineering/chebyshev-ephemeris
+LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
+  flare-lean=$HOME/work/formal-software-engineering/flare-lean
+```
 
 Staging keeps the clean build artifacts usable while later formatter batches import
 files formatted by earlier batches. Lake setup files also identify the project-wide

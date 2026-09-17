@@ -5,6 +5,9 @@ keywords = ["lean4", "formatter", "devtool", "development-tools"]
 license = "MIT"
 defaultTargets = ["LeanFmt", "fmt"]
 testDriver = "testSuite"
+# Older Lean shared libraries export mi_malloc_small weakly. Its zeroing variant
+# is strong, keeping generated C and the runtime on the same allocator.
+moreLeancArgs = ["-Dmi_malloc_small=mi_zalloc_small"]
 
 [[lean_lib]]
 name = "LeanFmt"

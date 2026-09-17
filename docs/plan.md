@@ -6,85 +6,23 @@ release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-### Hex certificate proof memory
+No new formatter issues were found in the completed Ephemeris (default width 90)
+and Flare (width 100) checkpoint. The full release gate is the next validation
+step.
 
-```lean
-private theorem packedCert_check :
-    GF2Poly.checkIrreducibilityCertificate packedModulus packedCert = true := by
-  decide
-```
-
-Current Hex `237ad74f70ab885fb4c168a64c948f4d16810196`, Lean 4.34.0, retains plain
-`decide` in `conformance/HexGFq/CrossCheck.lean:998`. Completed single-worker runs
-with a 12 GiB ceiling and critical-pressure/low-disk safeguards show:
-
-| Run | Time | Peak process-group footprint |
-| --- | --- | --- |
-| Native `lake build +HexGFq.CrossCheck`, dependencies already built | 31.3s | 6.383 GiB |
-| Baseline `53a1091`: width-100 formatting, preservation, overflow, and independent idempotency | 136.3s | 9.270 GiB |
-| Production lazy defaults, same checks | 133.8s | 7.122 GiB |
-
-Both runs use the supported shared-runtime link configuration.
-Both formatter runs pass every requested diagnostic and produce byte-identical
-output, with the proof unchanged. Lazy loading reduces the measured peak by
-2.148 GiB (about 23%), retaining exact imports and the direct path's
-`leakEnv := false` policy. Memory returns to roughly 0.6-0.8 GiB between spikes
-instead of 2.7-2.8 GiB, and system pressure stays normal; the baseline briefly
-reached warning. Wall time is approximately unchanged. These are single-run
-measurements, not a broad performance benchmark. The previous 6 GiB stops were
-resource cutoffs, not completed-run peaks or proof failures.
-
-Earlier command-by-command and isolated-proof controls located the spike in
-`N32.packedCert_check`, before the replay-triggering `#guard`. On Hex
-`9dcefd01ed70ac4ceb450554516e872b6d707033` / Lean `v4.33.0-rc1`, a separate copy
-using `decide +kernel` built in 24.9s / 1.08 GiB and passed checked formatting
-in 72.7s / 2.60 GiB. This remains a possible target-project improvement, not a
-formatter transformation or a same-revision comparison with the current results.
-
-The completed run covers one file, not all of current Hex or a post-format build.
-Production output is under `.scratch/hex434-lazy-default/CrossCheck.lean`, with
-the baseline under `.scratch/hex434-runtime-fixed/CrossCheck.lean`;
-the Hex checkout remains unchanged. Old validator manifests, staging, and batch
-logs belong to the previous revision and cannot resume this checkout's validation.
-
-An imports-only control with `import HexGFq.Basic` drops from 6.5s / 2.371 GiB to
-3.8s / 0.357 GiB through the production direct path, with unchanged exact imports,
-native libraries, plugins, and checks. The default environment is now memoized on
-first use; loader construction, classification, empty batches, and imported-only
-runs leave it unloaded. Default-only scripts still receive the full environment.
-The complete local gate and compatibility suites pass, including classification,
-cache reuse, imported syntax, and real mixed default/exact workers. Worker counts
-and process lifetime policy are unchanged.
+Hex is no longer a validation target or release blocker. Its incomplete runs
+remain historical measurements, not evidence of a complete pass or a general
+solution to concurrent-worker memory pressure.
 
 ## Progress
 
-### Required replay memory checkpoint
-
-Lazy default loading has passed the targeted checkpoint. Repeat current Hex's
-whole-project validation with fresh manifests, width 100, and one formatter worker,
-monitoring compressed-inclusive footprint and system pressure. CrossCheck still
-peaks above native compilation (7.122 versus 6.383 GiB); profile remaining retained
-state separately from required proof reduction if larger runs expose another
-actionable cost. Review and retest `decide +kernel` in Hex only as an explicit
-target-project change.
-Do not rewrite proofs during parsing, disable info trees, or add a blanket `#guard`
-exemption: unknown handlers must still observe
-complete preceding declarations and proofs. Keep independent idempotency parsing.
-The full Hex checkpoint remains incomplete until its selected source revision
-passes the complete gate with the supported executable and agreed memory bound.
-
 ### Release validation
 
-Run the complete release gate after review of the parser-classification change.
-Formatter-only Hex checks do not replace changed-module and post-format builds.
-Use `LEANFMT_VALIDATION_PARSER_INTEGRATION=lean-bench` only for the audited
-dependency version. Current Hex pins LeanBench
-`8a37daf1074c3bdbd0da479b55538bad4a0022db`, which has not been audited; leave
-the adapter disabled unless its implementations and fingerprints are reviewed.
-The adapter is explicit and is not enabled by default.
-Retain `HexGF2/Clmul.lean` as an isolated performance control and compare with
-identical inputs, exact imports, diagnostics, and worker limits. The old 469s
-full-project timing covered a different file set and is not a comparable baseline.
+Run the complete release gate after review of the parser-classification change,
+including Ephemeris and Flare alongside GraphQL, quantum, CSLib, and Mathlib.
+Hex is excluded. Formatter-only checkpoints do not replace changed-module and
+post-format builds. Compare performance with identical inputs, exact imports,
+diagnostics, and worker limits.
 A formatting or parser change requires a fresh release gate; earlier results do
 not validate later changes.
 
@@ -92,6 +30,20 @@ not validate later changes.
 
 These opportunities remain deferred. They are performance costs, not known
 formatting-correctness failures.
+
+### Aggregate worker memory
+
+The last ordinary pinned-Hex run used ten automatic workers and stopped at the
+12 GiB safety guard after 547.2s (12.064 GiB), not an observed OOM. The GFq
+conformance worker used 7.013 GiB, the GFq benchmark worker 2.437 GiB, and the
+remaining processes 2.614 GiB. All 658 comparable completed outputs matched the
+preceding run; no source changes or post-format builds were applied.
+Log: `.scratch/hex-inspection-normal.log`.
+
+The user accepts up to 9 GiB for the isolated module and the remaining roughly
+0.5 GiB formatter overhead. Memory-aware scheduling is deferred, not part of
+the replacement checkpoint. Do not silently reduce normal worker counts or
+raise the safety guard. Hex measurements below are historical controls only.
 
 ### Required prefix elaboration and evaluation cost
 
@@ -140,6 +92,184 @@ subject to complete-state equivalence for commands without a neutral contract.
 
 ## Validation Standard
 
+### Ephemeris and Flare checkpoint
+
+The allocator and audited print-command changes pass complete validation with
+Lake cache, automatic worker counts, and default parser behavior. Ephemeris uses
+the default width (90); Flare uses width 100:
+
+- `~/work/formal-software-engineering/chebyshev-ephemeris`, commit
+  `643689336add9cf5883012fe1c64fa2cdfd64531`, Lean 4.33.1.
+- `~/work/formal-software-engineering/flare-lean`, commit
+  `4b13508e1451a26fac7e7c07efa856b444a2ecfc`, Lean 4.33.1.
+
+| Project | Width | Checked files | Format and diagnostics | Initial / changed / final build |
+| --- | --- | ---: | ---: | --- |
+| Ephemeris | default (90) | 28 | 12s | 68s / unchanged / 2s |
+| Flare | 100 | 61 | 32s | 97s / unchanged / 2s |
+
+Both projects pass preservation, actionable overflow, fallback, and independent
+idempotency checks with no exceptions or formatting changes. Missing-rule checks
+remain disabled for both projects. The fresh default-width Ephemeris run
+supersedes its earlier width-100 result.
+Flare's `Tests/ProofAudit.lean` was reported and skipped because it has no Lake
+module target; all 61 owned sources, including `Lint.lean`, were checked.
+
+The complete default-width Ephemeris run took 178s with 2.982 GiB peak
+process-group physical footprint; log: `.scratch/ephemeris-default-checkpoint.log`.
+Flare's result is in `.scratch/ephemeris-flare-checkpoint.log`; that earlier
+466s combined run includes the superseded Ephemeris width-100 control and peaked
+at 4.471 GiB. Memory pressure remained normal. These are new project baselines,
+not same-input performance comparisons with Hex or an earlier formatter.
+Both original checkouts remain clean.
+Checkpoint manifests are recorded under
+`.scratch/external-validation/logs/{chebyshev-ephemeris,flare-lean}/`.
+
+```sh
+env -u LEANFMT_VALIDATION_LINE_WIDTH scripts/validate-external-projects.sh \
+  chebyshev-ephemeris=$HOME/work/formal-software-engineering/chebyshev-ephemeris
+LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
+  flare-lean=$HOME/work/formal-software-engineering/flare-lean
+```
+
+Use `--checkpoint` with these same targets for subsequent lighter checks at the
+recorded revisions. Serialize heavy work and monitor compressed-inclusive memory
+with the 12 GiB aggregate safety guard; do not silently lower the normal worker
+count. Require complete builds again for release.
+
+### Inspection deferral and frontend overhead
+
+With the allocator correction held fixed, audited print deferral formats the
+same 51-file Hex proof-probe group in 8.4s / 0.441 GiB, versus 98.2s / 2.722 GiB
+before deferral. Preservation, overflow, fallback, and independent idempotency
+checks also pass (4.3s / 0.441 GiB with warm imports). Both outputs are
+byte-identical to the allocator-only control. These are isolated exact-import
+worker controls, not a full automatic-worker checkpoint.
+The full local build/test/lint/fixture/self-format/dry-check gate passes in
+198.5s / 4.051 GiB, with no fixture changes or diagnostic exceptions. The Lean
+4.33.0-rc1 compatible build and smoke suite pass in 58.4s / 2.585 GiB, including
+private/exported parser-effect checks and native-library proof replay. Hex's
+source checkout remains clean; no whole-project post-format build ran.
+
+Separate serialized controls use unchanged `conformance/HexGFq/CrossCheck.lean`
+at Hex `9dcefd01`, Lean 4.33.0-rc1, module-specific native libraries/plugins,
+default internal thread settings, and width 100 for formatting. Native compilation
+emits `.olean`, `.ilean`, and C artifacts outside the checkout's build outputs.
+
+| Control | Time | Peak process-group footprint |
+| --- | --- | --- |
+| Normal Lean compilation | 33.3s | 7.220 GiB |
+| Lean compilation with full snapshots | 42.7s | 8.001 GiB |
+| Formatter parsing/replay only, once | 45.5s | 7.078 GiB |
+| Formatter parsing/replay twice, no rendering | 86.7s | 8.046 GiB |
+| Ordinary formatting | 85.2s | 8.629 GiB |
+| Formatting with exceptions and independent idempotency | 134.5s | 7.846 GiB |
+
+Ordinary formatting therefore has measurable overhead even without validation.
+Lean's normal compiler minimizes command snapshots; resumable parser replay
+retains more state. Repeated parsing alone reproduces much of the extra cost,
+and formatting reparses changed output for preservation and convergence. These
+single-run peaks are not additive or necessarily monotonic: the remaining
+approximately 0.58 GiB difference between two parses and formatting is not fully
+attributed. Do not label it all renderer state or claim diagnostics alone caused
+the overhead. Formatting with and without diagnostics produced identical output.
+`#guard` remains on the frontend path, so print deferral does not remove this
+GFq work. Logs are `.scratch/inspection-memory-*.log` and
+`.scratch/inspection-proof-group-{plain,checked}.log`.
+
+### Allocator diagnosis
+
+On the same Hex `HexAddition64.lean` source and Lean 4.33.0-rc1, the version
+before authoritative prefix replay (`b6126ab`) used 0.445 GiB / 7.4s, while
+`72648eb` used 2.666 GiB / 11.5s. The older parser did not elaborate the pending
+proof for `#print axioms`; the import-only control used 0.428 GiB. Restoring that
+old parser shortcut would lose complete-prefix semantics and is not the fix.
+
+The newer compatible binary also defined its own mimalloc symbols alongside
+`libleanshared`. The link map identified `libleanrt.a(static.c.o)`; allocator
+statistics showed separate allocation domains. Waiting for frontend child tasks,
+using one internal Lean thread, and aggressive allocator purging did not cure the
+growth. None of those experiments is retained in production.
+
+The 51-file exact-import proof-probe group exceeded 8 GiB after 33.3s before the
+fix. A shared-only linkage control completed all 51 in 99.5s / 2.721 GiB. The
+production correction completed the same group in 98.2s / 2.722 GiB, with
+byte-identical output, without changing parser policy. Its normal ten-worker run
+completed this group at about 2.6 GiB, then reached a separate GFq concurrency
+cutoff. The isolated production control is recorded in
+`.scratch/hex-memory-allocator-proof-group.log`.
+The full-run log is `.scratch/hex-9dcefd01-shared-allocator-normal.log`; partial
+output is `hex/.lake/leanfmt-normal.SRx9Lw/`. All 660 rewritten files are
+byte-identical to the archived formatting output. This does not establish a full
+formatting, diagnostic, or post-format-build pass.
+
+### Historical Hex evidence
+
+The ordinary-formatting control used formatter `72648eb` on the pinned older
+checkout, one invocation over 873 original input copies, width 100, automatic
+workers, no diagnostic flags, and no parser integration. It reused the project's
+ordered native libraries/plugins and freshly built import artifacts. The guard
+stopped it after 197.0s at 12.003 GiB.
+The log is `.scratch/hex-9dcefd01-normal-format.log`, and partial output is in
+`hex/.lake/leanfmt-normal.sDcyLe/` within the external-validation directory.
+This is not a normal-formatting pass, nor a controlled diagnostic-overhead
+comparison: the validator also changes batching and enables the audited adapter.
+
+The pinned-revision run used formatter `72648eb`, automatic worker counts, width
+100, and the audited LeanBench integration. Its dependency cache restored 8,595
+artifacts in 69.6s at a peak process-group footprint of 0.642 GiB. The compatible
+formatter built in 29s, the default Hex build passed in 870s, and Lake source
+resolution passed in 674s. Of 889 selected files, 873 were Lake-owned; 16 unowned
+files were reported and skipped, matching the earlier checkout's scope.
+
+Formatter batches 1-6 passed in 122/113/66/163/128/90s respectively (682s total).
+The guard stopped batch 7 at 12.081 GiB after 2,345.1s for the full attempt.
+No formatter diagnostic preceded the resource cutoff. All 600 completed outputs
+are byte-identical to the archived prior staging, but that earlier run was also
+incomplete. There is no whole-project formatting time or post-format build pass.
+The full log is `.scratch/hex-9dcefd01-72648eb-full-validation.log`.
+
+The whole-project attempt used formatter `72648eb`, Hex
+`237ad74f70ab885fb4c168a64c948f4d16810196`, width 100, one formatter worker,
+`LEAN_NUM_THREADS=1`, and a 12 GiB guard. Lake cache supplied all 8,908 requested
+dependency artifacts. The run stopped during the initial native build;
+it provides no whole-project formatter timing, diagnostic pass, or formatting
+regression verdict. The log is `.scratch/hex-72648eb-full-validation.log`.
+Old logs and staging were preserved in
+`.scratch/hex-before-72648eb-validation.tar.gz`; they do not validate this revision.
+
+Completed controls on the same Hex revision and Lean 4.34.0 remain valid:
+
+| CrossCheck run | Time | Peak process-group footprint |
+| --- | --- | --- |
+| Native build, dependencies already built | 31.3s | 6.383 GiB |
+| Formatter `53a1091`, width 100 and all requested diagnostics | 136.3s | 9.270 GiB |
+| Formatter `72648eb`, identical settings | 133.8s | 7.122 GiB |
+
+The formatter outputs are byte-identical and pass preservation, actionable
+overflow, fallback, and independent idempotency checks. Lazy defaults reduce the
+measured peak by 2.148 GiB (about 23%); wall time is approximately unchanged.
+These single-file controls do not include a post-format build or replace the
+whole-project gate. Output is in `.scratch/hex434-lazy-default/CrossCheck.lean`,
+with the baseline in `.scratch/hex434-runtime-fixed/CrossCheck.lean`.
+The imports-only `import HexGFq.Basic` control drops from 6.5s / 2.371 GiB to
+3.8s / 0.357 GiB with unchanged exact imports, libraries, plugins, and diagnostics.
+
+### Local and release gates
+
+The allocator correction passes the complete current-toolchain local gate
+(211.4s / 4.053 GiB), with no fixture drift or diagnostic exceptions, and the
+Lean 4.33.0-rc1 compatibility suite (24.5s / 2.608 GiB). The new symbol check
+rejects the previous binary with an embedded `_mi_malloc_small` definition.
+Only the new runtime test needed self-formatting.
+
+Five measured samples after a warmup, using the same representative input and
+three formatter/test source files, gave median total formatting time
+13,904 -> 13,987ms (+0.6%). Rendering alone was 5,232 -> 5,488ms (+4.9%);
+parsing was 7,990 -> 7,846ms. Output is byte-identical. The zeroing allocator
+entry point has a small measured rendering cost, not a demonstrated total-time
+improvement. Logs are `.scratch/allocator-profile-{before,after}.log`.
+
 The native plugin startup fix links `fmt` against `libleanshared` through Lake's
 `moreLinkArgs`. The new direct/worker regression reproduces exit 139 without that
 setting and passes with it. The lazy-loading change passes the full local gate
@@ -167,8 +297,8 @@ Review all generated fixture and self-format changes. Normal validation uses
 automatic worker counts. For memory-constrained validation or isolated profiling,
 explicitly set `--jobs 1` or `LEANFMT_VALIDATION_FORMATTER_JOBS=1`; this does not
 change the default. Serialize heavy runs and monitor compressed-inclusive memory.
-Lightweight checkpoints use recorded GraphQL, quantum, and CSLib build baselines
-plus pristine Mathlib safety regressions.
+Lightweight checkpoints use recorded GraphQL, quantum, CSLib, Ephemeris, and Flare
+build baselines plus pristine Mathlib safety regressions. Hex is excluded.
 Report scope and omitted builds. Compare performance on identical inputs without
 concurrent validation. Enable missing-rule checks for Mathlib only.
 

@@ -5,6 +5,7 @@ import LeanFmt.Tests.MetaImportRoot
 import LeanFmt.Tests.ProjectSyntax
 import LeanFmt.Tests.RuntimeLoading
 import LeanFmt.Tests.EnvironmentLoading
+import LeanFmt.Tests.ParserEffects
 
 namespace LeanFmt.Tests.Compatibility
 
@@ -155,6 +156,8 @@ def testGroups : List (String × IO Unit) :=
     ("core", runCore),
     ("runtime-loading", RuntimeLoading.run),
     ("environment-loading", EnvironmentLoading.run),
+    ("parser-effects", ParserEffects.run),
+    ("parser-effects-exported", ParserEffects.run .exported),
     ("import-prefix", assertImportPrefixReuse),
     ("exported-imports", assertExportedEnvironment)
   ]

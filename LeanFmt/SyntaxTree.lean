@@ -4441,7 +4441,10 @@ def commandHandlerParseAction : Name → CommandParseAction
   | `Lean.Elab.Command.elabUniverse
   | `Lean.Elab.Command.elabInclude
   | `Lean.Elab.Command.elabOmit
-  | `Lean.Elab.Command.elabModuleDoc => .postpone
+  | `Lean.Elab.Command.elabModuleDoc
+  | `Lean.Elab.Command.elabPrint
+  | `Lean.Elab.Command.elabPrintSig
+  | `Lean.Elab.Command.elabPrintAxioms => .postpone
   | _ => .frontend
 
 private partial def syntaxHasAttributeMacro (env : Environment) : Syntax → Bool
