@@ -47,10 +47,16 @@ structure OwnedBodyPolicy where
   suffixOwnsBody : Bool := false
 deriving BEq, Inhabited, Repr
 
+structure InfixSpacing where
+  tightBefore : Bool := false
+  tightAfter : Bool := false
+deriving BEq, Inhabited, Repr
+
 structure KindFacts where
   metadataSource : MetadataSource := .unavailable
   annotations : PrintingAnnotations := {}
   infixPrecedence? : Option (Nat × Nat) := none
+  infixSpacing? : Option InfixSpacing := none
   spacedApplication : Bool := false
   ownedBody? : Option OwnedBodyPolicy := none
 deriving Inhabited, Repr
@@ -59,6 +65,9 @@ abbrev Facts := NameMap KindFacts
 
 def Facts.infixPrecedence? (facts : Facts) (kind : SyntaxNodeKind) : Option (Nat × Nat) :=
   (facts.find? kind) >>= (·.infixPrecedence?)
+
+def Facts.infixSpacing? (facts : Facts) (kind : SyntaxNodeKind) : Option InfixSpacing :=
+  (facts.find? kind) >>= (·.infixSpacing?)
 
 def Facts.isSpacedApplication (facts : Facts) (kind : SyntaxNodeKind) : Bool :=
   (facts.find? kind).any (·.spacedApplication)
@@ -109,6 +118,26 @@ private partial def parserDescrPrecedence? (kind : SyntaxNodeKind)
       parserDescrPrecedence? kind parser
   | .binary _ left right =>
       parserDescrPrecedence? kind left <|> parserDescrPrecedence? kind right
+  | _ => none
+
+private def symbolInfixSpacing (symbol : String) : InfixSpacing :=
+  {
+    tightBefore := symbol.trimAsciiStart == symbol.toSlice
+    tightAfter := symbol.trimAsciiEnd == symbol.toSlice
+  }
+
+private def parserDescrInfixSpacing? (kind : SyntaxNodeKind)
+    : ParserDescr -> Option InfixSpacing
+  | .trailingNode nodeKind _ _ (.binary `andthen symbol (.cat `term _)) => do
+      if nodeKind != kind then
+        none
+      else
+        match symbol with
+        | .symbol text | .nonReservedSymbol text _ => some (symbolInfixSpacing text)
+        | .unicodeSymbol unicode ascii _ =>
+            let spacing := symbolInfixSpacing unicode
+            if spacing == symbolInfixSpacing ascii then some spacing else none
+        | _ => none
   | _ => none
 
 private partial def parserDescrAnnotations : ParserDescr -> PrintingAnnotations
@@ -427,6 +456,8 @@ unsafe def kindFactsUnsafe (env : Environment) (options : Options) (kind : Synta
                 parserDescrPrecedence? kind parser
               else
                 none
+            infixSpacing? :=
+              if hasFormatter then none else parserDescrInfixSpacing? kind parser
             spacedApplication := parserDescrIsSpacedApplication kind parser
             ownedBody? :=
               ownedBodyPolicy? env kind descriptionKind hasFormatter parser

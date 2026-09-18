@@ -588,7 +588,12 @@ def interTokenWhitespace
   else if preserveLines && hasLineStructure trivia then
     cleanTrivia trivia
   else if trivia.isEmpty then
-    if normalizeAdjacent () then spaceBetweenTokens left right else ""
+    let preserveAdjacent :=
+      left.infixSpacing?.any (·.tightAfter) || right.infixSpacing?.any (·.tightBefore)
+    if !preserveAdjacent && normalizeAdjacent () then
+      spaceBetweenTokens left right
+    else
+      ""
   else if left.lexeme == "." && hasOnlyHorizontalTrivia trivia then
     " "
   else if preservesSourceSpaceBeforeClosingToken left right then

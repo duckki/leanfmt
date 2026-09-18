@@ -6,9 +6,8 @@ release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-No new formatter issues were found in the completed Ephemeris (default width 90)
-and Flare (width 100) checkpoint. The full release gate is the next validation
-step.
+No currently reproduced formatting blocker remains from the tight-infix spacing
+checkpoint. Fresh complete release validation remains pending below.
 
 Hex is no longer a validation target or release blocker. Its incomplete runs
 remain historical measurements, not evidence of a complete pass or a general
@@ -18,13 +17,18 @@ solution to concurrent-worker memory pressure.
 
 ### Release validation
 
-Run the complete release gate after review of the parser-classification change,
-including Ephemeris and Flare alongside GraphQL, quantum, CSLib, and Mathlib.
+The tight-infix spacing fix passes the focused checkpoint recorded below. Next,
+run the complete release gate on the current formatter, including Ephemeris and
+Flare alongside GraphQL, quantum, CSLib, and Mathlib.
 Hex is excluded. Formatter-only checkpoints do not replace changed-module and
 post-format builds. Compare performance with identical inputs, exact imports,
 diagnostics, and worker limits.
 A formatting or parser change requires a fresh release gate; earlier results do
 not validate later changes.
+
+Restart Mathlib formatting from pristine sources. The fix preserves declared
+source-tight notation such as `(W'⁄F)`; it intentionally does not remove spaces
+from `(W' ⁄ F)` already produced by the previous formatter.
 
 ## Deferred Optimization Opportunities
 
@@ -91,6 +95,47 @@ plus improved scaling in the stress controls. Prefix replay remains separately
 subject to complete-state equivalence for commands without a neutral contract.
 
 ## Validation Standard
+
+### Tight custom infix checkpoint
+
+Parser-derived per-side spacing preserves source adjacency without symbol
+exceptions, new line-break APIs, or renderer changes. Operator-owned facts survive
+equal-precedence chain flattening; complex descriptors and formatter overrides
+retain the previous spacing policy.
+
+- Full local build, unit suite, development lint, fixture regeneration, and
+  self-formatting pass. Final dry checks report no drift, preservation failures,
+  actionable overflow, fallback, or non-idempotence. Fixtures are unchanged.
+- Lean 4.33.1 compatibility passes, including private and exported import tests
+  for tight, spaced, asymmetric, mixed-chain, comment, and fallback cases.
+- All 42 Mathlib files containing `⁄` at revision `0df444a360eaa60ab8c11dca51a86af692955474`
+  pass width-100 formatting diagnostics (including missing rules), compilation,
+  and the actual whitespace linter. The old formatter reproduces the Point
+  binder warning. Fourteen files differ from the old output: preserved `⁄` and
+  local `𝖣` notation, plus resulting line fitting. Three missing dependency
+  artifacts were rebuilt in scratch; the existing Mathlib checkout is untouched.
+- Ephemeris (28 files, default width 90) and Flare (61 files, width 100) pass
+  checkpoint validation with automatic worker counts, no exceptions, and no
+  formatting changes. These are formatter-only checks, not new project builds.
+
+The identical-input Mathlib comparison took 81s for both binaries. Ephemeris took
+17s and Flare 58s in checkpoint mode; a separate identical-input Flare control
+took 73s with the old binary and 45s with the candidate, with identical output.
+The historical 32s Flare timing was not reproduced by the old binary either;
+these single runs do not establish a speedup. Peak monitored physical footprint
+was 4.724 GiB for the Mathlib comparison/build/lint run and 4.589 GiB for the
+Ephemeris/Flare checkpoint run.
+
+A warmed local control using the same four profiling inputs and three timed
+samples per binary has median format-total 14,392ms before versus 14,303ms after,
+with render time 5,717ms versus 5,597ms. These controls show no observed performance
+regression; they do not establish release-wide performance.
+
+Logs: `.scratch/infix-local-{initial,final}.log`, `.scratch/infix-self-format.log`,
+`.scratch/infix-compatibility.log`, `.scratch/infix-mathlib-validation.log`,
+`.scratch/infix-external-checkpoints.log`, `.scratch/infix-flare-comparison.log`,
+and `.scratch/infix-profile.log`.
+The 42-file Mathlib check does not replace a complete fresh release gate.
 
 ### Ephemeris and Flare checkpoint
 

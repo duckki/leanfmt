@@ -11,6 +11,7 @@ import LeanFmt.Tests.WorkerOutput
 import LeanFmt.Tests.ParserEffects
 import LeanFmt.Tests.RuntimeLoading
 import LeanFmt.Tests.EnvironmentLoading
+import LeanFmt.Tests.InfixSpacing
 
 open System
 
@@ -23905,6 +23906,8 @@ def testGroups : Array (String × IO Unit) :=
     ("syntax-tree", withDefaultEnvironment runSyntaxTreeTests),
     ("documented-examples", withDefaultEnvironment DocumentedExamples.run),
     ("layout-architecture", LayoutArchitecture.run),
+    ("infix-spacing", InfixSpacing.run),
+    ("infix-spacing-exported", InfixSpacing.run .exported),
     ("basic-formatting", withDefaultEnvironment runBasicFormattingTests),
     (
       "expression-renderer",

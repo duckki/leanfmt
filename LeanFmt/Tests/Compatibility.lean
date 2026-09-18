@@ -6,6 +6,7 @@ import LeanFmt.Tests.ProjectSyntax
 import LeanFmt.Tests.RuntimeLoading
 import LeanFmt.Tests.EnvironmentLoading
 import LeanFmt.Tests.ParserEffects
+import LeanFmt.Tests.InfixSpacing
 
 namespace LeanFmt.Tests.Compatibility
 
@@ -158,6 +159,8 @@ def testGroups : List (String × IO Unit) :=
     ("environment-loading", EnvironmentLoading.run),
     ("parser-effects", ParserEffects.run),
     ("parser-effects-exported", ParserEffects.run .exported),
+    ("infix-spacing", InfixSpacing.run),
+    ("infix-spacing-exported", InfixSpacing.run .exported),
     ("import-prefix", assertImportPrefixReuse),
     ("exported-imports", assertExportedEnvironment)
   ]

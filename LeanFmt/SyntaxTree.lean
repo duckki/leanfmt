@@ -46,6 +46,8 @@ structure Token where
   leading : Trivia
   trailing : Trivia
   span : Span
+  /-- Parser-declared operator spacing, retained when infix chains are flattened. -/
+  infixSpacing? : Option ParserLayout.InfixSpacing := none
 deriving BEq, Repr
 
 namespace Token
@@ -1595,6 +1597,12 @@ def isBinaryInfixRawNode (kind : SyntaxNodeKind) (children : Array Tree) : Bool 
   && match children[1]? with
       | some operator => directLeafAtom? operator
       | none => false
+
+private partial def annotateInfixSpacing (spacing : ParserLayout.InfixSpacing)
+    : Tree -> Tree
+  | .leaf token => .leaf { token with infixSpacing? := some spacing }
+  | .node kind children => .node kind (children.map (annotateInfixSpacing spacing))
+  | .missing => .missing
 
 private def isIndexedInfixRawNode (kind : SyntaxNodeKind) (children : Array Tree)
     : Bool :=
@@ -4125,6 +4133,14 @@ def regroupRawNode
         else if isBinaryInfixRawNode kind children then
           match children[0]?, children[1]?, children[2]? with
           | some left, some operator, some right =>
+              let operator :=
+                match parserLayout.infixSpacing? kind with
+                | some spacing =>
+                    if spacing.tightBefore || spacing.tightAfter then
+                      annotateInfixSpacing spacing operator
+                    else
+                      operator
+                | none => operator
               let parts := appendInfixParts parserLayout kind #[] left
               let parts := parts.push operator
               let parts := appendInfixParts parserLayout kind parts right

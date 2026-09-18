@@ -356,6 +356,14 @@ Source-tight ordinary infix operators and type ascriptions are still normalized:
 (3 : R) * (x + y)
 ```
 
+For a simple parser-described custom infix, declared tight boundaries retain
+source adjacency. For example, notation declared with `W "⁄" F` keeps `(W⁄F)`;
+`"op "` preserves only the left boundary and `" op"` only the right. This does
+not remove existing spaces, change ordinary arithmetic spacing, or change where
+an infix expression may wrap. Comments retain their usual source-trivia handling.
+Unavailable or complex descriptions and custom pretty-printer overrides retain
+the existing spacing policy.
+
 Braces retain the source's tight or spaced style where adjacency makes that
 distinction safe:
 

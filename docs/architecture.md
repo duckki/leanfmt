@@ -89,6 +89,10 @@ Formatting a file follows this pipeline:
    profile records formatter availability, `ParserDescr` printing annotations such as
    `ppSpace`, `ppLine`, grouping, indentation and dedentation, trailing-parser binding
    powers, conservative spaced-application shape, and parser-owned trailing bodies.
+   A simple trailing parser consisting of one symbol and one term operand also
+   supplies per-side infix spacing facts. Unknown descriptions and registered
+   formatter overrides do not supply this fact. Unicode/ASCII alternatives must
+   agree on their boundary spacing.
    These facts let logical regrouping follow imported and locally declared syntax
    without putting environment access, parser combinators, or project syntax names in
    line-break rules. Namespace and section entry/exit are elaborated through Lean's
@@ -823,6 +827,13 @@ boolean fact to `interTokenWhitespace`. Semantic facts about source trivia belon
 `SourceBoundary`; it determines whether trivia contains comments, forces a physical break,
 begins or ends at a blank group, and exposes source indentation evidence. Comments and
 source breaks remain outside the syntax tree.
+
+Regrouping attaches proven tight infix spacing to the operator token, not the
+chain owner. Equal-precedence flattening therefore retains each operator's own
+boundary facts. For empty source trivia, `SpaceRules` preserves adjacency when
+either token declares that boundary tight, before querying structural spacing.
+Existing spaces and comments use their existing paths. The renderer and line-break
+APIs do not consult parser descriptions or pretty-printers.
 
 ## Resolved layout plans
 

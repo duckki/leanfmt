@@ -108,7 +108,8 @@ compatibility smoke module does not import the comprehensive current-toolchain
 test suite, so growth in that suite cannot increase the elaboration cost of
 compatibility testing.
 The smoke runner also uses sequential subprocesses for its core, runtime-loading,
-environment-loading, parser-effects, import-prefix, and exported-import groups. Imported regions
+environment-loading, parser-effects, infix-spacing, import-prefix, and
+exported-import groups. Imported regions
 from one group must be released by process exit before the next group starts;
 dropping environment references alone does not bound their combined memory footprint.
 The smoke suite checks parsing, formatting, preservation, idempotency, CLI
@@ -132,6 +133,9 @@ The replay trigger uses `run_cmd`, not `#print axioms`: audited print handlers
 are parser-neutral and must not force preceding proofs to elaborate. Parser-effect
 tests cover deferred inspection, overridden handlers, and later full-prefix replay
 against Lean's frontend, using both private and exported import environments.
+Infix-spacing tests use imported scoped notation in both environments and cover
+mixed equal-precedence operators, asymmetric spacing, comments, and conservative
+fallback for unknown descriptions and custom pretty-printers.
 
 The environment-loading group checks lazy default creation and reuse, exact-import
 selection, header-only classification, empty batches, and exact-worker isolation.
