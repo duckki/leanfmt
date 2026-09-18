@@ -103,6 +103,68 @@ private def assertRelayedLines : IO Unit := do
           (text ++ if terminal then "\n" else "") (← contents)
         check "progress stays on stderr" (!(← errors).contains '∀')
 
+private def assertWorkerBatchReports : IO Unit := do
+  for exitCode in ([0, 1, 2, 137] : List UInt32) do
+    let (err, errors) ← capture false
+    let result : Driver.WorkerBatchResult := { exitCode, elapsedMs := 12 }
+    let failed ←
+      IO.withStderr err <| Driver.reportWorkerBatchResult {} .exact 2 3 1 1 (.ok result)
+    check "all nonzero worker exits still fail the command" (failed == (exitCode != 0))
+    checkText "only abnormal exits need an additional batch diagnostic"
+      (if exitCode > 1 then
+          s!"leanfmt: worker batch 2/3 exited with code {exitCode}\n"
+        else
+          "") (← errors)
+  let (err, errors) ← capture false
+  let failed ←
+    IO.withStderr err
+    <| Driver.reportWorkerBatchResult { profile := true } .exact 2 3 1 1
+        (.ok { exitCode := 1, elapsedMs := 12 })
+  check "profiling preserves the failed result" failed
+  checkText "profiling retains normal worker exit codes"
+    "leanfmt profile: worker-batch: index=2/3 environment=exact environments=1 files=1 exit=1 elapsed=12ms\n"
+    (← errors)
+  let (err, errors) ← capture false
+  let failed ←
+    IO.withStderr err
+    <| Driver.reportWorkerBatchResult {} .exact 2 3 1 1
+        (.error (IO.userError "expected launch failure"))
+  check "launch failures still fail the command" failed
+  checkText "launch failures retain their batch diagnostic"
+    "leanfmt: worker batch 2/3: expected launch failure\n" (← errors)
+
+private def assertCheckWorkerOutput : IO Unit := do
+  IO.FS.withTempDir
+    fun root => do
+      let executable := (← IO.currentDir) / ".lake/build/bin/fmt"
+      let first := root / "First.lean"
+      let second := root / "Second.lean"
+      for imported in [false, true] do
+        let firstSource :=
+          (if imported then "import Init\n" else "") ++ "def  firstValue := 0\n"
+        let secondSource :=
+          (if imported then "import Init.Data.Nat.Basic\n" else "")
+          ++ "def  secondValue := 0\n"
+        IO.FS.writeFile first firstSource
+        IO.FS.writeFile second secondSource
+        let result ←
+          IO.Process.output
+            {
+              cmd := executable.toString
+              args := #["--check", "--jobs", "2", first.toString, second.toString]
+            }
+        check "parallel formatting drift still exits with code 1" (result.exitCode == 1)
+        checkText "check mode has no stdout" "" result.stdout
+        let firstMessage := s!"needs formatting: {first}\n"
+        let secondMessage := s!"needs formatting: {second}\n"
+        check s!"check mode prints only file diagnostics: {result.stderr}"
+          (result.stderr == firstMessage ++ secondMessage
+            || result.stderr == secondMessage ++ firstMessage)
+        checkText "check mode leaves the first source unchanged" firstSource
+          (← IO.FS.readFile first)
+        checkText "check mode leaves the second source unchanged" secondSource
+          (← IO.FS.readFile second)
+
 private def assertInteractiveWorker : IO Unit := do
   IO.FS.withTempDir
     fun root => do
@@ -136,10 +198,13 @@ private def assertInteractiveWorker : IO Unit := do
           <| Driver.reportWorkerBatchResult {} .default 1 1 1 1 (.ok result)
         check "parent reports worker failure" failed
       status.clear
-      check "failure report is separated from progress"
+      check "file failure report is separated from progress"
         (((← errors).splitOn
-            (Driver.StatusRenderer.resetLine ++ "leanfmt: worker batch 1/1")).length
+            (Driver.StatusRenderer.resetLine
+              ++ s!"leanfmt: {file}: failed to parse file:")).length
           == 2)
+      check "reported file failures do not get a redundant batch diagnostic"
+        (((← errors).splitOn "leanfmt: worker batch").length == 1)
 
 private def assertWorkerOutputFailure : IO Unit := do
   IO.FS.withTempDir
@@ -170,6 +235,8 @@ def run : IO Unit := do
   assertStatusOutput
   assertConcurrentOutput
   assertRelayedLines
+  assertWorkerBatchReports
+  assertCheckWorkerOutput
   assertInteractiveWorker
   assertWorkerOutputFailure
 

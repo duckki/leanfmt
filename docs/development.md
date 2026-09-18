@@ -426,6 +426,15 @@ formatter copy before running Lake: `lake -d` selects a package directory but do
 change the toolchain Elan selected when launching Lake. Use alternating before/after
 samples without concurrent builds or validation, and retain both wall and CPU timings.
 
+For a slow external-validation batch, repeat the same pristine file list with both
+binaries and reverse their execution order. Retain per-file profiles: one slow
+worker can determine the entire batch duration. The driver's `format` timing
+includes parsing, required declaration replay, convergence, and diagnostics; it
+does not isolate renderer cost. Use a stack sample or phase profile to distinguish
+Lean elaboration from layout work before attributing a slowdown to a formatting
+change. A historical batch time and one retry are a signal to investigate, not
+enough to establish the cause.
+
 Parser-state changes also need an independent semantic check. The
 `assertParserCommandsObserveCompletePrefix` tests compare syntax with Lean's complete
 frontend; `assertFrontendElaborates` waits for all elaboration snapshots and checks both

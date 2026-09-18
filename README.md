@@ -100,8 +100,10 @@ descendants.
 lake exe fmt --check -r MyProject
 ```
 
-`--check` exits nonzero if a file would change or cannot be formatted, which
-makes it suitable for CI and pre-commit validation.
+`--check` prints `needs formatting: PATH` for each file that would change and exits
+nonzero if a file would change or cannot be formatted, which makes it suitable for
+CI and pre-commit validation. Workers report file errors and check results directly;
+only abnormal exits and launch failures get an additional batch-level message.
 
 ### Format Only Current Changes
 

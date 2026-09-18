@@ -464,7 +464,8 @@ def reportWorkerBatchResult
     : IO Bool := do
   match result with
   | .ok result =>
-      if result.exitCode != 0 then
+      -- Exit 1 accompanies file/check diagnostics already printed by the worker.
+      if result.exitCode > 1 then
         IO.eprintln
           s!"leanfmt: worker batch {batchIndex}/{totalBatches} exited with code {result.exitCode}"
       profileLine options
