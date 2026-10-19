@@ -970,14 +970,85 @@ private partial def sourceOverflowAlternative?
         else
           none
 
+private partial def containsHeaderCollection : SyntaxTree.Tree → Bool
+  | tree@(.node kind children) =>
+      if SyntaxTree.outerDelimiterKind? children == some .bracket then
+        1 < LineBreakRules.arrayItemCount (LineBreakRules.Segment.ofTree tree)
+      else
+        match kind with
+        | .suffixGroup | .raw `null => children.any containsHeaderCollection
+        | _ => false
+  | _ => false
+
+private def isBreakableTacticHeader : SyntaxTree.Tree → Bool
+  | .node .parserOwnedHeader children => children.any containsHeaderCollection
+  | .node (.tactic `Lean.Parser.Tactic.renameI _ _ _ _) _ => true
+  | _ => false
+
+/-- Recover supported tactic arguments even when their source lines already overflow.
+Keep other source islands and siblings opaque while exposing the selected header. -/
+private partial def tacticOverflowAlternative?
+    (sourceMap : SyntaxTree.SourcePositionMap) (shift limit : Nat)
+    (inheritedPlan : IslandPlan) (tree : SyntaxTree.Tree)
+    : Option OverflowAlternative :=
+  match tree with
+  | .missing | .leaf _ => none
+  | .node _ children =>
+      let localPlan? := plan? tree
+      if localPlan?.any fun plan => !allowsStructuralRecovery plan.kind then
+        none
+      else if isBreakableTacticHeader tree
+              && firstSourceLineOverflows sourceMap shift limit tree then
+        some
+        <| .structural (children.map fun child => argumentAlternative child .unchanged)
+      else
+        let inheritedPlan := localPlan?.getD inheritedPlan
+        let isEnvelope :=
+          ownsStructuredHeader tree
+          || ownsAttachedProof tree
+          || match tree with
+              | .node (.tactic _ true _ _ _) _
+              | .node .parserOwnedHeader _
+              | .node .parserOwnedBody _
+              | .node .suffixGroup _ => true
+              | .node (.raw `group) _ =>
+                  children.size == 2
+                  && tree.firstToken?.any (·.lexeme == "|")
+                  && children[1]?.any SyntaxTree.Tree.isTacticSequenceTree
+              | _ => (SyntaxTree.outerDelimiterKind? children).isSome
+        let alternatives :=
+          children.map (tacticOverflowAlternative? sourceMap shift limit inheritedPlan)
+        let alternatives :=
+          if isEnvelope then
+            alternatives
+          else
+            retainSharedSourceLines sourceMap children alternatives
+        if alternatives.any Option.isSome then
+          some
+          <| .structural
+          <| children.mapIdx
+              fun index child =>
+                (alternatives[index]!).getD
+                  (if isEnvelope then
+                      .unchanged
+                    else
+                      .preserve ((plan? child).getD inheritedPlan))
+        else
+          none
+
 def overflowAlternative?
     (sourceMap : SyntaxTree.SourcePositionMap) (tree : SyntaxTree.Tree)
     (plan : IslandPlan) (shift limit : Nat)
     : Option OverflowAlternative :=
-  if shift == 0 || !allowsStructuralRecovery plan.kind then
+  if !allowsStructuralRecovery plan.kind then
     none
   else
-    sourceOverflowAlternative? sourceMap shift limit plan tree
+    (tacticOverflowAlternative? sourceMap shift limit plan tree).orElse
+      fun _ =>
+        if shift == 0 then
+          none
+        else
+          sourceOverflowAlternative? sourceMap shift limit plan tree
 
 private partial def wrapsBracketedCollection : SyntaxTree.Tree → Bool
   | .node _ children =>

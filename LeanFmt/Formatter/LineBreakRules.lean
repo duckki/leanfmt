@@ -154,8 +154,27 @@ def RuleContext.parentIsDeclarationPrefixOwner (context : RuleContext) : Bool :=
       || parent.nodeKind? == some .modifiedDeclaration
   | _ => false
 
+partial def tacticCombinatorOwnsNestedBase : List Frame → Bool
+  | [] => false
+  | frame :: rest =>
+      match frame.nodeKind? with
+      | some (.tactic kind _ _ _ _) =>
+          [
+            `Lean.Parser.Tactic.allGoals,
+            `Lean.Parser.Tactic.first,
+            `Lean.solveTactic,
+            `Lean.Parser.Tactic.paren
+          ].contains
+            kind
+          || (SyntaxTree.Tree.isTacticSequenceKind kind
+              && tacticCombinatorOwnsNestedBase rest)
+      | some .suffixGroup | some (.raw `null) | some (.raw `group) =>
+          tacticCombinatorOwnsNestedBase rest
+      | _ => false
+
 def defaultInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   context.parentIsDeclarationPrefixOwner
+  || tacticCombinatorOwnsNestedBase context.ancestors
   || context.parentIsSingletonArrayItemWrapper
   || segment.rawKind? == some `Lean.Parser.Term.letDecl
   || segment.rawKind? == some `Lean.Parser.Term.sufficesDecl
@@ -977,6 +996,9 @@ def nullInheritBase (context : RuleContext) (segment : Segment) : Bool :=
   || parentIsRawKind context `Lean.Parser.Term.structInstField
   || parentIsRawKind context `Lean.Parser.Term.letRecDecls
   || parentIsRawKind context `Lean.Parser.Term.letRecDecl
+  || parentIsRawKind context `Lean.Parser.Tactic.renameI
+  || parentIsRawKind context `Lean.Parser.Tactic.first
+  || parentIsRawKind context `Lean.solveTactic
   || parentIsRawKind context `Lean.Parser.Tactic.cases
   || parentIsRawKind context `Lean.Parser.Tactic.inductionAlts
   || parentIsRawKind context `Lean.Parser.Tactic.inductionAlt
@@ -1712,6 +1734,13 @@ def extendedBinderCollectionBreaks (context : RuleContext) (segment : Segment)
     : List BreakPoint :=
   if parentIsRawKind context `Batteries.ExtendedBinder.extBinderCollection then
     childBoundaryBreaks segment 0
+  else
+    []
+
+def renameIdentifierBreaks (context : RuleContext) (segment : Segment)
+    : List BreakPoint :=
+  if parentIsRawKind context `Lean.Parser.Tactic.renameI then
+    childBoundaryBreaks segment 1
   else
     []
 
@@ -3515,6 +3544,7 @@ def nullBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   ++ tacticSequenceItemBreaks context segment
   ++ quantifierBinderBreaks context segment
   ++ extendedBinderCollectionBreaks context segment
+  ++ renameIdentifierBreaks context segment
   ++ binderIdentifierBreaks context segment
   ++ openIdentifierBreaks context segment
   ++ commandAttributeIdentifierBreaks context segment
@@ -3565,6 +3595,7 @@ def nullRule : LineBreakRule :=
         !(structureParentBreaks context segment).isEmpty
         || !(quantifierBinderBreaks context segment).isEmpty
         || !(extendedBinderCollectionBreaks context segment).isEmpty
+        || !(renameIdentifierBreaks context segment).isEmpty
         || !(binderIdentifierBreaks context segment).isEmpty
         || !(openIdentifierBreaks context segment).isEmpty
         || !(commandAttributeIdentifierBreaks context segment).isEmpty
@@ -3748,6 +3779,24 @@ def transparentRule : LineBreakRule :=
         segment.indexes.any
           fun childIndex =>
             childIndex < index && (segment.child? childIndex).any treeHasContent
+  }
+
+def tacticAlternativesRule : LineBreakRule :=
+  {
+    name := "tacticAlternatives"
+    inheritBase := fun _ _ => true
+    mandatory := fun _ _ => true
+    breakPoints := fun _ segment => [boundaryBreak? segment 1 0].filterMap id
+  }
+
+def tacticAlternativeBranchRule : LineBreakRule :=
+  {
+    name := "tacticAlternativeBranch"
+    inheritBase := fun _ _ => true
+    flow := fun _ _ => true
+    useExistingBreaks := fun _ _ => true
+    keepPrefixWithChildFirstLine := fun _ _ index => index == 1
+    breakPoints := fun _ segment => [boundaryBreak? segment 1 1].filterMap id
   }
 
 def constructorRule : LineBreakRule :=
@@ -4753,6 +4802,12 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Tactic.locationHyp) _ => some defaultRule
   | .node (.raw `Lean.Parser.Tactic.exact) _ => some defaultRule
   | .node (.raw `Lean.calcTactic) _ => some calcRule
+  | .node (.raw `Lean.Parser.Tactic.first) _ => some tacticAlternativesRule
+  | .node (.raw `Lean.solveTactic) _
+  | .node (.raw `Lean.Parser.Tactic.renameI) _ =>
+      some { transparentRule with inheritBase := fun _ _ => true }
+  | .node (.raw `Lean.Parser.Tactic.paren) _ =>
+      some { parenRule with inheritBase := fun _ _ => true }
   | .node (.raw `Lean.Parser.Tactic.cases) _ => some tacticLayoutOwnerRule
   | .node (.raw `Lean.Parser.Tactic.induction) _ => some tacticLayoutOwnerRule
   | .node (.tacticEliminationTargets _) _ => some matchDiscriminantsRule
@@ -5175,9 +5230,13 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.doPatDecl) _ => some doPatternDeclRule
   | .node (.raw `Lean.Parser.Term.dbgTrace) _ => some dbgTraceRule
   | .node (.raw `Lean.Parser.Term.idbg) _ => some dbgTraceRule
-  | tree@(.node (.raw `group) _) =>
+  | tree@(.node (.raw `group) children) =>
       some
-      <| if (declarationEquationBreaks (Segment.ofTree tree)).isEmpty then
+      <| if tree.firstToken?.any (·.lexeme == "|")
+            && children.size == 2
+            && children[1]?.any SyntaxTree.Tree.isTacticSequenceTree then
+            tacticAlternativeBranchRule
+          else if (declarationEquationBreaks (Segment.ofTree tree)).isEmpty then
             groupRule
           else
             theoremRule

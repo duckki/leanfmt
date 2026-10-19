@@ -125,6 +125,12 @@ An optional parser child with no source tokens does not separate a declaration
 prefix from its header, so `have`, `let`, and extension forms built from
 `letDecl` keep their keyword with the declaration name.
 
+An overlong `rename_i` identifier list or multi-entry bracketed tactic rule list
+wraps at its argument boundaries even if the input already exceeds the requested
+width. Recovery also applies inside `all_goals first` and `(solve | ...)`;
+continuation lines follow the proof's indentation. Fitting authored tactic
+layouts remain preserved.
+
 ### Preserve intentional source breaks selectively
 
 Line breaks from the input source code are meaningful in some places and incidental in

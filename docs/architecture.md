@@ -1535,8 +1535,8 @@ proof introducers establish the proof's structural base. Their declaration-heade
 parser-owned-header, and suffix-group envelopes likewise keep ordinary child
 plans: an attached keyword is part of that structural shell, not an independently
 protected peer. Other ancestor paths
-explicitly preserve unaffected siblings. There is no tactic-name dispatch or
-extra rule API for this recovery.
+explicitly preserve unaffected siblings. Syntax-specific breakpoints remain in
+`LineBreakRules`.
 Where recovery retains siblings, source-line ownership limits that sparse plan:
 a retained token-bearing sibling protects the complete physical line it shares
 with a candidate. `OriginalTree` discards partial recovery for that shared line;
@@ -1545,6 +1545,18 @@ renderer. Tokenless siblings do not protect a line, and retained siblings on
 separate lines do not prevent recovery. Required indentation can therefore
 produce an accepted protected-line overflow without opening only the final
 argument of an inline sequence.
+
+Supported tactic headers have a separate sparse recovery path for source lines
+that already exceed the requested width, including when the indentation shift is
+zero. It exposes `rename_i` identifier lists and parser-owned bracketed headers
+with multiple entries, then opens only their enclosing tactic combinators and
+structural shells. Branch markers, delimiters, and attached header suffixes keep
+their ordinary structural policies; unrelated sibling tactics remain protected.
+This allows recovery through `all_goals first | (solve | ...)` without making all
+protected proofs structural. Fitting tactic layouts, opaque islands, and the
+existing source-line ownership restriction for ordinary argument recovery remain
+unchanged.
+
 Optional single-value tactic assignments are regrouped in the syntax tree into a
 definition with a parser-owned header, assignment token, and value. This exposes the
 ordinary value boundary for `obtain`-shaped syntax without a tactic-specific break rule.

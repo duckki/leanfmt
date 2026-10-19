@@ -12156,7 +12156,8 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
     "theorem brokenParserOwnedBody : True := by\n"
     ++ "  project_try? veryLongNormalizationProcedure firstNormalizationArgument\n"
     ++ "    secondNormalizationArgument thirdNormalizationArgument project_says\n"
-    ++ "    simp only [firstResultLemma, secondResultLemma, thirdResultLemma, fourthResultLemma]\n"
+    ++ "    simp only [firstResultLemma, secondResultLemma, thirdResultLemma,\n"
+    ++ "      fourthResultLemma]\n"
   let brokenParserOwnedBodyResult ←
     Formatter.formatSourceWithEnvDetailed env brokenParserOwnedBodySource
       "broken-parser-owned-tactic-body.lean" { lineWidth := 72 }
@@ -12164,6 +12165,8 @@ def assertMathlibOwnershipConsistencyShapes (env : Lean.Environment) : IO Unit :
     (!brokenParserOwnedBodyResult.fellBack)
   assertEq "a parser-owned suffix establishes the base of its broken body"
     brokenParserOwnedBodyExpected brokenParserOwnedBodyResult.formatted
+  assertTrue "a broken parser-owned body fits the requested width"
+    (Formatter.linesFit brokenParserOwnedBodyResult.formatted 72)
   assertTrue "a broken parser-owned body preserves code"
     (← codePreservedIgnoringWhitespace env brokenParserOwnedBodySource
         brokenParserOwnedBodyResult.formatted)
@@ -19087,7 +19090,7 @@ def assertMovedProofCollectionFitsWidth (env : Lean.Environment) : IO Unit := do
     ++ "        Nat.mul_one]\n"
     ++ "  ⟩\n"
   check "fitting moved proof collection" source retained 100
-  check "already overlong proof collection" source retained 88 false
+  check "already overlong proof collection recovers" source expected 88
   let laterSource :=
     "def movedRules (a b : Nat) : {n : Nat // n = a + b} :=\n"
     ++ "  ⟨a + b, by\n"
@@ -23907,8 +23910,61 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
 private def withDefaultEnvironment (test : Lean.Environment → IO Unit) : IO Unit := do
   test (← Formatter.defaultEnvironment)
 
+def assertExistingTacticOverflowRecovery : IO Unit := do
+  let env ←
+    SyntaxTree.importEnvironment #[{ module := `Lean }, { module := `Std.Tactic.Do }]
+  let options : Formatter.Options := { lineWidth := 100 }
+  let check (name source : String) : IO Unit := do
+    let result ← Formatter.formatSourceWithEnvDetailed env source name options
+    assertTrue s!"{name} does not fall back" (!result.fellBack)
+    assertTrue s!"{name} wraps the existing overflow" (result.formatted != source)
+    for line in result.formatted.splitOn "\n" do
+      assertTrue s!"{name} fits the requested width: {line}" (line.length <= 100)
+    assertTrue s!"{name} preserves syntax and tokens"
+      (← codePreservedIgnoringWhitespace env source result.formatted)
+    let before ← SyntaxTree.parseModuleStringWithEnv env source name
+    let after ← SyntaxTree.parseModuleStringWithEnv env result.formatted name
+    assertTrue s!"{name} has no safety exceptions"
+      (Formatter.Diagnostics.formattingSafetyExceptions before after options).isEmpty
+    assertEq s!"{name} is idempotent" result.formatted
+      (← Formatter.formatSourceWithEnv env result.formatted name options)
+  check "rename-identifiers"
+    ("example : True := by\n"
+      ++ "  all_goals first\n"
+      ++ "  | (solve |\n"
+      ++ "    rename_i prefI i suffI hi initial p0 q0 pair0 prefJ j suffJ magnitude p q pair hinit hj hstate hcmp\n"
+      ++ "    trivial)\n")
+  check "simpa-nested-application"
+    ("example : True := by\n"
+      ++ "  all_goals first\n"
+      ++ "  | (solve |\n"
+      ++ "    simpa only [List.length_append, List.length_singleton, ← (Flare.Matrix.Storage.forIn_range_current\n"
+      ++ "      hi).1] using\n"
+      ++ "      product_row rows inner columns a b result δ i (by simpa only [range_length] using hs))\n")
+  check "vcgen-rules"
+    ("example : True := by\n"
+      ++ "  vcgen [-Flare.Matrix.OperationStorage.finite_wp_spec, Flare.Matrix.OperationStorage.finite_wp_exact]\n")
+  let neighboring :=
+    "example : True := by\n  all_goals first\n  | (solve |\n"
+    ++ "    rename_i prefI i suffI hi initial p0 q0 pair0 prefJ j suffJ magnitude p q pair hinit hj hstate hcmp\n"
+    ++ "    exact   True.intro)\n"
+  let neighboringResult ←
+    Formatter.formatSourceWithEnv env neighboring "neighboring-tactic.lean" options
+  assertTextContains "recovery preserves unrelated sibling tactic layout"
+    neighboringResult "    exact   True.intro)"
+  let protectedSource := "-- leanfmt: off\n" ++ neighboring ++ "-- leanfmt: on\n"
+  assertEq "ignored tactic overflows remain opaque" protectedSource
+    (← Formatter.formatSourceWithEnv env protectedSource "ignored-tactic.lean" options)
+  let fitting := "example : True := by\n  rename_i first second\n  trivial\n"
+  assertEq "fitting identifier lists retain source layout" fitting
+    (← Formatter.formatSourceWithEnv env fitting "fitting-rename.lean" options)
+  let fittingRules := "example : True := by\n  vcgen [-firstRule, secondRule]\n"
+  assertEq "fitting tactic collections retain source layout" fittingRules
+    (← Formatter.formatSourceWithEnv env fittingRules "fitting-vcgen.lean" options)
+
 def testGroups : Array (String × IO Unit) :=
   #[
+    ("tactic-overflow", assertExistingTacticOverflowRecovery),
     ("syntax-tree", withDefaultEnvironment runSyntaxTreeTests),
     ("documented-examples", withDefaultEnvironment DocumentedExamples.run),
     ("layout-architecture", LayoutArchitecture.run),
