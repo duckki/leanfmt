@@ -6,8 +6,7 @@ examples, see [design.md](design.md). For the implementation model, see
 
 ## Prerequisites
 
-leanfmt is a Lake package. The current development toolchain is Lean 4.34.0;
-use the repository's pin:
+leanfmt is a Lake package. Use the repository's pinned development toolchain:
 
 ```sh
 cat lean-toolchain
@@ -650,18 +649,20 @@ exception, and idempotency checks and applies the output for review, but it runs
 target-project Lake build. This keeps broad external formatting coverage cheap
 enough for intermediate checkpoints; it does not replace the complete gate before
 release. The active projects are GraphQL, quantum, CSLib, Mathlib, Chebyshev
-Ephemeris, and Flare. Hex is excluded; its profiling examples above are historical
-controls, not validation targets.
+Ephemeris, Flare, and Kalman. Hex is excluded; its profiling examples above are
+historical controls, not validation targets.
 
-Validate the Ephemeris and Flare additions with normal automatic worker counts.
-Ephemeris uses the default width (90); Flare uses width 100. Run them separately
-because the width override applies to every target in one invocation:
+Validate Ephemeris, Flare, and Kalman with normal automatic worker counts.
+Ephemeris and Kalman use the default width (90); Flare uses width 100. Run Flare
+separately because the width override applies to every target in one invocation:
 
 ```sh
 env -u LEANFMT_VALIDATION_LINE_WIDTH scripts/validate-external-projects.sh \
   chebyshev-ephemeris=$HOME/work/formal-software-engineering/chebyshev-ephemeris
 LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
   flare-lean=$HOME/work/formal-software-engineering/flare-lean
+env -u LEANFMT_VALIDATION_LINE_WIDTH scripts/validate-external-projects.sh \
+  kalman-filter-lean=$HOME/work/formal-software-engineering/kalman-filter-lean
 ```
 
 Staging keeps the clean build artifacts usable while later formatter batches import

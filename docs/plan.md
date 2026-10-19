@@ -18,8 +18,8 @@ solution to concurrent-worker memory pressure.
 ### Release validation
 
 The tight-infix spacing fix passes the focused checkpoint recorded below. Next,
-run the complete release gate on the current formatter, including Ephemeris and
-Flare alongside GraphQL, quantum, CSLib, and Mathlib.
+run the complete release gate on the current formatter, including Ephemeris,
+Flare, and Kalman alongside GraphQL, quantum, CSLib, and Mathlib.
 Hex is excluded. Formatter-only checkpoints do not replace changed-module and
 post-format builds. Compare performance with identical inputs, exact imports,
 diagnostics, and worker limits.
@@ -343,7 +343,8 @@ automatic worker counts. For memory-constrained validation or isolated profiling
 explicitly set `--jobs 1` or `LEANFMT_VALIDATION_FORMATTER_JOBS=1`; this does not
 change the default. Serialize heavy runs and monitor compressed-inclusive memory.
 Lightweight checkpoints use recorded GraphQL, quantum, CSLib, Ephemeris, and Flare
-build baselines plus pristine Mathlib safety regressions. Hex is excluded.
+build baselines plus pristine Mathlib safety regressions. Kalman joins the release
+gate and needs a complete validation to establish its checkpoint baseline. Hex is excluded.
 Report scope and omitted builds. Compare performance on identical inputs without
 concurrent validation. Enable missing-rule checks for Mathlib only.
 
