@@ -320,6 +320,18 @@ standalone comment after a protected proof body follows its source nesting: a
 comment deeper than the next peer remains in the proof body, while a comment at
 the peer's indentation follows the peer.
 
+When a multiline record moves, a comment before its closing brace stays with
+the fields while the brace returns to its opening column:
+
+```lean
+          {
+            fieldName
+            arguments
+            selectionSet
+            -- Keep this comment with the fields.
+          }
+```
+
 Comment contents are not wrapped or rewritten. Module and declaration documentation
 comments retain their line shape and their exact internal whitespace relative to the
 opening delimiter.

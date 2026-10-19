@@ -726,6 +726,7 @@ def WhitespaceState.defaultWhitespace (state : WhitespaceState) (token : SyntaxT
         else if boundary.startsOnNewLine
                 && (boundary.hasSeparatedCommentGroups
                     || boundary.endsBeforeBlankLine
+                    || (token.isClosingDelimiter && boundary.hasComment)
                     || (state.pendingCommandBoundary? == some .blankLine
                         && state.sourceMap.columnAt token.span.start
                             == state.layoutAnchor.sourceColumn)) then
@@ -742,7 +743,7 @@ def WhitespaceState.defaultWhitespace (state : WhitespaceState) (token : SyntaxT
                 let commentIndent :=
                   if belongsToFollowingToken then
                     indent
-                  else if hasExplicitTrailingOwnership then
+                  else if hasExplicitTrailingOwnership || token.isClosingDelimiter then
                     ({ sourceColumn := sourceTokenIndent, outputColumn := indent }
                       : Rebase.Anchor).shiftColumn
                       sourceCommentIndent

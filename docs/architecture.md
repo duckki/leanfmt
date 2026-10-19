@@ -1273,6 +1273,8 @@ Rules and regroupings should preserve these cross-syntax relationships:
   an authored continuation keeps that relation. A later line authored immediately one
   column left of the opener is treated as aligned and clamped to the rendered opener;
   a more distant line retains its distinct relative offset.
+  A standalone comment immediately before a closing delimiter keeps its source offset
+  from that delimiter when balanced layout moves the delimiter.
   A flow parent cannot flatten away this physical break.
 - Line comments force the token after the comment onto a new line, but may remain
   attached to preceding code while that complete line fits. Block comments force a

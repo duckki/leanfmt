@@ -14443,7 +14443,7 @@ def assertStructInstanceFieldsBreakMandatory (env : Lean.Environment) : IO Unit 
     Formatter.formatSourceWithEnv env source "struct-instance-fields-break.lean"
   assertEq "structure constructor fields break mandatory" expected formatted
 
-def assertAmbiguousSyntaxChoiceRetainsSourceLayout (env : Lean.Environment)
+def assertNewlineSeparatedShorthandFieldsBreakBalanced (env : Lean.Environment)
     : IO Unit := do
   let source :=
     "def replayInstance before after basePrefix stepPrefix sameOperations event origin :=\n"
@@ -14455,20 +14455,29 @@ def assertAmbiguousSyntaxChoiceRetainsSourceLayout (env : Lean.Environment)
     ++ "      sameOperations\n"
     ++ "      event\n"
     ++ "      origin }\n"
-  let sourceModule ←
-    SyntaxTree.parseModuleStringWithEnv env source "ambiguous-structure-choice.lean"
-  assertTrue "newline-separated shorthand fields retain Lean's syntax choice"
-    (findTreeNode? (.raw `choice) sourceModule.tree).isSome
+  let expected :=
+    "def replayInstance before after basePrefix stepPrefix sameOperations event origin :=\n"
+    ++ "  dispatch\n"
+    ++ "    {\n"
+    ++ "      before\n"
+    ++ "      after\n"
+    ++ "      basePrefix\n"
+    ++ "      stepPrefix\n"
+    ++ "      sameOperations\n"
+    ++ "      event\n"
+    ++ "      origin\n"
+    ++ "    }\n"
   let result ←
-    Formatter.formatSourceWithEnvDetailed env source "ambiguous-structure-choice.lean"
-  assertTrue "an ambiguous syntax choice does not fall back" (!result.fellBack)
-  assertEq "an ambiguous syntax choice retains its source layout" source result.formatted
-  assertTrue "an ambiguous syntax choice preserves code"
+    Formatter.formatSourceWithEnvDetailed env source "shorthand-structure-fields.lean"
+  assertTrue "newline-separated shorthand fields do not fall back" (!result.fellBack)
+  assertEq "newline-separated shorthand fields break with balanced braces"
+    expected result.formatted
+  assertTrue "newline-separated shorthand field formatting preserves code"
     (← codePreservedIgnoringWhitespace env source result.formatted)
   let formattedAgain ←
     Formatter.formatSourceWithEnv env result.formatted
-      "ambiguous-structure-choice-formatted.lean"
-  assertEq "ambiguous syntax choice formatting is idempotent"
+      "shorthand-structure-fields-formatted.lean"
+  assertEq "newline-separated shorthand field formatting is idempotent"
     result.formatted formattedAgain
 
 def assertStructInstanceFieldsBreakMandatoryBetweenFields (env : Lean.Environment)
@@ -19027,9 +19036,6 @@ def assertNestedPreservedRecordUsesDelimiterBase (env : Lean.Environment) : IO U
     let expected := declarations ++ formattedRecord ++ ending
     let name := "nested-preserved-record.lean"
     assertFrontendElaborates env source name
-    let sourceModule ← SyntaxTree.parseModuleStringWithEnv env source name
-    assertTrue "shorthand fields retain the ambiguous syntax wrapper"
-      (findTreeNode? (.raw `choice) sourceModule.tree).isSome
     let result ← Formatter.formatSourceWithEnvDetailed env source name { lineWidth := 60 }
     assertTrue "a nested preserved record does not fall back" (!result.fellBack)
     assertEq "a moved record aligns its closer and indents its fields" expected
@@ -23801,7 +23807,7 @@ def runCollectionAndDeclarationTests (env : Lean.Environment) : IO Unit := do
   assertStructureExtendsDoesNotIndentFollowingCommand env
   assertInductiveAlternativesBreakMandatory env
   assertStructInstanceFieldsBreakMandatory env
-  assertAmbiguousSyntaxChoiceRetainsSourceLayout env
+  assertNewlineSeparatedShorthandFieldsBreakBalanced env
   assertStructInstanceFieldsBreakMandatoryBetweenFields env
   assertStructInstanceFieldsBreakBalanced env
   assertTypedStructInstanceBreaksBalanced env
