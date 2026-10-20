@@ -149,8 +149,8 @@ scripts/validate-external-projects.sh \
   mathlib=https://github.com/leanprover-community/mathlib4.git
 ```
 
-Set `LEANFMT_VALIDATION_LINE_WIDTH=100` when validating mathlib or CSLib against
-their 100-column convention:
+Set `LEANFMT_VALIDATION_LINE_WIDTH=100` when validating mathlib, CSLib, or Flare
+against their 100-column convention:
 
 ```sh
 LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
