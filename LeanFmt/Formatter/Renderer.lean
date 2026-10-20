@@ -2747,8 +2747,21 @@ mutual
                     let parentRelativeColumn :=
                       sourceLayoutStart?.map (·.2)
                       |>.getD (state.layoutAnchor.shiftColumn sourceColumn)
+                    let isApplicationArgument :=
+                      (index > 0
+                        && match segment.parent with
+                            | .node .application _ => true
+                            | _ => false)
+                      || state.context.ancestors.head?.any
+                          fun frame =>
+                            frame.childIndex > 0
+                            && match frame.segment.parent with
+                                | .node .application _ => true
+                                | _ => false
                     let minimumRecoveryColumn :=
-                      if singleTokenRecovery then
+                      if isApplicationArgument then
+                        desiredIndent
+                      else if singleTokenRecovery then
                         desiredIndent - indentationSpaces
                       else if childPlan.isAtomic then
                         max (max 1 state.layoutAnchor.outputColumn)

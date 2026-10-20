@@ -1298,16 +1298,12 @@ def assertDoBodyRetainsSourceLayoutToAvoidOverflow (env : Lean.Environment)
     ++ message
     ++ "\n"
     ++ "  | none => pure ()\n"
-  let formatted ←
-    withExpectedStderr "atomic-overflow preservation warning"
-      "leanfmt: warning: using original source for do-body-atomic-overflow.lean: an intermediate result changed parsed syntax\n"
-        do
-      Formatter.formatSourceWithEnv env source "do-body-atomic-overflow.lean"
-        { lineWidth := 60 }
-  assertTrue "do body source layout avoids introduced atomic overflow"
-    (Formatter.linesFit formatted 60)
-  assertTrue "do body source layout fallback preserves code"
-    (← codePreservedIgnoringWhitespace env source formatted)
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "do-body-atomic-overflow.lean"
+      { lineWidth := 60 }
+  assertTrue "do body long argument does not fall back" (!result.fellBack)
+  assertTrue "do body long argument preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
   let inlineMessage := "\"" ++ String.ofList (List.replicate 40 'x') ++ "\""
   let inlineSource :=
     "initialize registerBuiltinAttribute {\n"
@@ -7612,8 +7608,8 @@ def assertProoflessCalcInitialStaysWithKeyword (env : Lean.Environment) : IO Uni
   let expected :=
     "def prooflessCalcInitial : Nat :=\n"
     ++ "  calc _\n"
-    ++ "    _ = middle := firstProof\n"
-    ++ "    _ = final := secondProof\n"
+    ++ "  _ = middle := firstProof\n"
+    ++ "  _ = final := secondProof\n"
   let result ←
     Formatter.formatSourceWithEnvDetailed env source
       "proofless-calc-initial-layout.lean" { lineWidth := 80 }
@@ -7625,6 +7621,147 @@ def assertProoflessCalcInitialStaysWithKeyword (env : Lean.Environment) : IO Uni
     Formatter.formatSourceWithEnv env result.formatted
       "proofless-calc-initial-layout-formatted.lean" { lineWidth := 80 }
   assertEq "proofless calc initial is idempotent" result.formatted formattedAgain
+
+def assertCommentedProoflessCalcKeepsStepsSeparate (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "def prooflessCalcNestedTerm : Nat := calc\n"
+    ++ "  /- A comment separating the calc keyword from its initial expression.\n"
+    ++ "  It spans more than one source line. -/\n"
+    ++ "  firstTerm\n"
+    ++ "  _ = result := proof\n"
+  let expected :=
+    "def prooflessCalcNestedTerm : Nat :=\n"
+    ++ "  calc\n"
+    ++ "  /- A comment separating the calc keyword from its initial expression.\n"
+    ++ "  It spans more than one source line. -/\n"
+    ++ "  firstTerm\n"
+    ++ "  _ = result := proof\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "commented-proofless-calc-step-boundary.lean" { lineWidth := 100 }
+  assertTrue "commented proofless calc keeps its syntax" (!result.fellBack)
+  assertEq "commented proofless calc aligns its steps" expected result.formatted
+  assertTrue "commented proofless calc preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "commented-proofless-calc-step-boundary-formatted.lean" { lineWidth := 100 }
+  assertEq "commented proofless calc is idempotent" result.formatted formattedAgain
+
+def assertTacticProoflessCalcKeepsRowsIndented (env : Lean.Environment) : IO Unit := do
+  let source := "example : 1 = 1 := by\n" ++ "  calc 1\n" ++ "    _ = 1 := rfl\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source
+      "tactic-proofless-calc.lean" { lineWidth := 100 }
+  assertTrue "tactic proofless calc does not fall back" (!result.fellBack)
+  assertEq "tactic proofless calc indents its rows" source result.formatted
+  assertTrue "tactic proofless calc preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+
+def assertPrivateDeclTermHasRule (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def privateDeclTerm := private_decl% (helper firstArgument secondArgument)\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "private-decl-term.lean"
+      { lineWidth := 100 }
+  assertTrue "private_decl% does not fall back" (!result.fellBack)
+  assertEq "private_decl% keeps its term" source result.formatted
+  let formattedTree ← SyntaxTree.parseModuleStringWithEnv env result.formatted
+  assertTrue "private_decl% has a line-break rule"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule formattedTree).isEmpty
+  assertTrue "private_decl% preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+
+def assertMatchExprHasRule (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def rawLiteral? (e : Lean.Expr) : Option Nat :=\n"
+    ++ "  match_expr e with\n"
+    ++ "  | Int.ofNat n => n.rawNatLit?\n"
+    ++ "  | _ => none\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "match-expr-rule.lean"
+      { lineWidth := 100 }
+  assertTrue "match_expr does not fall back" (!result.fellBack)
+  assertEq "match_expr uses match layout" source result.formatted
+  let formattedTree ← SyntaxTree.parseModuleStringWithEnv env result.formatted
+  assertTrue "match_expr has a line-break rule"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule formattedTree).isEmpty
+
+def assertGrindPatternConstraintsKeepPeerBoundaries (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "grind_pattern witness => f x where x =/= y\n"
+    ++ "\n"
+    ++ "grind_pattern secondWitness => g x where\n"
+    ++ "  x =/= y\n"
+    ++ "  x =?= z\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "grind-pattern-constraints.lean"
+      { lineWidth := 100 }
+  assertTrue "grind pattern constraints do not fall back" (!result.fellBack)
+  assertTextContains "grind constraints remain on distinct lines"
+    result.formatted "x =/= y\n    x =?= z"
+  let formattedTree ←
+    SyntaxTree.parseModuleStringWithEnv env result.formatted
+      "grind-pattern-constraints-formatted.lean"
+  assertTrue "grind pattern constraints have line-break rules"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule formattedTree).isEmpty
+  assertTrue "grind pattern constraints preserve code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let again ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "grind-pattern-constraints-formatted.lean" { lineWidth := 100 }
+  assertEq "grind pattern constraints are idempotent" result.formatted again
+
+def assertDoForwardMarkerStaysTight (env : Lean.Environment) : IO Unit := do
+  let source :=
+    "def forwardWrapper : IO Unit := do\n"
+    ++ "  for _ in [1] do\n"
+    ++ "    withTraceNode `test (fun _ => do return m!\"test\") do←\n"
+    ++ "      pure ()\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "do-forward-marker.lean"
+      { lineWidth := 80 }
+  assertTrue "do← does not fall back" (!result.fellBack)
+  assertTrue "do← marker remains tight" ((result.formatted.splitOn "do←").length == 2)
+  assertTrue "do← preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted "do-forward-marker-formatted.lean"
+      { lineWidth := 80 }
+  assertEq "do← is idempotent" result.formatted formattedAgain
+
+def assertLongApplicationArgumentKeepsDoBlockIndent (env : Lean.Environment)
+    : IO Unit := do
+  let source :=
+    "def probe (xs : List Nat) : IO Unit := do\n"
+    ++ "  for x in xs do\n"
+    ++ "    match x with\n"
+    ++ "    | 0 =>\n"
+    ++ "      if x == 0 then\n"
+    ++ "        IO.println \"first\"\n"
+    ++ "      else if x == 2 then\n"
+    ++ "        Linter.logLint linter.style.header i.getIdent\n"
+    ++ "          \"Importing anything from `Init` is redundant, because it is already imported by default.\"\n"
+    ++ "    | _ => pure ()\n"
+  let result ←
+    Formatter.formatSourceWithEnvDetailed env source "long-do-application-argument.lean"
+      { lineWidth := 100 }
+  assertTrue "long do application argument does not fall back" (!result.fellBack)
+  assertTrue "long do application argument preserves code"
+    (← codePreservedIgnoringWhitespace env source result.formatted)
+  let originalTree ←
+    SyntaxTree.parseModuleStringWithEnv env source "long-do-application-argument.lean"
+  let formattedTree ←
+    SyntaxTree.parseModuleStringWithEnv env result.formatted
+      "long-do-application-argument-formatted.lean"
+  assertTrue "long do application argument keeps its syntax"
+    (Formatter.Diagnostics.preservesSyntaxIgnoringSourceInfo originalTree formattedTree)
+  let formattedAgain ←
+    Formatter.formatSourceWithEnv env result.formatted
+      "long-do-application-argument-formatted.lean" { lineWidth := 100 }
+  assertEq "long do application argument is idempotent" result.formatted formattedAgain
 
 def assertProoflessCalcInitialPreservesProjection (env : Lean.Environment) : IO Unit := do
   let source :=
@@ -16423,49 +16560,38 @@ def assertCliChecksStillFormatUnlessCheck
   let afterExceptionFile := root / "AfterException.lean"
   let afterExceptionSource := "def  afterException  : Nat := 0\n"
   IO.FS.writeFile afterExceptionFile afterExceptionSource
-  let fallbackWarning :=
-    s!"leanfmt: warning: using original source for {overflowFile}: an intermediate result changed parsed syntax\n"
-  let fallbackCounts : LeanFmt.Driver.ExceptionCounts := { formatFallback := 1 }
-  let fallbackDiagnostics :=
-    fallbackWarning
-    ++ s!"format fallback: {overflowFile}\n"
-    ++ fallbackCounts.summary
-    ++ "\n"
   let overflowExitCode ←
-    withExpectedStderr "CLI fallback diagnostics" fallbackDiagnostics do
-      LeanFmt.Driver.runOptionsWithLoader loader
-        {
-          checkException := true
-          workerDefaultEnvironment := true
-          formatterOptions := { lineWidth := 60 }
-          includeHidden := true
-          files := [overflowFile, afterExceptionFile]
-        }
-  assertTrue "CLI exception check rejects a format fallback" (overflowExitCode == 1)
+    LeanFmt.Driver.runOptionsWithLoader loader
+      {
+        checkException := true
+        workerDefaultEnvironment := true
+        formatterOptions := { lineWidth := 60 }
+        includeHidden := true
+        files := [overflowFile, afterExceptionFile]
+      }
+  assertTrue "CLI exception check accepts the long argument" (overflowExitCode == 0)
   let overflowFormatted ←
-    withExpectedStderr "direct formatting fallback warning" fallbackWarning do
-      Formatter.formatSourceWithEnv env overflowSource overflowFile.toString
-        { lineWidth := 60 }
-  assertEq "CLI exception failure writes the checked candidate"
+    Formatter.formatSourceWithEnv env overflowSource overflowFile.toString
+      { lineWidth := 60 }
+  assertEq "CLI exception check writes the checked candidate"
     overflowFormatted (← IO.FS.readFile overflowFile)
   let afterExceptionFormatted ←
     Formatter.formatSourceWithEnv env afterExceptionSource afterExceptionFile.toString
-  assertEq "CLI continues with files after an exception"
+  assertEq "CLI continues with files after a long argument"
     afterExceptionFormatted (← IO.FS.readFile afterExceptionFile)
   IO.FS.writeFile overflowFile overflowSource
   let checkedOverflowExitCode ←
-    withExpectedStderr "dry-run fallback diagnostics" fallbackDiagnostics do
-      LeanFmt.Driver.runOptionsWithLoader loader
-        {
-          check := true
-          checkException := true
-          workerDefaultEnvironment := true
-          formatterOptions := { lineWidth := 60 }
-          includeHidden := true
-          files := [overflowFile]
-        }
-  assertTrue "CLI checked exception still fails" (checkedOverflowExitCode == 1)
-  assertEq "explicit check prevents writing a failing candidate"
+    LeanFmt.Driver.runOptionsWithLoader loader
+      {
+        check := true
+        checkException := true
+        workerDefaultEnvironment := true
+        formatterOptions := { lineWidth := 60 }
+        includeHidden := true
+        files := [overflowFile]
+      }
+  assertTrue "CLI dry exception check succeeds" (checkedOverflowExitCode == 0)
+  assertEq "explicit check prevents writing a formatting candidate"
     overflowSource (← IO.FS.readFile overflowFile)
 
   let idempotentFile := root / "Idempotent.lean"
@@ -16511,6 +16637,45 @@ def assertCliChecksStillFormatUnlessCheck
       { check := true, checkMissingRules := true } [{ changed := true }]
   assertTrue "CLI missing-rule --check ignores formatting changes"
     (missingRuleCheckExitCode == 0)
+
+def assertCliFormatFallbackIsHardError
+    (env : Lean.Environment) (loader : LeanFmt.Driver.EnvironmentLoader)
+    : IO Unit := do
+  let root : FilePath := ".scratch/leanfmt-cli-test/fallback"
+  IO.FS.createDirAll root
+  let fallbackFile := root / "Fallback.lean"
+  let fallbackSource := "def value :=\n-- leanfmt: off\n  0\n-- leanfmt: on\n"
+  let laterFile := root / "Later.lean"
+  let laterSource := "def  later  : Nat := 0\n"
+  let fallbackCounts : LeanFmt.Driver.ExceptionCounts := { formatFallback := 1 }
+  let fallbackDiagnostics :=
+    s!"leanfmt: warning: using original source for {fallbackFile}: ignored-region chunks did not preserve the complete source\n"
+    ++ s!"format fallback: {fallbackFile}\n"
+    ++ fallbackCounts.summary
+    ++ "\n"
+  for (check, checkException)
+      in [(false, false), (false, true), (true, false), (true, true)] do
+    IO.FS.writeFile fallbackFile fallbackSource
+    IO.FS.writeFile laterFile laterSource
+    let files := if check then [fallbackFile] else [fallbackFile, laterFile]
+    let exitCode ←
+      withExpectedStderr "CLI fallback diagnostics" fallbackDiagnostics do
+        LeanFmt.Driver.runOptionsWithLoader loader
+          {
+            check,
+            checkException,
+            workerDefaultEnvironment := true,
+            includeHidden := true,
+            files
+          }
+    assertTrue "CLI fallback is a hard error" (exitCode == 1)
+    assertEq "CLI fallback leaves the affected file unchanged"
+      fallbackSource (← IO.FS.readFile fallbackFile)
+    if !check then
+      let laterFormatted ←
+        Formatter.formatSourceWithEnv env laterSource laterFile.toString
+      assertEq "CLI continues formatting files after a fallback"
+        laterFormatted (← IO.FS.readFile laterFile)
 
 def assertCliFormatsDirectory
     (env : Lean.Environment) (loader : LeanFmt.Driver.EnvironmentLoader)
@@ -17587,6 +17752,20 @@ def assertMathlibLowRiskSyntaxKindsHaveRules : IO Unit := do
       `Lean.Parser.Command.postfix,
       `Lean.Parser.Command.identPrec,
       `Lean.Parser.Command.grindPattern,
+      `Lean.Parser.Command.grindPatternCnstrs,
+      `Lean.Parser.Command.GrindCnstr.isValue,
+      `Lean.Parser.Command.GrindCnstr.isStrictValue,
+      `Lean.Parser.Command.GrindCnstr.notValue,
+      `Lean.Parser.Command.GrindCnstr.notStrictValue,
+      `Lean.Parser.Command.GrindCnstr.isGround,
+      `Lean.Parser.Command.GrindCnstr.sizeLt,
+      `Lean.Parser.Command.GrindCnstr.depthLt,
+      `Lean.Parser.Command.GrindCnstr.genLt,
+      `Lean.Parser.Command.GrindCnstr.maxInsts,
+      `Lean.Parser.Command.GrindCnstr.guard,
+      `Lean.Parser.Command.GrindCnstr.check,
+      `Lean.Parser.Command.GrindCnstr.notDefEq,
+      `Lean.Parser.Command.GrindCnstr.defEq,
       `Lean.Parser.Command.initialize,
       `Lean.Parser.Command.initializeKeyword,
       `Lean.guardMsgsCmd,
@@ -21649,8 +21828,7 @@ def assertDetachedCalcUsesRenderedBase (env : Lean.Environment) : IO Unit := do
           "proofless-comment",
           "example : 1 = 1 :=\n  -- Keep this comment.\n  calc 1\n"
           ++ "    _ = 1 := rfl\n",
-          "example : 1 = 1 :=\n  -- Keep this comment.\n  calc 1\n"
-          ++ "    _ = 1 := rfl\n"
+          "example : 1 = 1 :=\n  -- Keep this comment.\n  calc 1\n" ++ "  _ = 1 := rfl\n"
         )
       ] do
     let fileName := s!"detached-calc-{name}.lean"
@@ -21658,7 +21836,7 @@ def assertDetachedCalcUsesRenderedBase (env : Lean.Environment) : IO Unit := do
     let result ←
       Formatter.formatSourceWithEnvDetailed env source fileName { lineWidth := 100 }
     assertTrue s!"{name} detached calc does not fall back" (!result.fellBack)
-    assertEq s!"{name} calc rows indent below the rendered introducer"
+    assertEq s!"{name} calc rows use the rendered introducer base"
       expected result.formatted
     assertFrontendElaborates env result.formatted fileName
     let again ← Formatter.formatSourceWithEnv env result.formatted fileName
@@ -21736,7 +21914,7 @@ def assertUnaryPrefixOperandWrapsStructurally (env : Lean.Environment) : IO Unit
 def assertCompoundCalcHeaderOwnsValueBoundary (env : Lean.Environment) : IO Unit := do
   for header in ["example", "theorem initialTermHeaderWithLongName"] do
     let source := header ++ " : (1 : Nat) = 1 := calc (1 : Nat)\n  _ = 1 := rfl\n"
-    let expected := header ++ " : (1 : Nat) = 1 :=\n  calc (1 : Nat)\n    _ = 1 := rfl\n"
+    let expected := header ++ " : (1 : Nat) = 1 :=\n  calc (1 : Nat)\n  _ = 1 := rfl\n"
     assertFrontendElaborates env source "compound-calc-header.lean"
     for width in [65, 100] do
       let options := { lineWidth := width : Formatter.Options }
@@ -23599,6 +23777,13 @@ def runBasicFormattingTests (env : Lean.Environment) : IO Unit := do
   assertInlineCalcFirstStepBreaksWithLowPriorityPipe env
   assertDirectCalcBreaksBeforeItsBody env
   assertProoflessCalcInitialStaysWithKeyword env
+  assertCommentedProoflessCalcKeepsStepsSeparate env
+  assertTacticProoflessCalcKeepsRowsIndented env
+  assertPrivateDeclTermHasRule env
+  assertMatchExprHasRule env
+  assertGrindPatternConstraintsKeepPeerBoundaries env
+  assertDoForwardMarkerStaysTight env
+  assertLongApplicationArgumentKeepsDoBlockIndent env
   assertProoflessCalcInitialPreservesProjection env
   assertCalcProofApplicationBreaksAfterAssignment env
   assertCalcApplicationRelationUsesStructuralLayout env
@@ -23843,6 +24028,7 @@ def runCliAndArchitectureTests (env projectSyntaxEnv : Lean.Environment) : IO Un
   assertInheritedOverflowKeepsOtherDiagnostics env
   assertDiagnosticChecksReusePerFileModules env
   assertCliChecksStillFormatUnlessCheck env loader
+  assertCliFormatFallbackIsHardError env loader
   assertCliFormatsDirectory env loader
   assertCliFormatsDirectoryRecursively env loader
   assertCliSkipsHiddenPathsByDefault

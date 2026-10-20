@@ -451,6 +451,16 @@ open CategoryTheory ModuleCat MonoidalCategory Limits Functor.LaxMonoidal
   Functor.OplaxMonoidal TensorProduct
 ```
 
+`grind_pattern` keeps each constraint in a multiline `where` clause on its own
+line; joining two constraints would change the command's syntax:
+
+```lean
+grind_pattern witness => g x
+  where
+    x =/= y
+    x =?= z
+```
+
 A module docstring is separated from the first declaration. Leading comments
 and declaration docstrings stay attached to the command they describe. When a
 syntax form takes a doc comment as its own payload, an inline comment stays
@@ -1603,11 +1613,22 @@ originally inline protected proof.
 A plain `calc` introducer stays with `:=`, including `have := calc`.
 A proofless initial term forms a compound header with `calc`. That complete
 header uses the ordinary value boundary instead of attaching only its first
-token as a suffix. Its rows indent one level below the header:
+token as a suffix. Later rows align with the `calc` base. This also keeps them
+separate when a comment places the initial term on its own line:
 
 <!-- leanfmt-test -->
 ```lean
 example : 1 = 1 :=
+  calc 1
+  _ = 1 := rfl
+```
+
+Inside a `by` block, `calc` is a tactic; its calculation rows instead indent
+one level beneath the tactic:
+
+<!-- leanfmt-test -->
+```lean
+example : 1 = 1 := by
   calc 1
     _ = 1 := rfl
 ```
@@ -2043,6 +2064,10 @@ def run : IO Unit := do
 ```
 
 Statement boundaries are structural and remain on separate lines.
+
+The forwarding form `do←` (or `do<-`) keeps the arrow attached to `do`, even
+when its body wraps. A break belongs after the complete introducer, never
+between `do` and the arrow.
 
 A semicolon explicitly joins adjacent statements. The same policy applies to
 inline tactic sequences: the boundaries immediately beside `;` are suppressed

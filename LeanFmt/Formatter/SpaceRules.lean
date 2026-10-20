@@ -558,6 +558,11 @@ def preservesTightInterpolationSpacing (left right : SyntaxTree.Token) : Bool :=
 def preservesTightQuotedNameSpacing (left _right : SyntaxTree.Token) : Bool :=
   left.lexeme == "`"
 
+def preservesTightDoForwardSpacing (left right : SyntaxTree.Token) : Bool :=
+  left.lexeme == "do"
+  && (right.lexeme == "←" || right.lexeme == "<-")
+  && left.span.stop == right.span.start
+
 def spaceBetweenTokens (left right : SyntaxTree.Token) : String :=
   if left.lexeme.isEmpty || right.lexeme.isEmpty then
     ""
@@ -567,7 +572,8 @@ def spaceBetweenTokens (left right : SyntaxTree.Token) : String :=
           || noSpaceBeforeToken right.lexeme
           || preservesTightDotSpacing left right
           || preservesTightInterpolationSpacing left right
-          || preservesTightQuotedNameSpacing left right then
+          || preservesTightQuotedNameSpacing left right
+          || preservesTightDoForwardSpacing left right then
     ""
   else
     " "

@@ -2566,6 +2566,9 @@ private def regroupApplicationAttachedBody? (children : Array Tree) : Option Tre
     none
   let bodyIndex ← contentIndexes.getLast?
   let wrappedBody ← children[bodyIndex]?
+  if wrappedBody.containsNodeKind (.raw `Lean.Parser.Term.doForward)
+      || wrappedBody.containsNodeKind (.infixChain `Lean.Parser.Term.doForward) then
+    none
   let (introducer, body) ←
     splitLeadingToken?
       (fun token => token.lexeme == "do" || token.lexeme == "by")

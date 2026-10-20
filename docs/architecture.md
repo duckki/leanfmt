@@ -779,6 +779,16 @@ classifies the same `ParserLayout` metadata source used during regrouping: an ex
 formatter registration, a generated `ParserDescr` fallback, or neither.
 The missing-rule report intentionally filters unstable implementation-detail kinds such as
 tokens, generated private names, custom term-notation names, and `stx` helper nodes.
+Built-in wrappers such as `private_decl% e` are catalogued with `defaultRule`
+when their children already supply the necessary layout; they should not be
+silenced by the diagnostic filter.
+The built-in `match_expr` node uses the ordinary match-expression rule.
+The built-in `grind_pattern` constraint wrapper and constraint operators are
+catalogued directly; the list wrapper gives each constraint a mandatory peer
+boundary because adjacent constraints cannot be flattened into one line.
+For `do←`, syntax regrouping leaves the forwarding node intact instead of
+splitting its leading `do` as an application-attached body. Its line-break rule
+places the body boundary after the arrow.
 
 Named dispatch falls through one `structuralRawRule?` boundary. That boundary preserves
 the established precedence between transparent single-child wrappers, generated indexed,
@@ -814,6 +824,10 @@ Important behavior:
   fully qualified name-quotation prefixes, and compact `!value` when source adjacency
   requires it.
 - Insert a single space between ordinary adjacent code tokens.
+
+Source-adjacent `do←` and `do<-` are exceptions to ordinary token spacing:
+the introducer and arrow remain tight. This spacing decision stays in
+`SpaceRules`, while the body break stays in `LineBreakRules`.
 
 The context-dependent adjacent-token query is deferred until the source trivia is
 empty. Comment handling, preserved source breaks, and ordinary spaced tokens do
@@ -1752,9 +1766,12 @@ The island normally retains its source-leading boundary as well. A surrounding r
 claim that boundary with `formatOriginalChildLeadingBoundary`; the renderer then supplies
 the boundary whitespace and the island preserves only its internal relative layout.
 `calc` uses explicit logical grouping instead of a whole-expression source island. Its
-term or tactic owner owns the mandatory break before a proof-bearing body, the body aligns
-rows one level beneath the rendered introducer line, and a proofless first term stays
-attached to `calc`. The existing rounded-base policy includes a pending continuation
+term or tactic owner owns the mandatory break before a proof-bearing body. A proofless
+first term stays attached to term-level `calc`, and later rows use the same base
+indentation as that compound header. This keeps a comment-detached first term separate
+from the next relation when Lean reparses the result. A tactic-level `calc` within a
+`by` block, and other calc bodies, indent rows one level beneath the introducer. The
+existing rounded-base policy includes a pending continuation
 indent when a comment detaches the introducer. A multi-piece leading suffix group
 is a compound header, not a plain introducer: its first token cannot suppress
 the enclosing value boundary. A proofless `calc initialTerm` therefore moves as
@@ -1821,7 +1838,10 @@ still overflows, the renderer may use the original absolute source column as a f
 fitting candidate. Structural multi-token children never recover past a pending base
 selected by their parent rule; they use their own break rules or accept the resulting
 overflow. Single tokens, atomic rules, multiline atomic tokens, and quotation islands may
-still use the source-column mechanism. Standalone comment trivia does not
+still use the source-column mechanism. An application argument retains its selected
+structural indentation even when its first token alone would exceed the width: moving
+that argument beside its application head can make Lean parse it as a separate `do`
+statement. Standalone comment trivia does not
 make an otherwise valid structural layout fail its fit probe: the comment follows the
 surrounding code's indentation even when the unchanged comment text then exceeds the line
 limit. If reformatted code makes an attached line comment overflow, the renderer moves the

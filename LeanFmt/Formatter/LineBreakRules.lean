@@ -2231,7 +2231,12 @@ def byTacticBreaks (context : RuleContext) (segment : Segment) : List BreakPoint
   [breakAfterLexeme? segment "by" (attachedBodyIndentLevels context)].filterMap id
 
 def calcBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
-  [boundaryBreak? segment 1 1].filterMap id
+  let bodyIndent :=
+    match segment.child? segment.start with
+    | some (.node .suffixGroup _) =>
+        if segment.rawKind? == some `Lean.calcTactic then 1 else 0
+    | _ => 1
+  [boundaryBreak? segment 1 bodyIndent].filterMap id
 
 def calcBodyBreaks (_context : RuleContext) (segment : Segment) : List BreakPoint :=
   match nonemptyChildIndexes segment with
@@ -3327,6 +3332,9 @@ def doBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   | some breakPoint => [breakPoint]
   | none => []
 
+def doForwardBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
+  [boundaryBreak? segment 2 (attachedBodyIndentLevels context)].filterMap id
+
 def matchAltsWhereDeclsBreaks (_context : RuleContext) (segment : Segment)
     : List BreakPoint :=
   let leading := [leadingBreak? segment segment.start 0].filterMap id
@@ -3562,6 +3570,10 @@ def nullBreaks (context : RuleContext) (segment : Segment) : List BreakPoint :=
   ++ mutualCommandBreaks context segment
   ++ letRecDeclarationSequenceBreaks context segment
   ++ configEntrySequenceBreaks context segment
+  ++ (if parentIsRawKind context `Lean.Parser.Command.grindPatternCnstrs then
+        recursiveSequenceBreaks context segment
+      else
+        [])
   ++ simpsProjectionRuleBreaks context segment
 
 def nullBreaksMandatory (context : RuleContext) (segment : Segment) : Bool :=
@@ -3579,6 +3591,8 @@ def nullBreaksMandatory (context : RuleContext) (segment : Segment) : Bool :=
   || !(mutualCommandBreaks context segment).isEmpty
   || !(letRecDeclarationSequenceBreaks context segment).isEmpty
   || !(configEntrySequenceBreaks context segment).isEmpty
+  || (parentIsRawKind context `Lean.Parser.Command.grindPatternCnstrs
+      && !(recursiveSequenceBreaks context segment).isEmpty)
 
 -----------------------------------------------------------------------------------------
 -- Rule values
@@ -4280,6 +4294,14 @@ def doRule : LineBreakRule :=
     breakPoints := doBreaks
   }
 
+def doForwardRule : LineBreakRule :=
+  {
+    name := "doForward"
+    mandatory := fun _ _ => true
+    inheritBase := fun _ _ => true
+    breakPoints := doForwardBreaks
+  }
+
 def doTryRule : LineBreakRule :=
   {
     name := "doTry"
@@ -4641,6 +4663,20 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Command.postfix) _ => some notationRule
   | .node (.raw `Lean.Parser.Command.identPrec) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.grindPattern) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.grindPatternCnstrs) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.isValue) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.isStrictValue) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.notValue) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.notStrictValue) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.isGround) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.sizeLt) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.depthLt) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.genLt) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.maxInsts) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.guard) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.check) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.notDefEq) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Command.GrindCnstr.defEq) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.omit) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.include) _ => some defaultRule
   | .node (.raw `Lean.Parser.Command.structParent) _ => some defaultRule
@@ -4765,6 +4801,7 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.raw `Lean.Parser.Term.strictImplicitBinder) _ => some defaultRule
   | .node (.raw `Lean.Parser.Term.anonymousCtor) _ => some anonymousCtorRule
   | .node (.raw `Lean.Parser.Term.local) _ => some defaultRule
+  | .node (.raw `Lean.Parser.Term.privateDecl) _ => some defaultRule
   | .node (.raw `Lean.Parser.Term.instBinder) _ => some transparentRule
   | .node (.raw `Lean.Parser.Term.attrKind) _ => some defaultRule
   | .node (.raw `Lean.Parser.Term.attrInstance) _ => some defaultRule
@@ -5175,12 +5212,14 @@ partial def ruleFor : SyntaxTree.Tree → Option LineBreakRule
   | .node (.lowPriorityOperand _ _) _ => some transparentRule
   | .node .lowPriorityInfixRhs _ => some lowPriorityInfixRhsRule
   | .node .parserOwnedTacticBody _ => some transparentRule
+  | .node (.infixChain `Lean.Parser.Term.doForward) _ => some doForwardRule
   | .node (.infixChain _) _ => some infixChainRule
   | .node .ifThenElseClause _ => some transparentRule
   | .node (.ifThenElseChain _) _ => some ifThenElseChainRule
   | .node (.raw `termIfThenElse) _ => some ifThenElseRule
   | .node (.raw `boolIfThenElse) _ => some ifThenElseRule
   | .node (.raw `Lean.Parser.Term.match) _ => some matchExpressionRule
+  | .node (.raw `Lean.Parser.Term.matchExpr) _ => some matchExpressionRule
   | .node (.raw `Lean.Parser.Tactic.match) _ => some matchExpressionRule
   | .node (.raw `Lean.Parser.Term.forall) _ => some quantifierRule
   | .node (.raw `Lean.Parser.Term.exists) _ => some quantifierRule
