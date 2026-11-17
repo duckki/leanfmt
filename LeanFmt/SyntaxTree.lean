@@ -4010,9 +4010,9 @@ private def flattenRegisteredAtomicPeerTail?
   some <| children.extract 0 tailIndex ++ peerChildren
 
 private def flattenCommandBinderChildren (children : Array Tree) : Array Tree :=
-  match children[1]? with
+  match children.back? with
   | some (Tree.node (NodeKind.raw `null) binders) =>
-      children.extract 0 1 ++ binders ++ children.extract 2 children.size
+      children.pop ++ binders
   | _ => children
 
 def regroupRawNode

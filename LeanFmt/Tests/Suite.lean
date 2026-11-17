@@ -10619,7 +10619,9 @@ def assertCommandBinderSequencesFlow (env : Lean.Environment) : IO Unit := do
     let some tree@(.node _ children) := findTreeWithRawKind? kind moduleTree.tree
     | throw <| IO.userError s!"expected command binder tree {kind}"
     assertTrue s!"command binders are direct peers: {kind}"
-      (!children.any fun child => SyntaxTree.rawKind? child == some `null)
+      (!children.any
+          fun child =>
+            child.firstToken?.isSome && SyntaxTree.rawKind? child == some `null)
     let segment := Formatter.LineBreakRules.Segment.ofTree tree
     let breakPoints :=
       (Formatter.LineBreakRules.formattingRuleFor tree).breakPoints {} segment
