@@ -34,6 +34,9 @@ Usage:
 Each project argument must name an explicit git clone source. The validator
 creates a fresh clone under .scratch/external-validation/ before formatting
 unless --reuse-clone is passed.
+Pass --toolchain-tag to shallow fetch the tag named by leanfmt's Lean version
+and require the target's lean-toolchain to match. Pass --shallow-ref REF to
+shallow fetch an explicit refs/heads/... or refs/tags/... instead.
 Only selected source files owned by a Lake module target are formatted. Other
 tracked Lean files are reported as unowned and skipped. Formatter output is
 staged until every requested batch passes, then changed files are applied to
@@ -62,7 +65,7 @@ Set LEANFMT_VALIDATION_LINE_WIDTH=N to pass --line-width N to every formatter
 invocation. For example, validate mathlib at width 100 with:
 
   LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
-    --files Mathlib mathlib=$HOME/work/lean-libs/mathlib4
+    --toolchain-tag --files Mathlib mathlib=https://github.com/leanprover-community/mathlib4.git
 
 Set LEANFMT_VALIDATION_FORMATTER_JOBS=N to limit concurrent formatter workers.
 The automatic default uses the hardware count for every formatter worker group.
@@ -223,9 +226,26 @@ select_project_formatter() {
 clone_project() {
   local source="$1"
   local destination="$2"
+  local shallow_ref="$3"
 
-  rm -rf "$destination"
-  git clone "$source" "$destination"
+  rm -rf "$destination" || return $?
+  if [[ -z "$shallow_ref" ]]; then
+    git clone -- "$source" "$destination"
+  else
+    git init -q "$destination" &&
+      git -C "$destination" remote add origin -- "$source" &&
+      git -C "$destination" fetch --depth 1 --no-tags origin "$shallow_ref" &&
+      git -C "$destination" checkout --detach FETCH_HEAD
+  fi
+}
+
+require_matching_toolchain() {
+  local actual
+  actual="$(read_lean_toolchain "$1")" || return $?
+  if [[ "$actual" != "$CURRENT_TOOLCHAIN" ]]; then
+    printf 'Expected Lean toolchain %s in %s, got %s.\n' "$CURRENT_TOOLCHAIN" "$1" "$actual" >&2
+    return 1
+  fi
 }
 
 absolute_path() {
@@ -1014,6 +1034,8 @@ main() {
   local skip_initial_build=0
   local skip_final_build=0
   local checkpoint_mode=0
+  local toolchain_tag=0
+  local shallow_ref=""
   local -a build_targets=()
 
   validate_positive_integer LEANFMT_VALIDATION_BATCH_SIZE \
@@ -1081,6 +1103,23 @@ main() {
       reuse_clone=1
       continue
     fi
+    if [[ "$specification" == "--toolchain-tag" ]]; then
+      toolchain_tag=1
+      continue
+    fi
+    if [[ "$specification" == "--shallow-ref" ]]; then
+      if (($# == 0)); then
+        printf 'Missing value for --shallow-ref.\n' >&2
+        return 2
+      fi
+      shallow_ref="$1"
+      case "$shallow_ref" in
+        refs/heads/*|refs/tags/*) git check-ref-format "$shallow_ref" || return 2 ;;
+        *) printf 'Expected a full branch or tag ref, got %q.\n' "$shallow_ref" >&2; return 2 ;;
+      esac
+      shift
+      continue
+    fi
     if [[ "$specification" == "--skip-initial-build" ]]; then
       skip_initial_build=1
       continue
@@ -1145,9 +1184,21 @@ main() {
     skip_final_build=1
   fi
 
-  mkdir -p "$WORK_DIR"
-
   CURRENT_TOOLCHAIN="$(read_lean_toolchain "$REPO_ROOT")" || return $?
+  if ((toolchain_tag == 1)); then
+    if [[ -n "$shallow_ref" ]]; then
+      printf '%s\n' '--toolchain-tag and --shallow-ref cannot be used together.' >&2
+      return 2
+    fi
+    shallow_ref="refs/tags/${CURRENT_TOOLCHAIN##*:}"
+    git check-ref-format "$shallow_ref" || return 2
+  fi
+  if ((reuse_clone == 1)) && [[ -n "$shallow_ref" ]]; then
+    printf '%s\n' 'Shallow clone options cannot be used with --reuse-clone or --checkpoint.' >&2
+    return 2
+  fi
+
+  mkdir -p "$WORK_DIR" || return $?
   run_phase "Build leanfmt" lake build fmt
   if [[ ! -x "$FORMATTER" ]]; then
     printf 'Cannot continue without the formatter executable: %s\n' "$FORMATTER" >&2
@@ -1161,14 +1212,16 @@ main() {
     project_dir="$WORK_DIR/$name"
 
     if ((reuse_clone == 1)); then
-      run_phase "Reuse existing $name clone" validate_local_git_repo "$project_dir"
+      run_phase_result "Reuse existing $name clone" validate_local_git_repo "$project_dir" || continue
     else
-      run_phase "Clone $name" clone_project "$source" "$project_dir"
+      run_phase_result "Clone $name${shallow_ref:+ at $shallow_ref}" \
+        clone_project "$source" "$project_dir" "$shallow_ref" || continue
     fi
-    if [[ ! -d "$project_dir/.git" ]]; then
-      printf 'Skipping %s because its clone is unavailable.\n' "$name" >&2
-      continue
+    if ((toolchain_tag == 1)); then
+      run_phase_result "Verify $name uses $CURRENT_TOOLCHAIN" \
+        require_matching_toolchain "$project_dir" || continue
     fi
+    printf '%s revision: %s\n' "$name" "$(git -C "$project_dir" rev-parse HEAD)"
 
     if ((reuse_clone == 0)); then
       seed_local_lake_packages "$source" "$project_dir"

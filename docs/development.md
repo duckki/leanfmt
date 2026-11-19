@@ -648,22 +648,22 @@ complete validation. It still formats every selected source with preservation,
 exception, and idempotency checks and applies the output for review, but it runs no
 target-project Lake build. This keeps broad external formatting coverage cheap
 enough for intermediate checkpoints; it does not replace the complete gate before
-release. The active projects are GraphQL, quantum, CSLib, Mathlib, Chebyshev
-Ephemeris, Flare, and Kalman. Hex is excluded; its profiling examples above are
-historical controls, not validation targets.
+release.
 
-Validate Ephemeris, Flare, and Kalman with normal automatic worker counts.
-Ephemeris and Kalman use the default width (90); Flare uses width 100. Run Flare
-separately because the width override applies to every target in one invocation:
+Run the four-project external release gate with:
 
 ```sh
-env -u LEANFMT_VALIDATION_LINE_WIDTH scripts/validate-external-projects.sh \
-  chebyshev-ephemeris=$HOME/work/formal-software-engineering/chebyshev-ephemeris
-LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
-  flare-lean=$HOME/work/formal-software-engineering/flare-lean
-env -u LEANFMT_VALIDATION_LINE_WIDTH scripts/validate-external-projects.sh \
-  kalman-filter-lean=$HOME/work/formal-software-engineering/kalman-filter-lean
+scripts/validate-release-projects.sh
 ```
+
+Each run makes fresh shallow checkouts of Mathlib, CSLib, Flare, and GraphQL.
+Mathlib and CSLib use the upstream tag named by leanfmt's `lean-toolchain`
+version. A missing tag or mismatched toolchain fails validation. Flare and
+GraphQL use GitHub's `main` branches and the Lean versions declared there.
+The script records each fetched commit in its output. Mathlib formats only
+`Mathlib/`. Mathlib, CSLib, and Flare use width 100. GraphQL uses the default
+width (90). Each project runs in sequence with automatic formatter worker
+counts by default.
 
 Staging keeps the clean build artifacts usable while later formatter batches import
 files formatted by earlier batches. Lake setup files also identify the project-wide
@@ -689,19 +689,21 @@ timings, since it changes which command effects can be postponed.
 The current release checkpoints and known external-formatting issues are tracked
 in [plan.md](plan.md).
 
-```sh
-scripts/validate-external-projects.sh $HOME/lean-libs/mathlib4
-```
-
-At least one Git repository argument is required; there are no preset targets.
-Pass either `GIT_REPO` or `NAME=GIT_REPO`. The source can be a local path or any
-clone source accepted by `git clone`. The validator makes a fresh scratch clone
-unless `--reuse-clone` is passed:
+For individual runs, `scripts/validate-external-projects.sh` takes at least one
+explicit `GIT_REPO` or `NAME=GIT_REPO` argument. The source can be a local path or
+remote URL. The validator makes a fresh scratch clone unless `--reuse-clone`
+is passed:
 
 ```sh
 scripts/validate-external-projects.sh $HOME/target-repo
 scripts/validate-external-projects.sh my-project=$HOME/target-repo
 ```
+
+Use `--toolchain-tag` for a depth-one checkout of the tag matching leanfmt's
+Lean version. Use `--shallow-ref refs/heads/BRANCH` or
+`--shallow-ref refs/tags/TAG` to fetch another exact ref at depth one. Both
+options apply to every repository argument in the invocation and require a
+fresh clone.
 
 After a complete validation succeeds, the validator records a checkpoint baseline
 next to the project logs. The baseline binds the reusable manifests to the clone's
@@ -712,7 +714,7 @@ formats anything:
 ```sh
 LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
   --checkpoint --files Mathlib \
-  mathlib=$HOME/work/lean-libs/mathlib4
+  mathlib=https://github.com/leanprover-community/mathlib4.git
 ```
 
 Run the ordinary command once whenever the clone revision, toolchain, selector, or
@@ -729,8 +731,8 @@ that directory is included. Other selectors are passed to `git ls-files`, so
 quote patterns containing `*` to keep the shell from expanding them first:
 
 ```sh
-scripts/validate-external-projects.sh \
-  --files Mathlib/Combinatorics \
+LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
+  --toolchain-tag --files Mathlib/Combinatorics \
   mathlib=https://github.com/leanprover-community/mathlib4.git
 ```
 
@@ -769,8 +771,8 @@ at the first failed batch.
 Pass `--batch N` to run only a specific 1-based validation batch:
 
 ```sh
-scripts/validate-external-projects.sh \
-  --files Mathlib/Combinatorics \
+LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
+  --toolchain-tag --files Mathlib/Combinatorics \
   --batch 2 \
   mathlib=https://github.com/leanprover-community/mathlib4.git
 ```
@@ -782,13 +784,13 @@ validates batch `N` and every later batch for the same file selection. Add
 pre-format build:
 
 ```sh
-scripts/validate-external-projects.sh \
+LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
   --files Mathlib \
   --start-batch 34 \
   --reuse-clone \
   --skip-initial-build \
   --skip-final-build \
-  mathlib=$HOME/work/lean-libs/mathlib4
+  mathlib=https://github.com/leanprover-community/mathlib4.git
 ```
 
 Validation batches remain serial so a failure has one unambiguous stopping point.
@@ -805,10 +807,10 @@ still runs, and successful staged output is still applied, but the validator omi
 the changed-module and complete builds:
 
 ```sh
-scripts/validate-external-projects.sh \
-  --files Mathlib \
+LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
+  --toolchain-tag --files Mathlib \
   --skip-final-build \
-  mathlib=$HOME/work/lean-libs/mathlib4
+  mathlib=https://github.com/leanprover-community/mathlib4.git
 ```
 
 Clones are created under `.scratch/external-validation`; `--reuse-clone` requires
@@ -863,17 +865,6 @@ memory-constrained machines. Start with one worker for import-heavy projects,
 including direct CLI runs over temporary copies (`fmt --jobs 1 ...`). On macOS,
 monitor physical footprint including compressed memory, not RSS alone; swapped
 processes can report small RSS while still causing severe memory pressure.
-
-For example, mathlib and CSLib can be validated at their 100-column convention
-while continuing to use fresh scratch clones:
-
-```sh
-LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
-  --files Mathlib \
-  mathlib=$HOME/work/lean-libs/mathlib4
-LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
-  cslib=$HOME/work/lean-libs/cslib
-```
 
 The script stops formatting at the first failing validation batch without building.
 After every requested batch succeeds, complete validation runs the post-format

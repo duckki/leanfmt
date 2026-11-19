@@ -124,39 +124,30 @@ Use a single-line summary, followed by a blank line and a few bullet points.
 Describe only what changed. Omit motivation, rationale, and validation results;
 report validation separately in the review summary.
 
-## Short-term external-validation goal
+## External release validation
 
-The current short-term goal is for both CSLib and mathlib to pass the complete
-external formatter validation. The validation script requires at least one
-explicit Git repository argument and has no preset targets:
+Run the complete external release gate with:
 
 ```sh
-scripts/validate-external-projects.sh \
-  mathlib=https://github.com/leanprover-community/mathlib4.git
+scripts/validate-release-projects.sh
 ```
 
-For an iterative single-project run, pass `GIT_REPO` or `NAME=GIT_REPO`; the
-source can be a local path or any clone source accepted by `git clone`, and it is
-cloned into a fresh scratch checkout unless `--reuse-clone` is passed. Pass
-`--files FILE_SELECTOR` or
-append `::FILE_SELECTOR` to one project spec to validate a tracked-file subset.
-When the selector names a tracked directory, every tracked `.lean` file under
-that directory is included:
+The release gate uses four fresh shallow checkouts. Mathlib and CSLib use their
+upstream tags for this repository's `lean-toolchain`, and their toolchain files
+must match it. Flare and GraphQL use GitHub's `main` branches with their own
+toolchains. Use width 100 for Mathlib, CSLib, and Flare and the default width for
+GraphQL. Mathlib formats only `Mathlib/`. Use automatic formatter worker counts
+unless the run requires an explicit memory limit.
 
-```sh
-scripts/validate-external-projects.sh \
-  --files Mathlib/Combinatorics \
-  mathlib=https://github.com/leanprover-community/mathlib4.git
-```
-
-Set `LEANFMT_VALIDATION_LINE_WIDTH=100` when validating mathlib, CSLib, or Flare
-against their 100-column convention:
+For iteration, use `scripts/validate-external-projects.sh` with explicit
+`GIT_REPO` or `NAME=GIT_REPO` arguments. It accepts local paths and remote URLs.
+Use `--files FILE_SELECTOR` or append `::FILE_SELECTOR` to select a subset.
+A directory selector includes every tracked `.lean` file under it:
 
 ```sh
 LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
-  --files Mathlib mathlib=$HOME/work/lean-libs/mathlib4
-LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
-  cslib=$HOME/work/lean-libs/cslib
+  --toolchain-tag --files Mathlib/Combinatorics \
+  mathlib=https://github.com/leanprover-community/mathlib4.git
 ```
 
 For each project the script builds leanfmt, creates a fresh clone under
@@ -197,5 +188,4 @@ non-idempotence, actionable overflow, and either build failure as formatter issu
 to investigate. Treat missing rules as required failures only for Mathlib. Convert
 each issue into a focused internal test
 or fixture and a formatter fix; do not make the scratch clone the source of the
-fix. Rerun the affected project until clean, then rerun the explicit CSLib/mathlib
-pair to close the short-term goal.
+fix. Rerun the affected project until clean, then run the complete release gate.

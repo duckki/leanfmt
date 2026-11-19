@@ -17,10 +17,10 @@ solution to concurrent-worker memory pressure.
 
 ### Release validation
 
-The tight-infix spacing fix passes the focused checkpoint recorded below. Next,
-run the complete release gate on the current formatter, including Ephemeris,
-Flare, and Kalman alongside GraphQL, quantum, CSLib, and Mathlib.
-Hex is excluded. Formatter-only checkpoints do not replace changed-module and
+Run `scripts/validate-release-projects.sh` for the complete external gate on
+Mathlib, CSLib, Flare, and GraphQL. Mathlib and CSLib use fresh shallow checkouts
+of the tags matching leanfmt's `lean-toolchain`. Flare and GraphQL use GitHub's
+`main` branches. Formatter-only checkpoints do not replace changed-module and
 post-format builds. Compare performance with identical inputs, exact imports,
 diagnostics, and worker limits.
 A formatting or parser change requires a fresh release gate; earlier results do
@@ -137,7 +137,7 @@ Logs: `.scratch/infix-local-{initial,final}.log`, `.scratch/infix-self-format.lo
 and `.scratch/infix-profile.log`.
 The 42-file Mathlib check does not replace a complete fresh release gate.
 
-### Ephemeris and Flare checkpoint
+### Historical Ephemeris and Flare checkpoint
 
 The allocator and audited print-command changes pass complete validation with
 Lake cache, automatic worker counts, and default parser behavior. Ephemeris uses
@@ -169,18 +169,6 @@ not same-input performance comparisons with Hex or an earlier formatter.
 Both original checkouts remain clean.
 Checkpoint manifests are recorded under
 `.scratch/external-validation/logs/{chebyshev-ephemeris,flare-lean}/`.
-
-```sh
-env -u LEANFMT_VALIDATION_LINE_WIDTH scripts/validate-external-projects.sh \
-  chebyshev-ephemeris=$HOME/work/formal-software-engineering/chebyshev-ephemeris
-LEANFMT_VALIDATION_LINE_WIDTH=100 scripts/validate-external-projects.sh \
-  flare-lean=$HOME/work/formal-software-engineering/flare-lean
-```
-
-Use `--checkpoint` with these same targets for subsequent lighter checks at the
-recorded revisions. Serialize heavy work and monitor compressed-inclusive memory
-with the 12 GiB aggregate safety guard; do not silently lower the normal worker
-count. Require complete builds again for release.
 
 ### Inspection deferral and frontend overhead
 
@@ -342,15 +330,11 @@ Review all generated fixture and self-format changes. Normal validation uses
 automatic worker counts. For memory-constrained validation or isolated profiling,
 explicitly set `--jobs 1` or `LEANFMT_VALIDATION_FORMATTER_JOBS=1`; this does not
 change the default. Serialize heavy runs and monitor compressed-inclusive memory.
-Lightweight checkpoints use recorded GraphQL, quantum, CSLib, Ephemeris, and Flare
-build baselines plus pristine Mathlib safety regressions. Kalman joins the release
-gate and needs a complete validation to establish its checkpoint baseline. Hex is excluded.
+Lightweight checkpoints reuse recorded build baselines for individual projects.
 Report scope and omitted builds. Compare performance on identical inputs without
 concurrent validation. Enable missing-rule checks for Mathlib only.
 
-Use full validation, not checkpoint mode, for release. Mathlib is pinned to
-v4.33.1 commit `0df444a360eaa60ab8c11dca51a86af692955474`; format only
-`Mathlib/`, use width 100 and Lake cache. CSLib is pinned to
-`98e395a701f2027a413ad24729e1a11a6c772eb4`, Lean v4.33.1, width 100.
 The release gate includes clean, changed-module, and complete post-format builds.
-Passing does not mean every protected physical line fits width 100.
+It formats only `Mathlib/` in Mathlib, uses width 100 for Mathlib, CSLib, and
+Flare, and uses the default width for GraphQL. The gate checks actionable
+overflow and permits protected physical lines that exceed the width.
