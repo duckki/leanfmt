@@ -1,4 +1,4 @@
-# Version 0.4 plan
+# Release status and development follow-ups
 
 Rules describe general syntax ownership. External paths and declaration names
 are evidence for tests, never formatter conditions. Missing-rule coverage is
@@ -6,8 +6,16 @@ release-blocking only for Lean's standard library and Mathlib.
 
 ## Open Issues
 
-No currently reproduced formatting blocker remains from the tight-infix spacing
-checkpoint. Fresh complete release validation remains pending below.
+No currently reproduced formatting blocker remains. The v0.4.8 external release
+gate completed on November 19, 2026, covering Mathlib, CSLib, Flare, and GraphQL
+with preservation, actionable-overflow, and independent idempotency checks plus
+post-format builds. The [1.0 release notes](releases/v1.0.0.md) record the exact
+revisions, scope, and exclusions.
+
+The v1.0.0 preparation changes documentation and the package version only. It
+carries forward that validation because the formatter, parser, dependencies,
+and toolchain are unchanged. The [stability policy](stability.md) defines the
+release commitments under review.
 
 Hex is no longer a validation target or release blocker. Its incomplete runs
 remain historical measurements, not evidence of a complete pass or a general
@@ -24,11 +32,9 @@ of the tags matching leanfmt's `lean-toolchain`. Flare and GraphQL use GitHub's
 post-format builds. Compare performance with identical inputs, exact imports,
 diagnostics, and worker limits.
 A formatting or parser change requires a fresh release gate; earlier results do
-not validate later changes.
-
-Restart Mathlib formatting from pristine sources. The fix preserves declared
-source-tight notation such as `(W'⁄F)`; it intentionally does not remove spaces
-from `(W' ⁄ F)` already produced by the previous formatter.
+not validate later changes. Documentation and version-only releases may reuse
+a completed gate when its implementation, dependencies, and toolchains are
+unchanged; record the validated revision and any scope limits in the release notes.
 
 ## Deferred Optimization Opportunities
 
@@ -94,7 +100,11 @@ output, diagnostics, feedback, and traces across placement and suffix changes,
 plus improved scaling in the stress controls. Prefix replay remains separately
 subject to complete-state equivalence for commands without a neutral contract.
 
-## Validation Standard
+## Historical validation evidence
+
+The records below describe earlier development checkpoints. Their pending work
+and partial runs are historical; the completed v0.4.8 gate above is the current
+release baseline.
 
 ### Tight custom infix checkpoint
 

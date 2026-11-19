@@ -8,6 +8,9 @@ confined to the separate `tools/linter` development package.
 
 - Treat compiler warnings as errors in review and CI.
 - Add documentation comments to new public APIs and explain non-obvious invariants.
+- Follow the [stability policy](docs/stability.md) when changing formatting,
+  public interfaces, or supported Lean versions. Record user-visible changes in
+  the release notes.
 - Keep imports narrow and module responsibilities aligned with
   [the architecture](docs/architecture.md).
 - Add focused tests or fixtures for behavior changes. Do not hand-edit the

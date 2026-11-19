@@ -96,6 +96,11 @@ added to a baseline.
 
 ## Lean-version compatibility
 
+The [stability policy](stability.md#supported-lean-versions-and-platforms) lists
+the tested versions and defines when support may change. Keep that list and
+the CI matrix synchronized. The [public API contract](stability.md#public-library-api)
+identifies the library entry points covered by compatibility commitments.
+
 leanfmt supports one source and release line across our current toolchain and
 supported previous minor versions. The current-toolchain CI job runs the complete
 maintenance gate. It runs each core test group in a fresh `testSuite` process so

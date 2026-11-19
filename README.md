@@ -31,8 +31,7 @@ examples.
 - **Structure-preserving**: works from a lossless syntax tree and formats
   whitespace around the code you wrote.
 - **Conservative by design**: checks token preservation, comments, parsing, and
-  idempotence; if formatting cannot be proven safe, the original source stays in
-  place.
+  idempotence; if these checks fail, the original source stays in place.
 - **Practical for adoption**: format one file, a directory, or only files changed
   in a branch.
 
@@ -188,11 +187,23 @@ unexpected code changes, actionable line overflow, or a non-idempotent result.
 Formatter development for first-class syntax can add `--check-missing-rules` to
 fail when a syntax node has no registered line-break rule.
 
+These checks do not prove semantic equivalence. Lean elaborators and macros can
+depend on source positions that a syntax comparison does not capture. Review
+formatting diffs and build the formatted project; the release gate includes
+post-format builds for this reason. See the
+[preservation limitation](docs/architecture.md#preservation-check-limitation-layout-sensitive-elaboration).
+
 ## Status
 
-leanfmt is under active development. Review formatting diffs before broad
-rollout, start with changed files, and use `--check` in CI once the project is
-ready.
+The 1.0 release line establishes a stable formatting style, CLI, and small public
+library API. Patch releases may fix formatting bugs, minor releases may add
+syntax support and compatible features, and deliberate broad restyling requires
+a major release. Pin the formatter and Lean toolchain for reproducible output.
+
+The [stability policy](docs/stability.md) defines these commitments and the tested
+Lean versions. The [1.0 release notes](docs/releases/v1.0.0.md) record the completed
+v0.4.8 validation that supports this release. Start adoption with changed files
+and use `--check` in CI once the project is formatted.
 
 ## Learn More
 
@@ -201,6 +212,8 @@ ready.
 - [Design](docs/design.md)
 - [Architecture](docs/architecture.md)
 - [Development](docs/development.md)
+- [Stability and compatibility](docs/stability.md)
+- [1.0 release notes](docs/releases/v1.0.0.md)
 - [Comparison](docs/comparison.md)
 
 ## License
