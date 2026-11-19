@@ -1746,12 +1746,17 @@ libraries in the formatter and avoids protecting unrelated syntax merely because
 namespace contains `Tactic`. Multiline custom braced term
 syntax is also emitted from original source so leanfmt does not invent a layout for an
 extension-owned DSL whose braces may carry domain-specific structure.
-ProofWidgets JSX remains an original-source island, but its complete relative indentation
+Legacy ProofWidgets JSX uses an original-source island whose relative indentation
 is rebased when the surrounding formatted layout moves it; leaving a JSX tag at its old
 absolute column can change which tokens Lean's layout parser assigns to the element.
 When the formatter-selected rebase would newly overflow an atomic JSX line, the renderer
 also measures the source layout translated only by its parent layout's movement and uses
-that candidate when it has fewer overflows. For `do` bodies, token emission records only
+that candidate when it has fewer overflows. Lean `html%{...}` and ProofWidgets `jsx%{...}`
+literals use the Lean HTML parser, which stores whitespace in text nodes. Their complete
+source slices are emitted verbatim while the surrounding Lean layout controls where the
+literal starts.
+
+For `do` bodies, token emission records only
 new atomic overflow caused by moving a source token away from a column where it fit.
 The outermost eligible `do` sequence considers a source-layout candidate only when that
 signal is present. Both source-relative candidates are bounded below by the child's

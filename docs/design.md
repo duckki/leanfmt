@@ -2158,6 +2158,12 @@ aligns with `{`:
 }
 ```
 
+## HTML and JSX literals
+
+Lean `html%{...}` and ProofWidgets `jsx%{...}` literals keep their source text,
+including whitespace inside tags and between children. The surrounding Lean
+expression can still be reformatted.
+
 ## Arrays, tuples, anonymous constructors, and structure instances
 
 Single-line collections remain compact:

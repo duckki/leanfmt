@@ -11100,6 +11100,23 @@ def assertMovedProofWidgetsJsxUsesPendingIndent : IO Unit := do
   assertTrue "parent-relative JSX layout avoids introduced overflow"
     (Formatter.linesFit wideRendered.output 100)
 
+def assertHtmlLiteralPreservesContent : IO Unit := do
+  let env ← SyntaxTree.importEnvironment #[{ module := `Lean.Data.Html.Elab }]
+  let literal :=
+    "html%{<div class=\"value\">\n"
+    ++ "      hello  <b>{value}</b> there\n"
+    ++ "    </div>}"
+  let source := "def  markup  (value : String) := " ++ literal ++ "\n"
+  let result ← Formatter.formatSourceWithEnvDetailed env source "html-literal.lean"
+  assertTrue "HTML literal formatting does not fall back" (!result.fellBack)
+  assertEq "HTML preserves text and tags while formatting the declaration"
+    ("def markup (value : String) := " ++ literal ++ "\n") result.formatted
+  let tree ← SyntaxTree.parseModuleStringWithEnv env result.formatted "html-literal.lean"
+  assertTrue "HTML literal does not report missing rules"
+    (Formatter.Diagnostics.missingRuleOccurrencesForModule tree).isEmpty
+  let again ← Formatter.formatSourceWithEnv env result.formatted "html-literal.lean"
+  assertEq "HTML literal formatting is idempotent" result.formatted again
+
 def assertMovedInterpolatedStringUsesPendingIndent (env : Lean.Environment)
     : IO Unit := do
   let source :=
@@ -23877,6 +23894,7 @@ def runExpressionAndRendererTests (env : Lean.Environment) : IO Unit := do
   assertOriginalTreeUsesParentLeadingWhitespace
   assertOriginalTreeUsesAncestorLeadingWhitespace
   assertMovedProofWidgetsJsxUsesPendingIndent
+  assertHtmlLiteralPreservesContent
   assertMovedInterpolatedStringUsesPendingIndent env
   assertCommentDelimiterTextInsideStringIsNotAComment env
   assertSegmentBaseUsesRenderedStartColumn

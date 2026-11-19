@@ -381,6 +381,11 @@ private def isProofWidgetsJsxSyntaxTree : SyntaxTree.Tree → Bool
       (SyntaxTree.nodeKindName kind).startsWith "ProofWidgets.Jsx."
   | _ => false
 
+private def isHtmlLiteral : SyntaxTree.Tree → Bool
+  | .node (.raw `Lean.Html.Syntax.«html%») _ => true
+  | .node (.raw `ProofWidgets.«jsx%») _ => true
+  | _ => false
+
 private def isLeanJsonSyntaxTree : SyntaxTree.Tree → Bool
   | .node kind _ =>
       (SyntaxTree.nodeKindName kind).startsWith "Lean.Json."
@@ -609,6 +614,7 @@ inductive LayoutIslandKind where
   | quotation
   | qq
   | proofWidgetsJsx
+  | htmlLiteral
   | leanJson
   | batteriesLibraryNote
   | layoutSensitiveCommand
@@ -649,6 +655,8 @@ def classify? (tree : SyntaxTree.Tree) : Option LayoutIslandKind :=
     some .qq
   else if isProofWidgetsJsxSyntaxTree tree then
     some .proofWidgetsJsx
+  else if isHtmlLiteral tree then
+    some .htmlLiteral
   else if isLeanJsonSyntaxTree tree then
     some .leanJson
   else if isBatteriesLibraryNoteSyntaxTree tree then
@@ -674,6 +682,7 @@ inductive ContentLayout where
   | proofLayout
   | calc
   | quotation
+  | verbatim
 deriving BEq, Repr
 
 inductive MultilineLayoutPolicy where
@@ -774,6 +783,13 @@ def policyFor : LayoutIslandKind → IslandPolicy
         relativeLayout := .retain
         pendingIndent := .useWhenAvailable
         anchor := .preferParentRelative
+      }
+  | .htmlLiteral =>
+      {
+        content := .verbatim
+        multiline := .preserveWithoutRuleBreaks
+        firstLine := .unbreakable
+        pendingIndent := .useWhenAvailable
       }
   | .layoutSensitiveCommand =>
       {
@@ -1132,6 +1148,12 @@ private def emitRebased? (request : EmissionRequest) (tree : SyntaxTree.Tree)
   let leadingColumn := lineWidth <| currentLineAfterAppend request.currentLine leading
   let sourceText :=
     SyntaxTree.sourceText request.source firstToken.span.start lastToken.span.stop
+  if content == .verbatim then
+    return {
+      text := leading ++ sourceText,
+      lastToken,
+      preserveNextStandaloneCommentIndent := false
+    }
   let retainsRelativeLayout :=
     islandPlan?.any fun plan => plan.policy.relativeLayout == .retain
   let retainsInlineRelativeLayout := retainsRelativeLayout || proofLayout || calcLayout
