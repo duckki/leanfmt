@@ -38,12 +38,13 @@ examples.
 
 ## Quick Start
 
-Add leanfmt to `lakefile.toml`:
+Add leanfmt from [Reservoir](https://reservoir.lean-lang.org/@duckki/leanfmt) to
+`lakefile.toml`, replacing `vX.Y.Z` with the Git tag you want to pin:
 
 ```toml
 [[require]]
 name = "leanfmt"
-git = "https://github.com/duckki/leanfmt.git"
+scope = "duckki"
 rev = "vX.Y.Z"
 ```
 
